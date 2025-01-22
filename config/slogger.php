@@ -30,8 +30,9 @@ return [
         'default' => env('SLOGGER_DISPATCHER', 'queue'),
 
         'queue' => [
-            'connection' => env('SLOGGER_DISPATCHER_QUEUE_CONNECTION', $defaultQueueConnection),
-            'name'       => env('SLOGGER_DISPATCHER_QUEUE_NAME', 'slogger'),
+            'connection'  => env('SLOGGER_DISPATCHER_QUEUE_CONNECTION', $defaultQueueConnection),
+            'name'        => env('SLOGGER_DISPATCHER_QUEUE_NAME', 'slogger'),
+            'workers_num' => env('SLOGGER_DISPATCHER_QUEUE_WORKERS_COUNT', 3),
 
             'api_clients' => [
                 'default' => env('SLOGGER_DISPATCHER_QUEUE_API_CLIENT', 'http'),

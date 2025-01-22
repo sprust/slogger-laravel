@@ -8,6 +8,8 @@ use Illuminate\Support\Facades\Queue;
 use SLoggerLaravel\Dispatcher\DispatcherFactory;
 use SLoggerLaravel\Dispatcher\Queue\ApiClients\ApiClientFactory;
 use SLoggerLaravel\Dispatcher\Queue\ApiClients\ApiClientInterface;
+use SLoggerLaravel\Dispatcher\StartDispatcherCommand;
+use SLoggerLaravel\Dispatcher\StopDispatcherCommand;
 use SLoggerLaravel\Dispatcher\TraceDispatcherInterface;
 use SLoggerLaravel\Dispatcher\Transporter\Clients\TransporterClient;
 use SLoggerLaravel\Dispatcher\Transporter\Clients\TransporterClientInterface;
@@ -122,6 +124,8 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         }
 
         $this->commands([
+            StartDispatcherCommand::class,
+            StopDispatcherCommand::class,
             LoadTransporterCommand::class,
             StartTransporterCommand::class,
             StopTransporterCommand::class,

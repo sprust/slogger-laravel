@@ -2,6 +2,8 @@
 
 namespace SLoggerLaravel\Dispatcher\Queue;
 
+use Illuminate\Contracts\Container\BindingResolutionException;
+use Illuminate\Contracts\Foundation\Application;
 use SLoggerLaravel\Dispatcher\Queue\Jobs\TraceCreateJob;
 use SLoggerLaravel\Dispatcher\Queue\Jobs\TraceUpdateJob;
 use SLoggerLaravel\Dispatcher\TraceDispatcherInterface;
@@ -9,6 +11,7 @@ use SLoggerLaravel\Objects\TraceObject;
 use SLoggerLaravel\Objects\TraceObjects;
 use SLoggerLaravel\Objects\TraceUpdateObject;
 use SLoggerLaravel\Objects\TraceUpdateObjects;
+use Symfony\Component\Console\Output\OutputInterface;
 
 class TraceQueueDispatcher implements TraceDispatcherInterface
 {
@@ -17,7 +20,19 @@ class TraceQueueDispatcher implements TraceDispatcherInterface
 
     private int $maxBatchSize = 5;
 
-    public function push(TraceObject $parameters): void
+    public function __construct(protected readonly Application $app)
+    {
+    }
+
+    /**
+     * @throws BindingResolutionException
+     */
+    public function start(OutputInterface $output): void
+    {
+        $this->app->make(QueueManager::class)->start($output);
+    }
+
+    public function create(TraceObject $parameters): void
     {
         $this->traces[] = $parameters;
 
@@ -28,7 +43,7 @@ class TraceQueueDispatcher implements TraceDispatcherInterface
         $this->sendAndClearTraces();
     }
 
-    public function stop(TraceUpdateObject $parameters): void
+    public function update(TraceUpdateObject $parameters): void
     {
         if (count($this->traces)) {
             $this->sendAndClearTraces();

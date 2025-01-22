@@ -12,7 +12,7 @@ class StopTransporterCommand extends Command
      *
      * @var string
      */
-    protected $signature = 'slogger:transporter:stop';
+    protected $signature = 'slogger:transporter:stop {--env=}';
 
     /**
      * The console command description.
@@ -23,6 +23,6 @@ class StopTransporterCommand extends Command
 
     public function handle(TransporterProcess $process): int
     {
-        return $process->handle('manage stop');
+        return $process->handle('manage stop', $this->option('env'));
     }
 }

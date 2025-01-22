@@ -10,6 +10,7 @@
     ],
     "require": {
         "ext-pcntl": "*",
+        "ext-posix": "*",
         "laravel/framework": "^9.0 | ^10.0",
         "symfony/process": "^6.4|^7.0"
     },

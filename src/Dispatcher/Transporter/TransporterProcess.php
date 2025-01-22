@@ -1,5 +1,7 @@
 <?php
 
+declare(ticks=1);
+
 namespace SLoggerLaravel\Dispatcher\Transporter;
 
 use Illuminate\Support\Facades\Artisan;
@@ -7,16 +9,19 @@ use Illuminate\Support\Str;
 use SLoggerLaravel\Dispatcher\Transporter\Commands\LoadTransporterCommand;
 use Symfony\Component\Console\Output\ConsoleOutput;
 use Symfony\Component\Process\Process;
+use Throwable;
 
-readonly class TransporterProcess
+class TransporterProcess
 {
+    private bool $shouldQuit = false;
+
     public function __construct(
-        private ConsoleOutput $output,
-        private TransporterLoader $loader
+        private readonly ConsoleOutput $output,
+        private readonly TransporterLoader $loader
     ) {
     }
 
-    public function handle(string $commandName): int
+    public function handle(string $commandName, ?string $env = null): int
     {
         $this->output->writeln("handling: $commandName");
 
@@ -24,8 +29,15 @@ readonly class TransporterProcess
             Artisan::call(LoadTransporterCommand::class, outputBuffer: $this->output);
         }
 
-        $envFileName = '.env.strans.' . Str::slug($commandName, '.');
+        $envFileName = $env ?? '.env.strans.' . Str::slug($commandName, '.');
         $envFilePath = base_path($envFileName);
+
+        if ($commandName === 'start') {
+            pcntl_async_signals(true);
+
+            pcntl_signal(SIGINT, fn() => $this->shouldQuit = true);
+            pcntl_signal(SIGTERM, fn() => $this->shouldQuit = true);
+        }
 
         $this->initEnv($envFilePath);
 
@@ -36,12 +48,6 @@ readonly class TransporterProcess
 
         $process->start();
 
-        pcntl_signal(SIGINT, function () use ($process) {
-            $process->signal(SIGINT);
-
-            $this->output->writeln('Received stop signal');
-        });
-
         while (!$process->isStarted()) {
             sleep(1);
         }
@@ -49,6 +55,29 @@ readonly class TransporterProcess
         $this->output->writeln("started: $command");
 
         while ($process->isRunning()) {
+            if ($this->shouldQuit) {
+                $startTime = time();
+
+                while ($process->isRunning()) {
+                    $pid = $process->getPid();
+
+                    $pgid = posix_getpgid($pid);
+
+                    posix_kill($pid, SIGTERM);
+                    posix_kill(-$pgid, SIGTERM);
+
+                    if (time() - $startTime > 5) {
+                        $this->output->writeln('Force stopped');
+
+                        break;
+                    }
+
+                    sleep(1);
+                }
+
+                break;
+            }
+
             $this->readOutput($process);
 
             sleep(1);
@@ -56,11 +85,15 @@ readonly class TransporterProcess
 
         $this->readOutput($process);
 
-        unlink($envFilePath);
+        try {
+            unlink($envFilePath);
+        } catch (Throwable) {
+            // no action
+        }
 
         $this->output->writeln("stopped: $command");
 
-        return $process->getExitCode();
+        return $process->getExitCode() ?? 1;
     }
 
     private function readOutput(Process $process): void

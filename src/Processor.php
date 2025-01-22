@@ -270,11 +270,11 @@ class Processor
 
     private function dispatchPushTrace(TraceObject $trace): void
     {
-        $this->traceDispatcher->push($trace);
+        $this->traceDispatcher->create($trace);
     }
 
     private function dispatchUpdateTrace(TraceUpdateObject $trace): void
     {
-        $this->traceDispatcher->stop($trace);
+        $this->traceDispatcher->update($trace);
     }
 }
