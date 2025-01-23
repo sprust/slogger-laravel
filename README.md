@@ -5,12 +5,12 @@
 
 ### App
 
-system:
 ```bash
 php artisan vendor:publish --tag=slogger-laravel
 ```
 
-.env:
+### ENV
+
 ```dotenv
 # slogger
 SLOGGER_ENABLED=false
@@ -71,11 +71,15 @@ SLOGGER_LOG_DUMP_ENABLED=true
 SLOGGER_LOG_HTTP_ENABLED=true
 ```
 
+## Requests (env.SLOGGER_LOG_REQUESTS_ENABLED)
+
 For requests watcher you can use the middleware
 
 ```php
 \SLoggerLaravel\Middleware\HttpMiddleware::class
 ```
+
+## Guzzle (env.SLOGGER_LOG_HTTP_ENABLED)
 
 For guzzle requests you can use the factory
 
@@ -83,9 +87,9 @@ For guzzle requests you can use the factory
 new \GuzzleHttp\Client([
     'base_uri' => 'https://url.com',
     'handler'  => app(\SLoggerLaravel\Guzzle\GuzzleHandlerFactory::class)->prepareHandler(
-        (new SLoggerRequestDataFormatters())
+        (new \SLoggerLaravel\RequestPreparer\RequestDataFormatters())
             ->add(
-                new SLoggerRequestDataFormatter(
+                new \SLoggerLaravel\RequestPreparer\RequestDataFormatter(
                     urlPatterns: ['*'],
                     requestHeaders: [
                         'authorization',
@@ -93,7 +97,7 @@ new \GuzzleHttp\Client([
                 )
             )
             ->add(
-                new SLoggerRequestDataFormatter(
+                new \SLoggerLaravel\RequestPreparer\RequestDataFormatter(
                     urlPatterns: [
                         '/api/auth/*',
                         '*sensitive/some/*',
@@ -105,9 +109,23 @@ new \GuzzleHttp\Client([
 ])
 ```
 
-### Transporter
+## Dispatcher of traces
 
-For the transporter usage you have to set env.SLOGGER_DISPATCHER_TRANSPORTER_*
+For the dispatcher usage you have to set env.SLOGGER_DISPATCHER_* according to the selected dispatcher (env.SLOGGER_DISPATCHER)
+
+```bash
+php artisan slogger:dispatcher:start
+```
+
+### queue
+The queue dispatcher works like the Horizon (master and children processes of queue:work command).
+
+### transporter
+The binary is downloaded from the repository and launched (only for RabbitMQ). Push jobs to the queue and the transporter will process them.
+
+Repository: https://github.com/sprust/slogger-transporter
+
+#### Commands
 
 load bin file
 ```bash
@@ -126,13 +144,11 @@ php artisan slogger:transporter:stop
 
 .gitignore
 ```gitignore
-strans
+strans*
 .env.strans.*
 ```
 
-Set env.SLOGGER_DISPATCHER -> transporter
-
-### Profiling
+## Profiling
 
 bash
 ```bash

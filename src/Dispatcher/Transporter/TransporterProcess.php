@@ -4,9 +4,8 @@ declare(ticks=1);
 
 namespace SLoggerLaravel\Dispatcher\Transporter;
 
-use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Str;
-use SLoggerLaravel\Dispatcher\Transporter\Commands\LoadTransporterCommand;
+use RuntimeException;
 use Symfony\Component\Console\Output\ConsoleOutput;
 use Symfony\Component\Process\Process;
 use Throwable;
@@ -26,11 +25,10 @@ class TransporterProcess
         $this->output->writeln("handling: $commandName");
 
         if (!$this->loader->fileExists()) {
-            Artisan::call(LoadTransporterCommand::class, outputBuffer: $this->output);
+            throw new RuntimeException(
+                "Transporter is not loaded. Run 'php artisan slogger:transporter:load' first"
+            );
         }
-
-        $envFileName = $env ?? '.env.strans.' . Str::slug($commandName, '.');
-        $envFilePath = base_path($envFileName);
 
         if ($commandName === 'start') {
             pcntl_async_signals(true);
@@ -38,6 +36,9 @@ class TransporterProcess
             pcntl_signal(SIGINT, fn() => $this->shouldQuit = true);
             pcntl_signal(SIGTERM, fn() => $this->shouldQuit = true);
         }
+
+        $envFileName = $env ?? '.env.strans.' . Str::slug($commandName, '.');
+        $envFilePath = base_path($envFileName);
 
         $this->initEnv($envFilePath);
 
