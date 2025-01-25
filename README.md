@@ -146,6 +146,7 @@ php artisan slogger:transporter:stop
 ```gitignore
 strans*
 .env.strans.*
+storage/slogger-dispatcher-state*
 ```
 
 ## Profiling

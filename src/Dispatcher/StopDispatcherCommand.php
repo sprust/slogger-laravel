@@ -3,6 +3,7 @@
 namespace SLoggerLaravel\Dispatcher;
 
 use Illuminate\Console\Command;
+use SLoggerLaravel\Dispatcher\State\DispatcherProcessState;
 
 class StopDispatcherCommand extends Command
 {
@@ -23,22 +24,20 @@ class StopDispatcherCommand extends Command
     /**
      * Execute the console command.
      */
-    public function handle(DispatcherProcessState $processState): void
+    public function handle(Dispatcher $dispatcher): void
     {
-        $savedPid = $processState->getSavedPid();
+        $processState = new DispatcherProcessState(
+            app(StartDispatcherCommand::class)->getName()
+        );
 
-        if (!$savedPid) {
+        $state = $processState->getSaved();
+
+        if (!$state) {
             $this->warn('Dispatcher not started');
 
             return;
         }
 
-        if (!$processState->isPidActive($savedPid, app(StartDispatcherCommand::class)->getName())) {
-            $this->warn("Dispatcher already stopped with PID: $savedPid");
-
-            return;
-        }
-
-        $processState->sendStopSignal($savedPid);
+        $dispatcher->stop($state);
     }
 }

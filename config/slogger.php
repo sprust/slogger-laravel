@@ -1,7 +1,7 @@
 <?php
 
-use SLoggerLaravel\Dispatcher\Queue\Jobs\TraceCreateJob;
-use SLoggerLaravel\Dispatcher\Queue\Jobs\TraceUpdateJob;
+use SLoggerLaravel\Dispatcher\Items\Queue\Jobs\TraceCreateJob;
+use SLoggerLaravel\Dispatcher\Items\Queue\Jobs\TraceUpdateJob;
 use SLoggerLaravel\Events\WatcherErrorEvent;
 use SLoggerLaravel\Listeners\WatcherErrorListener;
 use SLoggerLaravel\Watchers\Children\CacheWatcher;

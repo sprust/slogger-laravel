@@ -3,6 +3,7 @@
 namespace SLoggerLaravel\Dispatcher;
 
 use Illuminate\Console\Command;
+use SLoggerLaravel\Dispatcher\State\DispatcherProcessState;
 use Throwable;
 
 class StartDispatcherCommand extends Command
@@ -19,34 +20,36 @@ class StartDispatcherCommand extends Command
      *
      * @var string
      */
-    protected $description = 'Command for start dispatcher';
+    protected $description = 'Start dispatcher';
+
 
     /**
      * Execute the console command.
+     *
+     * @throws Throwable
      */
-    public function handle(DispatcherProcessState $processState, DispatcherFactory $dispatcherFactory): void
+    public function handle(Dispatcher $dispatcher): void
     {
-        if ($savedPid = $processState->getSavedPid()) {
-            if ($processState->isPidActive($savedPid, $this->getName())) {
-                $this->error("Dispatcher already started with PID: $savedPid");
+        $this->info('Dispatcher starting...');
 
-                return;
-            }
-        }
-
-        $currentPid = $processState->getCurrentPid();
-
-        $processState->savePid($currentPid);
+        $processState = new DispatcherProcessState(
+            masterCommandName: $this->getName()
+        );
 
         try {
-            $dispatcher = $this->argument('dispatcher') ?: config('slogger.dispatchers.default');
-
-            $dispatcherFactory->create($dispatcher)->start($this->output);
+            $dispatcher->start(
+                processState: $processState,
+                dispatcher: $this->argument('dispatcher') ?: config('slogger.dispatchers.default')
+            );
         } catch (Throwable $exception) {
-            $this->error($exception->getMessage());
-        }
+            $state = $processState->getSaved();
 
-        $processState->purgePid();
+            if ($state) {
+                $dispatcher->stop($state);
+            }
+
+            throw $exception;
+        }
 
         $this->info('Dispatcher stopped');
     }

@@ -6,7 +6,7 @@ use Closure;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\Carbon;
 use LogicException;
-use SLoggerLaravel\Dispatcher\TraceDispatcherInterface;
+use SLoggerLaravel\Dispatcher\Items\TraceDispatcherInterface;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Helpers\DataFormatter;
 use SLoggerLaravel\Helpers\MetricsHelper;
