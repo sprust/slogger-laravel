@@ -20,6 +20,7 @@ class TraceObject
         public ?float $duration,
         public ?float $memory,
         public ?float $cpu,
+        public bool $isParent,
         public Carbon $loggedAt
     ) {
     }
@@ -36,6 +37,7 @@ class TraceObject
             'duration'      => $this->duration,
             'memory'        => $this->memory,
             'cpu'           => $this->cpu,
+            'isParent'      => $this->isParent,
             'loggedAt'      => $this->loggedAt->clone()
                 ->setTimezone('UTC')
                 ->toDateTimeString('microsecond'),
@@ -56,6 +58,7 @@ class TraceObject
             duration: $data['duration'],
             memory: $data['memory'],
             cpu: $data['cpu'],
+            isParent: $data['isParent'],
             loggedAt: new Carbon($data['loggedAt'], 'UTC'),
         );
     }

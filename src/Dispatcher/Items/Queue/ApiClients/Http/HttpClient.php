@@ -33,6 +33,7 @@ class HttpClient implements ApiClientInterface
                 'duration'        => $traceObject->duration,
                 'memory'          => $traceObject->memory,
                 'cpu'             => $traceObject->cpu,
+                'is_parent'       => $traceObject->isParent,
                 'logged_at'       => (float) ($traceObject->loggedAt->unix()
                     . '.' . $traceObject->loggedAt->microsecond),
             ];

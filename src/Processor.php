@@ -158,6 +158,7 @@ class Processor
                 duration: null,
                 memory: MetricsHelper::getMemoryUsagePercent(),
                 cpu: MetricsHelper::getCpuAvgPercent(),
+                isParent: true,
                 loggedAt: ($loggedAt ?: now())->clone()->setTimezone('UTC')
             )
         );
@@ -210,6 +211,7 @@ class Processor
                 duration: $duration,
                 memory: MetricsHelper::getMemoryUsagePercent(),
                 cpu: MetricsHelper::getCpuAvgPercent(),
+                isParent: false,
                 loggedAt: ($loggedAt ?: now())->clone()->setTimezone('UTC')
             )
         );

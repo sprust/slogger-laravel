@@ -24,7 +24,7 @@ class LoadTransporterCommand extends Command
     public function handle(TransporterLoader $loader): int
     {
         $this->components->task(
-            'Downloading transporter',
+            "Downloading transporter [{$loader->getVersion()}]",
             static function () use ($loader) {
                 $loader->load();
             }

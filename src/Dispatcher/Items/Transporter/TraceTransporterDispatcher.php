@@ -106,6 +106,7 @@ class TraceTransporterDispatcher implements TraceDispatcherInterface
             'dur' => $trace->duration,
             'mem' => $trace->memory,
             'cpu' => $trace->cpu,
+            'isP' => $trace->isParent,
             'lat' => $trace->loggedAt->clone()
                 ->setTimezone('UTC')
                 ->toDateTimeString('microsecond'),

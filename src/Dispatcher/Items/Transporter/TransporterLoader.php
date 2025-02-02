@@ -11,7 +11,7 @@ readonly class TransporterLoader
 
     public function __construct(private string $path)
     {
-        $this->version = '0.0.1';
+        $this->version = '0.0.2';
     }
 
     public function fileExists(): bool

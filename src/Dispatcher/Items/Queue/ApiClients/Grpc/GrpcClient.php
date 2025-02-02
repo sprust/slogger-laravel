@@ -2,6 +2,7 @@
 
 namespace SLoggerLaravel\Dispatcher\Items\Queue\ApiClients\Grpc;
 
+use Google\Protobuf\BoolValue;
 use Google\Protobuf\DoubleValue;
 use Google\Protobuf\Int32Value;
 use Google\Protobuf\StringValue;
@@ -68,6 +69,7 @@ readonly class GrpcClient implements ApiClientInterface
                         ? null
                         : new DoubleValue(['value' => $item->cpu])
                 )
+                ->setIsParent(new BoolValue(['value' => $item->isParent]))
                 ->setLoggedAt($loggedAt);
         }
 
