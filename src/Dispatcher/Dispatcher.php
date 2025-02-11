@@ -225,6 +225,10 @@ class Dispatcher
         }
 
         foreach ($state->childProcessPids as $childProcessPid) {
+            if (!$childProcessPid) {
+                continue;
+            }
+
             if ($this->processHelper->isPidActive($childProcessPid, $state->childCommandName)) {
                 $this->processHelper->sendStopSignal($childProcessPid);
                 $this->logInfo(
@@ -280,9 +284,13 @@ class Dispatcher
                 masterCommandName: $processState->getMasterCommandName(),
                 masterPid: $masterPid,
                 childCommandName: $childCommandName,
-                childProcessPids: array_map(
-                    fn(Process $process) => $process->getPid(),
-                    $childProcesses
+                childProcessPids: array_values(
+                    array_filter(
+                        array_map(
+                            static fn(Process $process) => $process->getPid(),
+                            $childProcesses
+                        )
+                    )
                 )
             )
         );
