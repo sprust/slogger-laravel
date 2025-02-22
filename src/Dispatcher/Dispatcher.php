@@ -15,6 +15,7 @@ use Throwable;
 
 class Dispatcher
 {
+    private bool $enabled;
     private bool $shouldQuit = false;
     private LoggerInterface $logger;
 
@@ -23,7 +24,8 @@ class Dispatcher
         private readonly ProcessHelper $processHelper,
         private readonly DispatcherFactory $dispatcherFactory,
     ) {
-        $this->logger = Log::channel(config('slogger.log_channel'));
+        $this->enabled = (bool) config('slogger.enabled');
+        $this->logger  = Log::channel(config('slogger.log_channel'));
     }
 
     /**
@@ -64,6 +66,33 @@ class Dispatcher
         pcntl_signal(SIGINT, fn() => $this->shouldQuit = true);
         pcntl_signal(SIGTERM, fn() => $this->shouldQuit = true);
 
+        if (!$this->enabled) {
+            $this->freshState(
+                processState: $processState,
+                dispatcher: $dispatcher,
+                masterPid: $masterPid,
+                childCommandName: 'disabled',
+                childProcesses: []
+            );
+
+            $message = 'SLogger is disabled';
+
+            $logTime = time();
+
+            while (!$this->shouldQuit) {
+                if ((time() - $logTime) > 10) {
+                    $logTime = time();
+
+                    $this->logger->warning($message);
+                    $this->output->writeln($message);
+                }
+
+                sleep(1);
+            }
+
+            return;
+        }
+
         $processor = $this->dispatcherFactory->create($dispatcher)->getProcessor();
 
         $processes = $processor->createProcesses();
@@ -86,6 +115,14 @@ class Dispatcher
 
         foreach ($processes as $process) {
             $process->start();
+
+            $this->logInfo(
+                $this->makeLogMessage(
+                    dispatcher: $dispatcher,
+                    masterPid: $masterPid,
+                    message: "child process started with PID {$process->getPid()}"
+                )
+            );
         }
 
         $this->freshState(

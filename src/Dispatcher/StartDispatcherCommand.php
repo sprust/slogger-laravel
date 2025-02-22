@@ -3,7 +3,6 @@
 namespace SLoggerLaravel\Dispatcher;
 
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Log;
 use SLoggerLaravel\Dispatcher\State\DispatcherProcessState;
 use Throwable;
 
@@ -31,26 +30,6 @@ class StartDispatcherCommand extends Command
      */
     public function handle(Dispatcher $dispatcher): void
     {
-        if (!config('slogger.enabled')) {
-            // If the slogger is disabled, we will just sleep forever
-
-            $logger = Log::channel(config('slogger.log_channel'));
-
-            /**
-             * @phpstan-ignore-next-line
-             *
-             * While loop condition is always true.
-             */
-            while (true) {
-                $message = 'SLogger is disabled';
-
-                $logger->warning($message);
-                $this->warn($message);
-
-                sleep(10);
-            }
-        }
-
         $this->info('Dispatcher starting...');
 
         $processState = new DispatcherProcessState(
