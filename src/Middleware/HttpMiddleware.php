@@ -62,13 +62,11 @@ class HttpMiddleware implements TerminableInterface
 
     private function getHeaderParentTraceIdKey(): ?string
     {
-        return $this->headerParentTraceIdKey
-            ?: ($this->headerParentTraceIdKey = app(Config::class)->requestsHeaderParentTraceIdKey());
+        return $this->headerParentTraceIdKey ??= app(Config::class)->requestsHeaderParentTraceIdKey();
     }
 
     private function getLoggerTraceIdContainer(): TraceIdContainer
     {
-        return $this->traceIdContainer
-            ?: ($this->traceIdContainer = app(TraceIdContainer::class));
+        return $this->traceIdContainer ??= app(TraceIdContainer::class);
     }
 }
