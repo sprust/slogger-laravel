@@ -3,25 +3,25 @@
 namespace SLoggerLaravel\Middleware;
 
 use Closure;
-use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Http\Request;
-use SLoggerLaravel\Events\RequestHandling;
 use SLoggerLaravel\Config;
+use SLoggerLaravel\Events\RequestHandling;
 use SLoggerLaravel\Traces\TraceIdContainer;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\TerminableInterface;
 
 class HttpMiddleware implements TerminableInterface
 {
-    private ?string $traceId = null;
-    private readonly ?string $headerParentTraceIdKey;
+    private bool $enabled;
 
-    public function __construct(
-        private readonly Application $app,
-        private readonly TraceIdContainer $loggerTraceIdContainer,
-        private readonly Config $loggerConfig
-    ) {
-        $this->headerParentTraceIdKey = $this->loggerConfig->requestsHeaderParentTraceIdKey();
+    private ?TraceIdContainer $traceIdContainer = null;
+
+    private ?string $traceId = null;
+    private ?string $headerParentTraceIdKey = null;
+
+    public function __construct()
+    {
+        $this->enabled = (bool) config('slogger.enabled');
     }
 
     /**
@@ -31,26 +31,44 @@ class HttpMiddleware implements TerminableInterface
      */
     public function handle(Request $request, Closure $next): Response
     {
-        $parentTraceId = $request->header($this->headerParentTraceIdKey);
+        if ($this->enabled) {
+            $parentTraceId = $request->header($this->getHeaderParentTraceIdKey());
 
-        $this->app['events']->dispatch(
-            new RequestHandling(
-                request: $request,
-                parentTraceId: is_array($parentTraceId)
-                    ? ($parentTraceId[0] ?? null)
-                    : (is_string($parentTraceId) ? $parentTraceId : null)
-            )
-        );
+            event(
+                new RequestHandling(
+                    request: $request,
+                    parentTraceId: is_array($parentTraceId)
+                        ? ($parentTraceId[0] ?? null)
+                        : (is_string($parentTraceId) ? $parentTraceId : null)
+                )
+            );
 
-        $this->traceId = $this->loggerTraceIdContainer->getParentTraceId();
+            $this->traceId = $this->getLoggerTraceIdContainer()->getParentTraceId();
+        }
 
         return $next($request);
     }
 
-    public function terminate(\Symfony\Component\HttpFoundation\Request $request, Response $response)
+    public function terminate(\Symfony\Component\HttpFoundation\Request $request, Response $response): void
     {
-        if ($this->headerParentTraceIdKey) {
-            $response->headers->set($this->headerParentTraceIdKey, $this->traceId);
+        if (!$this->enabled) {
+            return;
         }
+
+        if ($headerParentTraceIdKey = $this->getHeaderParentTraceIdKey()) {
+            $response->headers->set($headerParentTraceIdKey, $this->traceId);
+        }
+    }
+
+    private function getHeaderParentTraceIdKey(): ?string
+    {
+        return $this->headerParentTraceIdKey
+            ?: ($this->headerParentTraceIdKey = app(Config::class)->requestsHeaderParentTraceIdKey());
+    }
+
+    private function getLoggerTraceIdContainer(): TraceIdContainer
+    {
+        return $this->traceIdContainer
+            ?: ($this->traceIdContainer = app(TraceIdContainer::class));
     }
 }

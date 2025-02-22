@@ -16,6 +16,30 @@ use SLoggerLaravel\Watchers\AbstractWatcher;
  */
 class EventWatcher extends AbstractWatcher
 {
+    /**
+     * @var string[]
+     */
+    private array $ignoreEvents = [];
+
+    /**
+     * @var string[]
+     */
+    private array $serializeEvents = [];
+
+    /**
+     * @var string[]
+     */
+    private array $possibleOrphans = [];
+
+    protected function init(): void
+    {
+        parent::init();
+
+        $this->ignoreEvents    = config('slogger.watchers_customizing.events.ignore_events');
+        $this->serializeEvents = config('slogger.watchers_customizing.events.serialize_events');
+        $this->possibleOrphans = config('slogger.watchers_customizing.events.can_be_orphan');
+    }
+
     public function register(): void
     {
         $this->listenEvent('*', [$this, 'handleEvent']);
@@ -43,6 +67,7 @@ class EventWatcher extends AbstractWatcher
             status: TraceStatusEnum::Success->value,
             tags: $this->prepareTags($eventName, $payload),
             data: $this->prepareData($eventName, $payload),
+            canBeOrphan: $this->canByOrphan($eventName),
         );
     }
 
@@ -89,6 +114,18 @@ class EventWatcher extends AbstractWatcher
      */
     protected function preparePayload(array $payload): array
     {
+        if (!$payload) {
+            return [];
+        }
+
+        $payloadKeys = array_keys($payload);
+
+        $event = $payload[$payloadKeys[0]] ?? null;
+
+        if (is_object($event) && in_array(get_class($event), $this->serializeEvents)) {
+            return json_decode(json_encode($event), true) ?: [];
+        }
+
         return [];
     }
 
@@ -133,11 +170,6 @@ class EventWatcher extends AbstractWatcher
 
     protected function shouldIgnore(string $eventName): bool
     {
-        return $this->eventIsFiredByTheFramework($eventName);
-    }
-
-    protected function eventIsFiredByTheFramework(string $eventName): bool
-    {
         return Str::is(
             [
                 'Illuminate\*',
@@ -148,7 +180,16 @@ class EventWatcher extends AbstractWatcher
                 'creating*',
                 'composing*',
                 'SLoggerLaravel\*',
+                ...$this->ignoreEvents,
             ],
+            $eventName
+        );
+    }
+
+    protected function canByOrphan(string $eventName): bool
+    {
+        return Str::is(
+            $this->possibleOrphans,
             $eventName
         );
     }

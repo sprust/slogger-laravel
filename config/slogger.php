@@ -84,6 +84,12 @@ return [
         ],
     ],
 
+    'data_completer' => [
+        'excluded_file_masks' => [
+            //
+        ],
+    ],
+
     'watchers_customizing' => [
         'requests' => [
             'header_parent_trace_id_key' => env(
@@ -163,6 +169,18 @@ return [
                     '*token*',
                     '*password*',
                 ],
+            ],
+        ],
+
+        'events' => [
+            'ignore_events'    => [
+                //
+            ],
+            'serialize_events' => [
+                //
+            ],
+            'can_be_orphan'    => [
+                //
             ],
         ],
     ],

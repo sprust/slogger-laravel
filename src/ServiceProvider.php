@@ -18,6 +18,7 @@ use SLoggerLaravel\Dispatcher\Items\Transporter\Commands\StopTransporterCommand;
 use SLoggerLaravel\Dispatcher\Items\Transporter\TransporterLoader;
 use SLoggerLaravel\Dispatcher\StartDispatcherCommand;
 use SLoggerLaravel\Dispatcher\StopDispatcherCommand;
+use SLoggerLaravel\Helpers\TraceDataComplementer;
 use SLoggerLaravel\Middleware\HttpMiddleware;
 use SLoggerLaravel\Profiling\AbstractProfiling;
 use SLoggerLaravel\Profiling\XHProfProfiler;
@@ -31,11 +32,18 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
      */
     public function boot(): void
     {
+        $this->registerConsole();
+
+        if (!$this->app['config']['slogger.enabled']) {
+            return;
+        }
+
         $this->app->singleton(Config::class);
         $this->app->singleton(State::class);
         $this->app->singleton(Processor::class);
         $this->app->singleton(TraceIdContainer::class);
         $this->app->singleton(HttpMiddleware::class);
+        $this->app->singleton(TraceDataComplementer::class);
         $this->app->singleton(AbstractProfiling::class, XHProfProfiler::class);
 
         $this->app->singleton(ApiClientInterface::class, static function (Application $app) {
@@ -63,8 +71,6 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         $this->registerListeners();
 
         $this->registerWatchers();
-
-        $this->registerConsole();
 
         $this->publishes(
             paths: [

@@ -182,9 +182,10 @@ class Processor
         array $tags = [],
         array $data = [],
         ?float $duration = null,
-        ?Carbon $loggedAt = null
+        ?Carbon $loggedAt = null,
+        bool $canBeOrphan = false
     ): void {
-        if (!$this->isActive()) {
+        if (!$canBeOrphan && !$this->isActive()) {
             return;
         }
 
@@ -194,7 +195,7 @@ class Processor
             // when a parent is in excluded
             ?? $this->traceIdContainer->getPreParentTraceId();
 
-        if (!$parentTraceId) {
+        if (!$canBeOrphan && !$parentTraceId) {
             throw new LogicException("Parent trace id has not found for $type.");
         }
 

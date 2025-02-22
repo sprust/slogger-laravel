@@ -1,7 +1,5 @@
 <?php
 
-declare(ticks=1);
-
 namespace SLoggerLaravel\Dispatcher\Items\Transporter;
 
 use Illuminate\Support\Str;
