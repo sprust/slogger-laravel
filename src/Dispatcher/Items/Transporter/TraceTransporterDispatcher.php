@@ -44,6 +44,36 @@ class TraceTransporterDispatcher implements TraceDispatcherInterface
             return;
         }
 
+        $actions = $this->makeAndClearCurrentTraceActions();
+
+        $this->client->dispatch($actions);
+    }
+
+    public function update(TraceUpdateObject $parameters): void
+    {
+        $actions = $this->makeAndClearCurrentTraceActions();
+
+        $actions[] = $this->makeUpdateData($parameters);
+
+        $this->client->dispatch($actions);
+    }
+
+    public function terminate(): void
+    {
+        $actions = $this->makeAndClearCurrentTraceActions();
+
+        if (!count($actions)) {
+            return;
+        }
+
+        $this->client->dispatch($actions);
+    }
+
+    /**
+     * @return array{tp: string, dt: string}[]
+     */
+    protected function makeAndClearCurrentTraceActions(): array
+    {
         $actions = array_map(
             fn(TraceObject $trace) => $this->makeCreateData($trace),
             $this->traces
@@ -51,25 +81,7 @@ class TraceTransporterDispatcher implements TraceDispatcherInterface
 
         $this->traces = [];
 
-        $this->client->dispatch($actions);
-    }
-
-    public function update(TraceUpdateObject $parameters): void
-    {
-        $actions = [];
-
-        if (count($this->traces)) {
-            $actions = array_map(
-                fn(TraceObject $trace) => $this->makeCreateData($trace),
-                $this->traces
-            );
-        }
-
-        $this->traces = [];
-
-        $actions[] = $this->makeUpdateData($parameters);
-
-        $this->client->dispatch($actions);
+        return $actions;
     }
 
     /**

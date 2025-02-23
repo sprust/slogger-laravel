@@ -80,6 +80,12 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
                 'slogger-laravel',
             ]
         );
+
+        $this->app->terminating(
+            static function (TraceDispatcherInterface $dispatcher) {
+                $dispatcher->terminate();
+            }
+        );
     }
 
     private function registerListeners(): void
@@ -98,10 +104,6 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
      */
     private function registerWatchers(): void
     {
-        if (!$this->app['config']['slogger.enabled']) {
-            return;
-        }
-
         $state = $this->app->make(State::class);
 
         /** @var array{enabled: bool, class: class-string<AbstractWatcher>}[] $watcherConfigs */

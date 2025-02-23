@@ -13,6 +13,7 @@ use SLoggerLaravel\Objects\TraceObject;
 use SLoggerLaravel\Objects\TraceObjects;
 use SLoggerLaravel\Objects\TraceUpdateObject;
 
+// TODO: implement maybe
 class TraceFileDispatcher implements TraceDispatcherInterface
 {
     /** @var TraceObject[] */
@@ -70,6 +71,11 @@ class TraceFileDispatcher implements TraceDispatcherInterface
             $this->traces,
             fn(TraceObject $traceItem) => $traceItem->parentTraceId !== $parameters
         );
+    }
+
+    public function terminate(): void
+    {
+        throw new RuntimeException('Not implemented');
     }
 
     /**

@@ -55,6 +55,15 @@ class TraceQueueDispatcher implements TraceDispatcherInterface
         dispatch(new TraceUpdateJob($traceObjects->toJson()));
     }
 
+    public function terminate(): void
+    {
+        if (!count($this->traces)) {
+            return;
+        }
+
+        $this->sendAndClearTraces();
+    }
+
     protected function sendAndClearTraces(): void
     {
         $traceObjects = new TraceObjects();
