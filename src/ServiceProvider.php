@@ -27,6 +27,15 @@ use SLoggerLaravel\Watchers\AbstractWatcher;
 
 class ServiceProvider extends \Illuminate\Support\ServiceProvider
 {
+    public function register(): void
+    {
+        if (!$this->app['config']['slogger.enabled']) {
+            return;
+        }
+
+        $this->app->singleton(TraceDataComplementer::class);
+    }
+
     /**
      * @throws BindingResolutionException
      */
@@ -43,7 +52,6 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         $this->app->singleton(Processor::class);
         $this->app->singleton(TraceIdContainer::class);
         $this->app->singleton(HttpMiddleware::class);
-        $this->app->singleton(TraceDataComplementer::class);
         $this->app->singleton(AbstractProfiling::class, XHProfProfiler::class);
 
         $this->app->singleton(ApiClientInterface::class, static function (Application $app) {
