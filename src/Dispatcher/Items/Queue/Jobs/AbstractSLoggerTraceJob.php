@@ -7,6 +7,8 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Support\Facades\Log;
+use SLoggerLaravel\Configs\DispatcherQueueConfig;
+use SLoggerLaravel\Configs\GeneralConfig;
 use SLoggerLaravel\Dispatcher\Items\Queue\ApiClients\ApiClientInterface;
 use SLoggerLaravel\Processor;
 use Throwable;
@@ -23,14 +25,16 @@ abstract class AbstractSLoggerTraceJob implements ShouldQueue
 
     public function __construct()
     {
-        $this->onConnection(config('slogger.dispatchers.queue.connection'))
-            ->onQueue(config('slogger.dispatchers.queue.name'));
+        $config = app(DispatcherQueueConfig::class);
+
+        $this->onConnection($config->getConnection())
+            ->onQueue($config->getName());
     }
 
     /**
      * @throws Throwable
      */
-    public function handle(Processor $processor, ApiClientInterface $apiClient): void
+    public function handle(Processor $processor, ApiClientInterface $apiClient, GeneralConfig $config): void
     {
         try {
             $processor->handleWithoutTracing(
@@ -42,7 +46,7 @@ abstract class AbstractSLoggerTraceJob implements ShouldQueue
             } else {
                 $this->job->delete();
 
-                Log::channel(config('slogger.log_channel'))
+                Log::channel($config->getLogChannel())
                     ->error($exception->getMessage(), [
                         'code'  => $exception->getCode(),
                         'file'  => $exception->getFile(),

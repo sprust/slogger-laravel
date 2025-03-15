@@ -5,6 +5,7 @@ namespace SLoggerLaravel\Helpers;
 use Closure;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\Str;
+use SLoggerLaravel\Configs\WatchersConfig;
 
 class TraceDataComplementer
 {
@@ -26,15 +27,12 @@ class TraceDataComplementer
      */
     private array $additional = [];
 
-    public function __construct(private readonly Application $app)
+    public function __construct(private readonly Application $app, WatchersConfig $watchersConfig)
     {
         $this->basePathVendor    = base_path('vendor' . DIRECTORY_SEPARATOR);
         $this->basePathPackages  = base_path('packages' . DIRECTORY_SEPARATOR);
-        $this->excludedClasses   = [
-            self::class,
-            static::class,
-        ];
-        $this->excludedFileMasks = config('slogger.data_completer.excluded_file_masks') ?: [];
+        $this->excludedClasses   = [self::class, static::class];
+        $this->excludedFileMasks = $watchersConfig->getDataCompleterExcludedFileMasks();
     }
 
     public function add(string $key, mixed $value): void

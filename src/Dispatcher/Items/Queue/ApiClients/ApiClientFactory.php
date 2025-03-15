@@ -7,6 +7,9 @@ use Grpc\ChannelCredentials;
 use GuzzleHttp\Client;
 use RuntimeException;
 use SLoggerGrpc\Services\TraceCollectorGrpcService;
+use SLoggerLaravel\Configs\DispatcherQueueConfig;
+use SLoggerLaravel\Configs\DispatcherTransporterConfig;
+use SLoggerLaravel\Configs\GeneralConfig;
 use SLoggerLaravel\Dispatcher\Items\Queue\ApiClients\Grpc\GrpcClient;
 use SLoggerLaravel\Dispatcher\Items\Queue\ApiClients\Http\HttpClient;
 
@@ -14,9 +17,11 @@ readonly class ApiClientFactory
 {
     private string $apiToken;
 
-    public function __construct()
-    {
-        $this->apiToken = config('slogger.token');
+    public function __construct(
+        GeneralConfig $config,
+        private DispatcherQueueConfig $queueConfig,
+    ) {
+        $this->apiToken = $config->getToken();
     }
 
     public function create(string $apiClientName): ApiClientInterface
@@ -30,7 +35,7 @@ readonly class ApiClientFactory
 
     private function createHttp(): HttpClient
     {
-        $url = config('slogger.dispatchers.queue.api_clients.http.url');
+        $url = $this->queueConfig->getHttpClientUrl();
 
         return new HttpClient(
             new Client([
@@ -53,7 +58,7 @@ readonly class ApiClientFactory
             );
         }
 
-        $url = config('slogger.dispatchers.queue.api_clients.grpc.url');
+        $url = $this->queueConfig->getGrpcClientUrl();
 
         try {
             return new GrpcClient(

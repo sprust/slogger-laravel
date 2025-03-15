@@ -6,6 +6,7 @@ use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Support\Facades\Log;
 use Psr\Log\LoggerInterface;
 use RuntimeException;
+use SLoggerLaravel\Configs\GeneralConfig;
 use SLoggerLaravel\Dispatcher\Items\DispatcherFactory;
 use SLoggerLaravel\Dispatcher\State\DispatcherProcessState;
 use SLoggerLaravel\Dispatcher\State\DispatcherProcessStateDto;
@@ -23,9 +24,10 @@ class Dispatcher
         private readonly ConsoleOutput $output,
         private readonly ProcessHelper $processHelper,
         private readonly DispatcherFactory $dispatcherFactory,
+        private readonly GeneralConfig $generalConfig,
     ) {
-        $this->enabled = (bool) config('slogger.enabled');
-        $this->logger  = Log::channel(config('slogger.log_channel'));
+        $this->enabled = $generalConfig->isEnabled();
+        $this->logger  = Log::channel($this->generalConfig->getLogChannel());
     }
 
     /**

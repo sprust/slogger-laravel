@@ -4,6 +4,7 @@ namespace SLoggerLaravel\Dispatcher\Items\Transporter;
 
 use Illuminate\Support\Str;
 use RuntimeException;
+use SLoggerLaravel\Configs\DispatcherTransporterConfig;
 use Symfony\Component\Console\Output\ConsoleOutput;
 use Symfony\Component\Process\Process;
 use Throwable;
@@ -14,7 +15,8 @@ class TransporterProcess
 
     public function __construct(
         private readonly ConsoleOutput $output,
-        private readonly TransporterLoader $loader
+        private readonly TransporterLoader $loader,
+        private readonly DispatcherTransporterConfig $config
     ) {
     }
 
@@ -146,7 +148,7 @@ class TransporterProcess
 
     private function initEnv(string $envFilePath): void
     {
-        $evnValues = config('slogger.dispatchers.transporter.env');
+        $evnValues = $this->config->getEnv();
 
         $content = '';
 

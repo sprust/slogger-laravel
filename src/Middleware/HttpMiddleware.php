@@ -4,7 +4,8 @@ namespace SLoggerLaravel\Middleware;
 
 use Closure;
 use Illuminate\Http\Request;
-use SLoggerLaravel\Config;
+use SLoggerLaravel\Configs\GeneralConfig;
+use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\Events\RequestHandling;
 use SLoggerLaravel\Traces\TraceIdContainer;
 use Symfony\Component\HttpFoundation\Response;
@@ -19,9 +20,9 @@ class HttpMiddleware implements TerminableInterface
     private ?string $traceId = null;
     private ?string $headerParentTraceIdKey = null;
 
-    public function __construct()
+    public function __construct(GeneralConfig $config)
     {
-        $this->enabled = (bool) config('slogger.enabled');
+        $this->enabled = $config->isEnabled();
     }
 
     /**
@@ -62,7 +63,7 @@ class HttpMiddleware implements TerminableInterface
 
     private function getHeaderParentTraceIdKey(): ?string
     {
-        return $this->headerParentTraceIdKey ??= app(Config::class)->requestsHeaderParentTraceIdKey();
+        return $this->headerParentTraceIdKey ??= app(WatchersConfig::class)->requestsHeaderParentTraceIdKey();
     }
 
     private function getLoggerTraceIdContainer(): TraceIdContainer

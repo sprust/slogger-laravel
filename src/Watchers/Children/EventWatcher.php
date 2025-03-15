@@ -4,9 +4,11 @@ namespace SLoggerLaravel\Watchers\Children;
 
 use Closure;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
+use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Support\Str;
 use ReflectionFunction;
+use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Watchers\AbstractWatcher;
@@ -31,13 +33,18 @@ class EventWatcher extends AbstractWatcher
      */
     private array $possibleOrphans = [];
 
+    /**
+     * @throws BindingResolutionException
+     */
     protected function init(): void
     {
         parent::init();
 
-        $this->ignoreEvents    = config('slogger.watchers_customizing.events.ignore_events');
-        $this->serializeEvents = config('slogger.watchers_customizing.events.serialize_events');
-        $this->possibleOrphans = config('slogger.watchers_customizing.events.can_be_orphan');
+        $config = $this->app->make(WatchersConfig::class);
+
+        $this->ignoreEvents    = $config->eventsIgnoreEvents();
+        $this->serializeEvents = $config->eventsSerializeEvents();
+        $this->possibleOrphans = $config->eventsCanBeOrphan();
     }
 
     public function register(): void

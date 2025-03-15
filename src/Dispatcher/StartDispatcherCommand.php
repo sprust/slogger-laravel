@@ -3,6 +3,7 @@
 namespace SLoggerLaravel\Dispatcher;
 
 use Illuminate\Console\Command;
+use SLoggerLaravel\Configs\DispatcherConfig;
 use SLoggerLaravel\Dispatcher\State\DispatcherProcessState;
 use Throwable;
 
@@ -28,7 +29,7 @@ class StartDispatcherCommand extends Command
      *
      * @throws Throwable
      */
-    public function handle(Dispatcher $dispatcher): void
+    public function handle(Dispatcher $dispatcher, DispatcherConfig $config): void
     {
         $this->info('Dispatcher starting...');
 
@@ -39,7 +40,7 @@ class StartDispatcherCommand extends Command
         try {
             $dispatcher->start(
                 processState: $processState,
-                dispatcher: $this->argument('dispatcher') ?: config('slogger.dispatchers.default')
+                dispatcher: $this->argument('dispatcher') ?: $config->getDefault()
             );
         } catch (Throwable $exception) {
             $state = $processState->getSaved();

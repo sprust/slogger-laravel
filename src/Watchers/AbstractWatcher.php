@@ -5,8 +5,8 @@ namespace SLoggerLaravel\Watchers;
 use Closure;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
+use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\Events\WatcherErrorEvent;
-use SLoggerLaravel\Config;
 use SLoggerLaravel\Processor;
 use SLoggerLaravel\Traces\TraceIdContainer;
 use Throwable;
@@ -21,7 +21,7 @@ abstract class AbstractWatcher
         protected readonly Application $app,
         protected readonly Processor $processor,
         protected readonly TraceIdContainer $traceIdContainer,
-        protected readonly Config $loggerConfig,
+        protected readonly WatchersConfig $loggerConfig,
     ) {
         $this->events = $this->app['events'];
 

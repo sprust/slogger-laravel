@@ -4,7 +4,13 @@ namespace SLoggerLaravel;
 
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Contracts\Queue\Queue as QueueContract;
 use Illuminate\Support\Facades\Queue;
+use SLoggerLaravel\Configs\DispatcherConfig;
+use SLoggerLaravel\Configs\DispatcherQueueConfig;
+use SLoggerLaravel\Configs\DispatcherTransporterConfig;
+use SLoggerLaravel\Configs\GeneralConfig;
+use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\Dispatcher\Items\DispatcherFactory;
 use SLoggerLaravel\Dispatcher\Items\Queue\ApiClients\ApiClientFactory;
 use SLoggerLaravel\Dispatcher\Items\Queue\ApiClients\ApiClientInterface;
@@ -27,9 +33,14 @@ use SLoggerLaravel\Watchers\AbstractWatcher;
 
 class ServiceProvider extends \Illuminate\Support\ServiceProvider
 {
+    /**
+     * @throws BindingResolutionException
+     */
     public function register(): void
     {
-        if (!$this->app['config']['slogger.enabled']) {
+        $this->app->singleton(GeneralConfig::class);
+
+        if (!$this->app->make(GeneralConfig::class)->isEnabled()) {
             return;
         }
 
@@ -43,38 +54,47 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
     {
         $this->registerConsole();
 
-        if (!$this->app['config']['slogger.enabled']) {
+        if (!$this->app->make(GeneralConfig::class)->isEnabled()) {
             return;
         }
 
-        $this->app->singleton(Config::class);
+        $this->app->singleton(WatchersConfig::class);
         $this->app->singleton(State::class);
         $this->app->singleton(Processor::class);
         $this->app->singleton(TraceIdContainer::class);
         $this->app->singleton(HttpMiddleware::class);
         $this->app->singleton(AbstractProfiling::class, XHProfProfiler::class);
 
-        $this->app->singleton(ApiClientInterface::class, static function (Application $app) {
-            return $app->make(ApiClientFactory::class)->create(
-                config('slogger.dispatchers.queue.api_clients.default')
-            );
-        });
+        $this->app->singleton(
+            ApiClientInterface::class,
+            static function (Application $app) {
+                return $app->make(ApiClientFactory::class)->create(
+                    $app->make(DispatcherQueueConfig::class)->getDefaultApiClient()
+                );
+            }
+        );
 
-        $this->app->singleton(TransporterClientInterface::class, function () {
-            return new TransporterClient(
-                apiToken: config('slogger.token'),
-                connectionResolver: static function (): \Illuminate\Contracts\Queue\Queue {
-                    return Queue::connection(config('slogger.dispatchers.transporter.queue.connection'));
-                },
-                queueName: config('slogger.dispatchers.transporter.queue.name')
-            );
-        });
+        $this->app->singleton(
+            TransporterClientInterface::class,
+            static function (Application $app) {
+                return new TransporterClient(
+                    apiToken: $app->make(GeneralConfig::class)->getToken(),
+                    connectionResolver: static function (): QueueContract {
+                        return Queue::connection(app(DispatcherTransporterConfig::class)->getQueueConnection());
+                    },
+                    queueName: $app->make(DispatcherTransporterConfig::class)->getQueueName()
+                );
+            }
+        );
 
-        $this->app->singleton(TraceDispatcherInterface::class, function (Application $app) {
-            return $app->make(DispatcherFactory::class)->create(
-                config('slogger.dispatchers.default')
-            );
-        });
+        $this->app->singleton(
+            TraceDispatcherInterface::class,
+            static function (Application $app) {
+                return $app->make(DispatcherFactory::class)->create(
+                    $app->make(DispatcherConfig::class)->getDefault()
+                );
+            }
+        );
 
         $this->registerListeners();
 
@@ -148,10 +168,11 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
             StatTransporterCommand::class,
         ]);
 
-        $this->app->singleton(TransporterLoader::class, static function () {
-            return new TransporterLoader(
+        $this->app->singleton(
+            TransporterLoader::class,
+            static fn() => new TransporterLoader(
                 path: base_path('strans')
-            );
-        });
+            )
+        );
     }
 }
