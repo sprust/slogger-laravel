@@ -150,12 +150,22 @@ class RequestWatcher extends AbstractWatcher
     {
         $url = str_replace($request->root(), '', $request->fullUrl());
 
+        $route = $request->route();
+
+        if ($route instanceof Route) {
+            $action      = $route->getActionName();
+            $middlewares = $route->gatherMiddleware();
+        } else {
+            $action      = is_string($route) ? $route : null;
+            $middlewares = null;
+        }
+
         return [
             'ip_address'  => $request->ip(),
             'uri'         => $this->prepareUrl($url),
             'method'      => $request->method(),
-            'action'      => optional($request->route())->getActionName(),
-            'middlewares' => array_values(optional($request->route())->gatherMiddleware() ?? []),
+            'action'      => $action,
+            'middlewares' => $middlewares,
         ];
     }
 
