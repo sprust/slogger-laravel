@@ -43,26 +43,11 @@ class ProfilingObjects
                     'calling'  => $item->calling,
                     'callable' => $item->callable,
                     'data'     => [
-                        [
-                            'name'  => 'numberOfCalls',
-                            'value' => $item->data->numberOfCalls,
-                        ],
-                        [
-                            'name'  => 'waitTimeInUs',
-                            'value' => $item->data->waitTimeInUs,
-                        ],
-                        [
-                            'name'  => 'cpuTime',
-                            'value' => $item->data->cpuTime,
-                        ],
-                        [
-                            'name'  => 'memoryUsageInBytes',
-                            'value' => $item->data->memoryUsageInBytes,
-                        ],
-                        [
-                            'name'  => 'peakMemoryUsageInBytes',
-                            'value' => $item->data->peakMemoryUsageInBytes,
-                        ],
+                        'numberOfCalls'          => $item->data->numberOfCalls,
+                        'waitTimeInUs'           => $item->data->waitTimeInUs,
+                        'cpuTime'                => $item->data->cpuTime,
+                        'memoryUsageInBytes'     => $item->data->memoryUsageInBytes,
+                        'peakMemoryUsageInBytes' => $item->data->peakMemoryUsageInBytes,
                     ],
                 ],
                 $this->items
@@ -85,11 +70,11 @@ class ProfilingObjects
                     calling: $item['calling'],
                     callable: $item['callable'],
                     data: new ProfilingDataObject(
-                        numberOfCalls: $data['numberOfCalls']['value'],
-                        waitTimeInUs: $data['waitTimeInUs']['value'],
-                        cpuTime: $data['cpuTime']['value'],
-                        memoryUsageInBytes: $data['memoryUsageInBytes']['value'],
-                        peakMemoryUsageInBytes: $data['peakMemoryUsageInBytes']['value']
+                        numberOfCalls: $data['numberOfCalls'],
+                        waitTimeInUs: $data['waitTimeInUs'],
+                        cpuTime: $data['cpuTime'],
+                        memoryUsageInBytes: $data['memoryUsageInBytes'],
+                        peakMemoryUsageInBytes: $data['peakMemoryUsageInBytes']
                     )
                 )
             );

@@ -105,7 +105,6 @@ readonly class GrpcClient implements ApiClientInterface
                     is_null($item->profiling)
                         ? null
                         : $this->makeProfiling($item->profiling)
-
                 )
                 ->setTags(
                     is_null($item->tags)
