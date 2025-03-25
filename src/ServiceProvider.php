@@ -170,8 +170,8 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
 
         $this->app->singleton(
             TransporterLoader::class,
-            static fn() => new TransporterLoader(
-                path: base_path('strans')
+            static fn(Application $app) => new TransporterLoader(
+                path: $app->make(LocalStorage::class)->makePath('strans')
             )
         );
     }

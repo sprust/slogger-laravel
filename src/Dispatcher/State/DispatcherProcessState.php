@@ -3,6 +3,7 @@
 namespace SLoggerLaravel\Dispatcher\State;
 
 use RuntimeException;
+use SLoggerLaravel\LocalStorage;
 
 readonly class DispatcherProcessState
 {
@@ -75,9 +76,6 @@ readonly class DispatcherProcessState
 
     private function makeFilePath(): string
     {
-        $dir = trim(storage_path(), '/');
-
-        return "/$dir/slogger-dispatcher-state-$this->staticUid.json";
+        return app(LocalStorage::class)->makePath("dispatcher-state-$this->staticUid.json");
     }
-
 }
