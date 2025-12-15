@@ -224,6 +224,8 @@ class HttpClientWatcher extends AbstractWatcher
     ): array {
         $body = $request->getBody();
 
+        $body->rewind();
+
         $parameters = json_decode($body->getContents(), true) ?: [];
 
         $body->rewind();
