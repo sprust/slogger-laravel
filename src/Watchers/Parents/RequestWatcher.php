@@ -28,7 +28,7 @@ use Symfony\Component\HttpFoundation\Response;
 class RequestWatcher extends AbstractWatcher
 {
     /**
-     * @var array<array{trace_id: string, boot_time: float, started_at: Carbon}>
+     * @var array<array{trace_id: string, boot_time: float, started_at: Carbon, logged_at: Carbon}>
      */
     protected array $requests = [];
     /**
@@ -68,6 +68,12 @@ class RequestWatcher extends AbstractWatcher
             ? TraceHelper::roundDuration((microtime(true) - LARAVEL_START))
             : -1;
 
+        if (defined('LARAVEL_START')) {
+            $startedAt = new Carbon(LARAVEL_START);
+        } else {
+            $startedAt = $this->app[Kernel::class]->requestStartedAt();
+        }
+
         $loggedAt = now();
 
         $traceId = $this->processor->startAndGetTraceId(
@@ -88,7 +94,8 @@ class RequestWatcher extends AbstractWatcher
         $this->requests[] = [
             'trace_id'   => $traceId,
             'boot_time'  => $bootTime,
-            'started_at' => $loggedAt,
+            'started_at' => $startedAt,
+            'logged_at'  => $loggedAt,
         ];
     }
 
@@ -113,6 +120,8 @@ class RequestWatcher extends AbstractWatcher
 
         /** @var Carbon $startedAt */
         $startedAt = $requestData['started_at'];
+        /** @var Carbon $loggedAt */
+        $loggedAt = $requestData['logged_at'];
 
         $request  = $event->request;
         $response = $event->response;
@@ -140,7 +149,7 @@ class RequestWatcher extends AbstractWatcher
             tags: $this->getPostTags($request, $response),
             data: $data,
             duration: TraceHelper::calcDuration($startedAt),
-            parentLoggedAt: $startedAt,
+            parentLoggedAt: $loggedAt,
         );
     }
 
