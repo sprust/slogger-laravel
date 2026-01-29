@@ -2,12 +2,9 @@
 
 namespace SLoggerLaravel\Dispatcher\Items\Queue\ApiClients;
 
-use SLoggerLaravel\Objects\TraceObjects;
-use SLoggerLaravel\Objects\TraceUpdateObjects;
+use SLoggerLaravel\Objects\TracesObject;
 
 interface ApiClientInterface
 {
-    public function sendTraces(TraceObjects $traceObjects): void;
-
-    public function updateTraces(TraceUpdateObjects $traceObjects): void;
+    public function sendTraces(TracesObject $traces): void;
 }

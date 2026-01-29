@@ -5,8 +5,7 @@ namespace SLoggerLaravel\Dispatcher\Items\Queue\ApiClients\Http;
 use GuzzleHttp\ClientInterface;
 use GuzzleHttp\Exception\GuzzleException;
 use SLoggerLaravel\Dispatcher\Items\Queue\ApiClients\ApiClientInterface;
-use SLoggerLaravel\Objects\TraceObjects;
-use SLoggerLaravel\Objects\TraceUpdateObjects;
+use SLoggerLaravel\Objects\TracesObject;
 use SLoggerLaravel\Profiling\Dto\ProfilingObjects;
 
 class HttpClient implements ApiClientInterface
@@ -18,30 +17,39 @@ class HttpClient implements ApiClientInterface
     /**
      * @throws GuzzleException
      */
-    public function sendTraces(TraceObjects $traceObjects): void
+    public function sendTraces(TracesObject $traces): void
     {
-        $traces = [];
+        $this->createTraces($traces);
+        $this->updateTraces($traces);
+    }
 
-        foreach ($traceObjects->get() as $traceObject) {
-            $traces[] = [
-                'trace_id'        => $traceObject->traceId,
-                'parent_trace_id' => $traceObject->parentTraceId,
-                'type'            => $traceObject->type,
-                'status'          => $traceObject->status,
-                'tags'            => $traceObject->tags,
-                'data'            => json_encode($traceObject->data),
-                'duration'        => $traceObject->duration,
-                'memory'          => $traceObject->memory,
-                'cpu'             => $traceObject->cpu,
-                'is_parent'       => $traceObject->isParent,
-                'logged_at'       => (float) ($traceObject->loggedAt->unix()
-                    . '.' . $traceObject->loggedAt->microsecond),
+    /**
+     * @throws GuzzleException
+     */
+    protected function createTraces(TracesObject $traces): void
+    {
+        $payload = [];
+
+        foreach ($traces->iterateCreating() as $trace) {
+            $payload[] = [
+                'trace_id'        => $trace->traceId,
+                'parent_trace_id' => $trace->parentTraceId,
+                'type'            => $trace->type,
+                'status'          => $trace->status,
+                'tags'            => $trace->tags,
+                'data'            => json_encode($trace->data),
+                'duration'        => $trace->duration,
+                'memory'          => $trace->memory,
+                'cpu'             => $trace->cpu,
+                'is_parent'       => $trace->isParent,
+                'logged_at'       => (float) ($trace->loggedAt->unix()
+                    . '.' . $trace->loggedAt->microsecond),
             ];
         }
 
         $this->client->request('post', '/traces-api', [
             'json' => [
-                'traces' => $traces,
+                'traces' => $payload,
             ],
         ]);
     }
@@ -49,38 +57,38 @@ class HttpClient implements ApiClientInterface
     /**
      * @throws GuzzleException
      */
-    public function updateTraces(TraceUpdateObjects $traceObjects): void
+    protected function updateTraces(TracesObject $traces): void
     {
-        $traces = [];
+        $payload = [];
 
-        foreach ($traceObjects->get() as $traceObject) {
-            $traces[] = [
-                'trace_id' => $traceObject->traceId,
-                'status'   => $traceObject->status,
-                ...(is_null($traceObject->profiling)
+        foreach ($traces->iterateUpdating() as $trace) {
+            $payload[] = [
+                'trace_id' => $trace->traceId,
+                'status'   => $trace->status,
+                ...(is_null($trace->profiling)
                     ? []
-                    : ['profiling' => $this->prepareProfiling($traceObject->profiling)]),
-                ...(is_null($traceObject->tags)
+                    : ['profiling' => $this->prepareProfiling($trace->profiling)]),
+                ...(is_null($trace->tags)
                     ? []
-                    : ['tags' => $traceObject->tags]),
-                ...(is_null($traceObject->data)
+                    : ['tags' => $trace->tags]),
+                ...(is_null($trace->data)
                     ? []
-                    : ['data' => json_encode($traceObject->data)]),
-                ...(is_null($traceObject->duration)
+                    : ['data' => json_encode($trace->data)]),
+                ...(is_null($trace->duration)
                     ? []
-                    : ['duration' => $traceObject->duration]),
-                ...(is_null($traceObject->memory)
+                    : ['duration' => $trace->duration]),
+                ...(is_null($trace->memory)
                     ? []
-                    : ['memory' => $traceObject->memory]),
-                ...(is_null($traceObject->cpu)
+                    : ['memory' => $trace->memory]),
+                ...(is_null($trace->cpu)
                     ? []
-                    : ['cpu' => $traceObject->cpu]),
+                    : ['cpu' => $trace->cpu]),
             ];
         }
 
         $this->client->request('patch', '/traces-api', [
             'json' => [
-                'traces' => $traces,
+                'traces' => $payload,
             ],
         ]);
     }

@@ -28,7 +28,7 @@ use Symfony\Component\HttpFoundation\Response;
 class RequestWatcher extends AbstractWatcher
 {
     /**
-     * @var array<array{trace_id: string, boot_time: float}>
+     * @var array<array{trace_id: string, boot_time: float, started_at: Carbon}>
      */
     protected array $requests = [];
     /**
@@ -68,6 +68,8 @@ class RequestWatcher extends AbstractWatcher
             ? TraceHelper::roundDuration((microtime(true) - LARAVEL_START))
             : -1;
 
+        $loggedAt = now();
+
         $traceId = $this->processor->startAndGetTraceId(
             type: TraceTypeEnum::Request->value,
             tags: $this->getPreTags($event->request),
@@ -79,12 +81,14 @@ class RequestWatcher extends AbstractWatcher
                     'parameters' => $this->prepareRequestParameters($event->request),
                 ],
             ],
+            loggedAt: $loggedAt,
             customParentTraceId: $parentTraceId
         );
 
         $this->requests[] = [
-            'trace_id'  => $traceId,
-            'boot_time' => $bootTime,
+            'trace_id'   => $traceId,
+            'boot_time'  => $bootTime,
+            'started_at' => $loggedAt,
         ];
     }
 
@@ -107,6 +111,8 @@ class RequestWatcher extends AbstractWatcher
 
         $traceId = $requestData['trace_id'];
 
+        /** @var Carbon $startedAt */
+        $startedAt = $requestData['started_at'];
 
         $request  = $event->request;
         $response = $event->response;
@@ -126,12 +132,6 @@ class RequestWatcher extends AbstractWatcher
             ...$this->getAdditionalData(),
         ];
 
-        if (defined('LARAVEL_START')) {
-            $startedAt = new Carbon(LARAVEL_START);
-        } else {
-            $startedAt = $this->app[Kernel::class]->requestStartedAt();
-        }
-
         $this->processor->stop(
             traceId: $traceId,
             status: $response->isSuccessful()
@@ -139,7 +139,8 @@ class RequestWatcher extends AbstractWatcher
                 : TraceStatusEnum::Failed->value,
             tags: $this->getPostTags($request, $response),
             data: $data,
-            duration: TraceHelper::calcDuration($startedAt)
+            duration: TraceHelper::calcDuration($startedAt),
+            parentLoggedAt: $startedAt,
         );
     }
 
@@ -152,10 +153,12 @@ class RequestWatcher extends AbstractWatcher
 
         $route = $request->route();
 
+        /** @phpstan-ignore-next-line instanceof.alwaysTrue */
         if ($route instanceof Route) {
             $action      = $route->getActionName();
             $middlewares = $route->gatherMiddleware();
         } else {
+            /** @phpstan-ignore-next-line function.alreadyNarrowedType */
             $action      = is_string($route) ? $route : null;
             $middlewares = null;
         }
@@ -188,16 +191,19 @@ class RequestWatcher extends AbstractWatcher
     {
         $route = $request->route();
 
+        /** @phpstan-ignore-next-line booleanNot.alwaysFalse */
         if (!$route) {
             return [];
         }
 
+        /** @phpstan-ignore-next-line function.impossibleType */
         if (is_string($route)) {
             return [
                 $route,
             ];
         }
 
+        /** @phpstan-ignore-next-line instanceof.alwaysTrue */
         if (!$route instanceof Route) {
             return [];
         }

@@ -50,17 +50,21 @@ class CommandWatcher extends AbstractWatcher
             'options'   => $event->input->getOptions(),
         ];
 
+        $loggedAt = now();
+
         $traceId = $this->processor->startAndGetTraceId(
             type: TraceTypeEnum::Command->value,
             tags: [
                 $this->makeCommandView($event->command, $event->input),
             ],
-            data: $data
+            data: $data,
+            loggedAt: $loggedAt,
+            customParentTraceId: null,
         );
 
         $this->commands[] = [
             'trace_id'   => $traceId,
-            'started_at' => now(),
+            'started_at' => $loggedAt,
         ];
     }
 
@@ -94,8 +98,10 @@ class CommandWatcher extends AbstractWatcher
             status: $event->exitCode
                 ? TraceStatusEnum::Failed->value
                 : TraceStatusEnum::Success->value,
+            tags: null,
             data: $data,
-            duration: TraceHelper::calcDuration($startedAt)
+            duration: TraceHelper::calcDuration($startedAt),
+            parentLoggedAt: $startedAt,
         );
     }
 

@@ -69,17 +69,21 @@ class JobWatcher extends AbstractWatcher
 
         $parentTraceId = $payload['slogger_parent_trace_id'] ?? null;
 
+        $loggedAt = now();
+
         $traceId = $this->processor->startAndGetTraceId(
             type: TraceTypeEnum::Job->value,
             tags: [
                 $jobClass,
             ],
+            data: [],
+            loggedAt: $loggedAt,
             customParentTraceId: $parentTraceId,
         );
 
         $this->jobs[$uuid] = [
             'trace_id'   => $traceId,
-            'started_at' => now(),
+            'started_at' => $loggedAt,
         ];
     }
 
@@ -118,8 +122,10 @@ class JobWatcher extends AbstractWatcher
         $this->processor->stop(
             traceId: $traceId,
             status: TraceStatusEnum::Success->value,
+            tags: null,
             data: $data,
-            duration: TraceHelper::calcDuration($startedAt)
+            duration: TraceHelper::calcDuration($startedAt),
+            parentLoggedAt: $startedAt,
         );
 
         unset($this->jobs[$uuid]);
@@ -161,8 +167,10 @@ class JobWatcher extends AbstractWatcher
         $this->processor->stop(
             traceId: $traceId,
             status: TraceStatusEnum::Failed->value,
+            tags: null,
             data: $data,
-            duration: TraceHelper::calcDuration($startedAt)
+            duration: TraceHelper::calcDuration($startedAt),
+            parentLoggedAt: $startedAt,
         );
 
         unset($this->jobs[$uuid]);
@@ -203,8 +211,10 @@ class JobWatcher extends AbstractWatcher
         $this->processor->stop(
             traceId: $traceId,
             status: TraceStatusEnum::Failed->value,
+            tags: null,
             data: $data,
-            duration: TraceHelper::calcDuration($startedAt)
+            duration: TraceHelper::calcDuration($startedAt),
+            parentLoggedAt: $startedAt,
         );
 
         unset($this->jobs[$uuid]);

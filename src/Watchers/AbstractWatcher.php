@@ -33,7 +33,7 @@ abstract class AbstractWatcher
     }
 
     /**
-     * @param array<Closure|string|array<string|int, mixed>|null> $listener
+     * @param array<mixed> $listener
      */
     protected function listenEvent(string $eventClass, array $listener): void
     {

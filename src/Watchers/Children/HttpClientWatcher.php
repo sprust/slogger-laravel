@@ -53,14 +53,19 @@ class HttpClientWatcher extends AbstractWatcher
             return $request;
         }
 
+        $loggedAt = now();
+
         $traceId = $this->processor->startAndGetTraceId(
             type: 'http-client',
-            data: $this->getCommonRequestData($request)
+            tags: [],
+            data: $this->getCommonRequestData($request),
+            loggedAt: $loggedAt,
+            customParentTraceId: null,
         );
 
         $this->requests[$traceId] = [
             'trace_id'   => $traceId,
-            'started_at' => now(),
+            'started_at' => $loggedAt,
         ];
 
         $request = $request->withHeader($this->headerTraceIdKey, $traceId);
@@ -137,7 +142,8 @@ class HttpClientWatcher extends AbstractWatcher
                     'body'        => $this->prepareResponseBody($request, $response, $formatters),
                 ],
             ],
-            duration: TraceHelper::calcDuration($startedAt)
+            duration: TraceHelper::calcDuration($startedAt),
+            parentLoggedAt: $startedAt,
         );
     }
 
@@ -187,7 +193,8 @@ class HttpClientWatcher extends AbstractWatcher
                 ],
                 'exception' => DataFormatter::exception($exception),
             ],
-            duration: TraceHelper::calcDuration($startedAt)
+            duration: TraceHelper::calcDuration($startedAt),
+            parentLoggedAt: $startedAt,
         );
     }
 

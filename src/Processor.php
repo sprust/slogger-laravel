@@ -12,7 +12,7 @@ use SLoggerLaravel\Helpers\DataFormatter;
 use SLoggerLaravel\Helpers\MetricsHelper;
 use SLoggerLaravel\Helpers\TraceDataComplementer;
 use SLoggerLaravel\Helpers\TraceHelper;
-use SLoggerLaravel\Objects\TraceObject;
+use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
 use SLoggerLaravel\Profiling\AbstractProfiling;
 use SLoggerLaravel\Traces\TraceIdContainer;
@@ -81,10 +81,10 @@ class Processor
     public function handleSeparateTracing(
         Closure $callback,
         string $type,
-        array $tags = [],
-        array $data = [],
-        ?Carbon $loggedAt = null,
-        ?string $customParentTraceId = null,
+        array $tags,
+        array $data,
+        ?string $customParentTraceId,
+        Carbon $loggedAt,
     ): mixed {
         $this->profiler->start();
 
@@ -117,8 +117,10 @@ class Processor
             status: $exception
                 ? TraceStatusEnum::Failed->value
                 : TraceStatusEnum::Success->value,
+            tags: null,
             data: $dataChanged ? $data : null,
-            duration: TraceHelper::calcDuration($startedAt)
+            duration: TraceHelper::calcDuration($startedAt),
+            parentLoggedAt: $loggedAt,
         );
 
         if ($exception) {
@@ -134,10 +136,10 @@ class Processor
      */
     public function startAndGetTraceId(
         string $type,
-        array $tags = [],
-        array $data = [],
-        ?Carbon $loggedAt = null,
-        ?string $customParentTraceId = null
+        array $tags,
+        array $data,
+        Carbon $loggedAt,
+        ?string $customParentTraceId
     ): string {
         $this->profiler->start();
 
@@ -148,7 +150,7 @@ class Processor
         $this->traceDataComplementer->inject($data);
 
         $this->dispatchPushTrace(
-            new TraceObject(
+            new TraceCreateObject(
                 traceId: $traceId,
                 parentTraceId: $customParentTraceId ?? $parentTraceId,
                 type: $type,
@@ -159,7 +161,7 @@ class Processor
                 memory: MetricsHelper::getMemoryUsagePercent(),
                 cpu: MetricsHelper::getCpuAvgPercent(),
                 isParent: true,
-                loggedAt: ($loggedAt ?: now())->clone()->setTimezone('UTC')
+                loggedAt: $loggedAt->clone()->setTimezone('UTC')
             )
         );
 
@@ -202,7 +204,7 @@ class Processor
         $this->traceDataComplementer->inject($data);
 
         $this->dispatchPushTrace(
-            new TraceObject(
+            new TraceCreateObject(
                 traceId: $traceId,
                 parentTraceId: $parentTraceId,
                 type: $type,
@@ -225,9 +227,10 @@ class Processor
     public function stop(
         string $traceId,
         string $status,
-        ?array $tags = null,
-        ?array $data = null,
-        ?float $duration = null,
+        ?array $tags,
+        ?array $data,
+        ?float $duration,
+        Carbon $parentLoggedAt,
     ): void {
         if (!$this->isActive()) {
             throw new LogicException('Tracing process isn\'t active.');
@@ -266,12 +269,13 @@ class Processor
                 data: $data,
                 duration: $duration,
                 memory: MetricsHelper::getMemoryUsagePercent(),
-                cpu: MetricsHelper::getCpuAvgPercent()
+                cpu: MetricsHelper::getCpuAvgPercent(),
+                parentLoggedAt: $parentLoggedAt,
             )
         );
     }
 
-    private function dispatchPushTrace(TraceObject $trace): void
+    private function dispatchPushTrace(TraceCreateObject $trace): void
     {
         $this->traceDispatcher->create($trace);
     }
