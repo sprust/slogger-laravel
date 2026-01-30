@@ -12,6 +12,4 @@ interface TraceDispatcherInterface
     public function create(TraceCreateObject $parameters): void;
 
     public function update(TraceUpdateObject $parameters): void;
-
-    public function terminate(): void;
 }

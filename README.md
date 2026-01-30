@@ -18,7 +18,7 @@ SLOGGER_ENABLED=false
 SLOGGER_TOKEN=
 
 ## slogger.dispatcher
-# one of: queue,file
+# one of: queue, file
 SLOGGER_DISPATCHER=queue
 
 ## slogger.dispatcher.queue

@@ -85,12 +85,6 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
                 'slogger-laravel',
             ]
         );
-
-        $this->app->terminating(
-            static function (TraceDispatcherInterface $dispatcher) {
-                $dispatcher->terminate();
-            }
-        );
     }
 
     private function registerListeners(): void

@@ -52,15 +52,6 @@ class TraceQueueDispatcher implements TraceDispatcherInterface
     {
         $this->traces->addUpdating($parameters);
 
-        $this->dispatchAndClear($this->maxBatchSize);
-    }
-
-    public function terminate(): void
-    {
-        if ($this->traces->count() === 0) {
-            return;
-        }
-
         $this->dispatchAndClear(maxBatchSize: 0);
     }
 

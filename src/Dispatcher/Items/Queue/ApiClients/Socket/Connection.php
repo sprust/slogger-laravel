@@ -11,7 +11,6 @@ use SConcur\Exceptions\ResponseIsNotJsonException;
 use SConcur\Exceptions\UnexpectedResponseFormatException;
 use Throwable;
 
-// TODO: reconnect
 class Connection
 {
     /**
