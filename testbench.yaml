@@ -1,0 +1,5 @@
+workbench:
+  discovers:
+    config: true
+#env:
+#  - SPARALLEL_MODE=server

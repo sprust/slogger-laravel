@@ -19,6 +19,11 @@
             "SLoggerLaravel\\": "src/"
         }
     },
+    "autoload-dev": {
+      "psr-4": {
+        "SLoggerLaravel\\Tests\\": "tests/"
+      }
+    },
     "extra": {
         "laravel": {
             "providers": [
@@ -27,5 +32,10 @@
         }
     },
     "minimum-stability": "stable",
-    "prefer-stable": true
+    "prefer-stable": true,
+    "require-dev": {
+        "orchestra/testbench": "^10.9",
+        "phpstan/phpstan": "^2.1",
+        "phpunit/phpunit": "^11.5"
+    }
 }

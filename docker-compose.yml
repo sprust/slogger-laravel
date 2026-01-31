@@ -1,0 +1,13 @@
+services:
+  php:
+    container_name: sll-php
+    restart: on-failure
+    build:
+      context: ./docker/php
+      args:
+        - GROUP_ID=${DOCKER_GROUP_ID}
+        - USER_ID=${DOCKER_USER_ID}
+    working_dir: /app
+    volumes:
+      - ./:/app
+    command: [ "php", "/app/docker/php/docker-php-stub.php" ]
