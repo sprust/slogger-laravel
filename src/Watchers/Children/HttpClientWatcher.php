@@ -17,7 +17,7 @@ use Throwable;
 
 class HttpClientWatcher extends AbstractWatcher
 {
-    protected ?string $headerTraceIdKey;
+    protected string $headerTraceIdKey;
     protected ?string $headerParentTraceIdKey;
 
     /**
@@ -71,10 +71,12 @@ class HttpClientWatcher extends AbstractWatcher
         $request = $request->withHeader($this->headerTraceIdKey, $traceId);
 
         if ($this->headerParentTraceIdKey) {
-            $request = $request->withHeader(
-                $this->headerParentTraceIdKey,
-                $this->traceIdContainer->getParentTraceId()
-            );
+            if ($parentTraceId = $this->traceIdContainer->getParentTraceId()) {
+                $request = $request->withHeader(
+                    $this->headerParentTraceIdKey,
+                    $parentTraceId
+                );
+            }
         }
 
         return $request;

@@ -2,8 +2,10 @@
 
 namespace SLoggerLaravel;
 
+use Illuminate\Config\Repository;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Events\Dispatcher;
 use SLoggerLaravel\Configs\DispatcherConfig;
 use SLoggerLaravel\Configs\DispatcherQueueConfig;
 use SLoggerLaravel\Configs\GeneralConfig;
@@ -74,7 +76,6 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         );
 
         $this->registerListeners();
-
         $this->registerWatchers();
 
         $this->publishes(
@@ -87,11 +88,16 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         );
     }
 
+    /**
+     * @throws BindingResolutionException
+     */
     private function registerListeners(): void
     {
-        $events = $this->app['events'];
+        $events = $this->app->make(Dispatcher::class);
 
-        foreach ($this->app['config']['slogger.listeners'] ?? [] as $eventClass => $listenerClasses) {
+        $listeners = $this->app->make(Repository::class)['slogger.listeners'] ?? [];
+
+        foreach ($listeners as $eventClass => $listenerClasses) {
             foreach ($listenerClasses as $listenerClass) {
                 $events->listen($eventClass, $listenerClass);
             }
@@ -106,7 +112,7 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         $state = $this->app->make(State::class);
 
         /** @var array{enabled: bool, class: class-string<AbstractWatcher>}[] $watcherConfigs */
-        $watcherConfigs = $this->app['config']['slogger.watchers'] ?? [];
+        $watcherConfigs = $this->app->make(Repository::class)['slogger.watchers'] ?? [];
 
         foreach ($watcherConfigs as $watcherConfig) {
             if (!$watcherConfig['enabled']) {

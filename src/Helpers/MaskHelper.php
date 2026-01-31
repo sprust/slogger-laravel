@@ -64,13 +64,15 @@ class MaskHelper
         if (!is_string($value) && !is_numeric($value) && !is_bool($value)) {
             $value = '********';
         } else {
+            $value = (string) $value;
+
             if (strlen($value) === 1) {
                 $value = '*';
             } else {
                 $batchLength = (int) ceil(Str::length($value) / 3);
 
                 $value = Str::mask(
-                    string: (string) $value,
+                    string: $value,
                     character: '*',
                     index: $batchLength,
                     length: $batchLength

@@ -81,6 +81,12 @@ class ScheduleWatcher extends AbstractWatcher
             return '';
         }
 
-        return trim(file_get_contents($event->output));
+        $contents = file_get_contents($event->output);
+
+        if ($contents === false) {
+            return '';
+        }
+
+        return trim($contents);
     }
 }

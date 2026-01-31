@@ -30,6 +30,10 @@ class ProcessHelper
             return false;
         }
 
+        if (!$cmd) {
+            return false;
+        }
+
         $processName = trim($cmd, "\0");
 
         return str_contains($processName, $commandName);

@@ -31,6 +31,9 @@ class SendTracesJob implements ShouldQueue
             ->onQueue($config->getName());
     }
 
+    /**
+     * @throws Throwable
+     */
     public function handle(
         Processor $processor,
         ApiClientInterface $apiClient,
@@ -41,6 +44,10 @@ class SendTracesJob implements ShouldQueue
                 fn() => $apiClient->sendTraces($this->traces)
             );
         } catch (Throwable $exception) {
+            if (!$this->job) {
+                throw $exception;
+            }
+
             if ($this->job->attempts() < $this->tries) {
                 $this->job->release($this->backoff);
             } else {

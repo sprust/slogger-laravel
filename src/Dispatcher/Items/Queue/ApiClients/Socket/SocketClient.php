@@ -18,6 +18,9 @@ class SocketClient implements ApiClientInterface
     ) {
     }
 
+    /**
+     * @throws \JsonException
+     */
     public function sendTraces(TracesObject $traces): void
     {
         $this->connectIfNeed();
@@ -67,7 +70,7 @@ class SocketClient implements ApiClientInterface
             return;
         }
 
-        $payloadJson = json_encode($payload);
+        $payloadJson = json_encode($payload, JSON_THROW_ON_ERROR);
 
         try {
             $this->connection->write($payloadJson);

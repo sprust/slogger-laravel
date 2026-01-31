@@ -6,7 +6,10 @@ use Closure;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Events\Dispatcher;
 use Illuminate\Support\Str;
+use Psr\Container\ContainerExceptionInterface;
+use Psr\Container\NotFoundExceptionInterface;
 use ReflectionFunction;
 use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\Enums\TraceStatusEnum;
@@ -94,6 +97,9 @@ class EventWatcher extends AbstractWatcher
      * @param array<string, mixed> $payload
      *
      * @return array<string, mixed>
+     *
+     * @throws NotFoundExceptionInterface
+     * @throws ContainerExceptionInterface
      */
     protected function prepareData(string $eventName, array $payload): array
     {
@@ -130,7 +136,13 @@ class EventWatcher extends AbstractWatcher
         $event = $payload[$payloadKeys[0]] ?? null;
 
         if (is_object($event) && in_array(get_class($event), $this->serializeEvents)) {
-            return json_decode(json_encode($event), true) ?: [];
+            $encodedEvent = json_encode($event);
+
+            if ($encodedEvent === false) {
+                return [];
+            }
+
+            return json_decode($encodedEvent, true) ?: [];
         }
 
         return [];
@@ -138,39 +150,56 @@ class EventWatcher extends AbstractWatcher
 
     /**
      * @return array<array{name: string, queued: bool}>
+     *
+     * @throws NotFoundExceptionInterface
+     * @throws ContainerExceptionInterface
      */
     protected function formatListeners(string $eventName): array
     {
         /** @var array<Closure|string|object> $listeners */
-        $listeners = $this->app['events']->getListeners($eventName);
+        $listeners = $this->app->get(Dispatcher::class)->getListeners($eventName);
 
         return collect($listeners)
-            ->map(function ($listener) {
-                $listener = (new ReflectionFunction($listener))
-                    ->getStaticVariables()['listener'];
+            ->map(
+                static function ($listener) {
+                    if (is_object($listener)) {
+                        return get_class($listener);
+                    }
 
-                if (is_string($listener)) {
-                    return Str::contains($listener, '@') ? $listener : $listener . '@handle';
-                } elseif (is_array($listener) && is_string($listener[0])) {
-                    return $listener[0] . '@' . $listener[1];
-                } elseif (is_array($listener) && is_object($listener[0])) {
-                    return get_class($listener[0]) . '@' . $listener[1];
-                } elseif (is_object($listener) && is_callable($listener) && !$listener instanceof Closure) {
-                    return get_class($listener) . '@__invoke';
+                    $listener = (new ReflectionFunction($listener))
+                        ->getStaticVariables()['listener'];
+
+                    if (is_string($listener)) {
+                        return Str::contains($listener, '@') ? $listener : $listener . '@handle';
+                    } elseif (is_array($listener) && is_string($listener[0])) {
+                        return $listener[0] . '@' . $listener[1];
+                    } elseif (is_array($listener) && is_object($listener[0])) {
+                        return get_class($listener[0]) . '@' . $listener[1];
+                    } elseif (is_object($listener) && is_callable($listener) && !$listener instanceof Closure) {
+                        return get_class($listener) . '@__invoke';
+                    }
+
+                    return 'unknown';
                 }
+            )
+            ->map(
+                static function ($listener) {
+                    $queued = false;
 
-                return 'closure';
-            })
-            ->map(function ($listener) {
-                if (Str::contains($listener, '@')) {
-                    $queued = in_array(ShouldQueue::class, class_implements(Str::beforeLast($listener, '@')));
+                    if (Str::contains($listener, '@')) {
+                        $classImplements = class_implements(Str::beforeLast($listener, '@'));
+
+                        if ($classImplements !== false) {
+                            $queued = in_array(ShouldQueue::class, $classImplements);
+                        }
+                    }
+
+                    return [
+                        'name'   => $listener,
+                        'queued' => $queued,
+                    ];
                 }
-
-                return [
-                    'name'   => $listener,
-                    'queued' => $queued ?? false,
-                ];
-            })
+            )
             ->values()
             ->toArray();
     }

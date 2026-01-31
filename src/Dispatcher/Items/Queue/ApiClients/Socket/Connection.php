@@ -4,11 +4,10 @@ declare(strict_types=1);
 
 namespace SLoggerLaravel\Dispatcher\Items\Queue\ApiClients\Socket;
 
+use JsonException;
 use LogicException;
 use Psr\Log\LoggerInterface;
 use RuntimeException;
-use SConcur\Exceptions\ResponseIsNotJsonException;
-use SConcur\Exceptions\UnexpectedResponseFormatException;
 use Throwable;
 
 class Connection
@@ -33,14 +32,16 @@ class Connection
     }
 
     /**
-     * @throws UnexpectedResponseFormatException
-     * @throws ResponseIsNotJsonException
+     * @throws JsonException
      */
     public function connect(string $apiToken): void
     {
-        $payload = json_encode([
-            't' => $apiToken,
-        ]);
+        $payload = json_encode(
+            [
+                't' => $apiToken,
+            ],
+            JSON_THROW_ON_ERROR
+        );
 
         $this->disconnect();
 
@@ -124,12 +125,15 @@ class Connection
 
         $timeout = null;
 
+        /** @var resource $socket */
+        $socket = $this->socket;
+
         while ($sentBytes < $bufferLength) {
             $chunk = substr($buffer, $sentBytes, $bufferSize);
 
             try {
                 $bytes = fwrite(
-                    stream: $this->socket,
+                    stream: $socket,
                     data: $chunk,
                 );
             } catch (Throwable $exception) {
@@ -165,6 +169,7 @@ class Connection
     {
         $this->checkConnection();
 
+        /** @var resource $socket */
         $socket = $this->socket;
 
         $lengthHeader = '';
@@ -205,14 +210,19 @@ class Connection
         }
 
         $response   = ""; // TODO: what!?
-        $dataLength = unpack('N', $lengthHeader)[1];
+        $dataLength = (int) (unpack('N', $lengthHeader)[1] ?? 0);
         $bufferSize = $this->socketBufferSize;
+
+        if ($dataLength === 0) {
+            throw new RuntimeException('Empty response');
+        }
 
         $timeout = null;
 
         while (strlen($response) < $dataLength) {
             $chunk = fread(
                 stream: $socket,
+                /** @phpstan-ignore-next-line argument.type */
                 length: min($bufferSize, $dataLength - strlen($response))
             );
 

@@ -191,7 +191,9 @@ class Dispatcher
                 continue;
             }
 
-            $this->processHelper->sendStopSignal($process->getPid());
+            $this->processHelper->sendStopSignal(
+                $process->getPid() ?? throw new RuntimeException('Process has no PID')
+            );
         }
 
         $startTimeOfWaitFinishingProcesses = time();

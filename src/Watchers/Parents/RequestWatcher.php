@@ -2,14 +2,16 @@
 
 namespace SLoggerLaravel\Watchers\Parents;
 
-use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Foundation\Http\Events\RequestHandled;
+use Illuminate\Foundation\Http\Kernel;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response as IlluminateResponse;
 use Illuminate\Routing\Route;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Illuminate\View\View;
+use Psr\Container\ContainerExceptionInterface;
+use Psr\Container\NotFoundExceptionInterface;
 use SLoggerLaravel\DataResolver;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
@@ -56,6 +58,10 @@ class RequestWatcher extends AbstractWatcher
         $this->safeHandleWatching(fn() => $this->onHandleRequestHandling($event));
     }
 
+    /**
+     * @throws ContainerExceptionInterface
+     * @throws NotFoundExceptionInterface
+     */
     protected function onHandleRequestHandling(RequestHandling $event): void
     {
         if ($this->isRequestByPatterns($event->request, $this->exceptedPaths)) {
@@ -71,8 +77,10 @@ class RequestWatcher extends AbstractWatcher
         if (defined('LARAVEL_START')) {
             $startedAt = new Carbon(LARAVEL_START);
         } else {
-            $startedAt = $this->app[Kernel::class]->requestStartedAt();
+            $startedAt = $this->app->get(Kernel::class)->requestStartedAt();
         }
+
+        $startedAt = $startedAt ?? now('UTC');
 
         $loggedAt = now();
 
@@ -304,8 +312,14 @@ class RequestWatcher extends AbstractWatcher
         if ($request->acceptsJson()) {
             $url = $this->getRequestPath($request);
 
+            $content = $response->getContent();
+
+            if ($content === false) {
+                return [];
+            }
+
             $dataResolver = new DataResolver(
-                fn() => json_decode($response->getContent(), true) ?: []
+                fn() => json_decode($content, true) ?: []
             );
 
             foreach ($this->formatters->getItems() as $formatter) {

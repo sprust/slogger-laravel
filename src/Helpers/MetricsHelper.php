@@ -49,7 +49,7 @@ class MetricsHelper
                 }
             }
 
-            self::$memoryLimitInMb = $memoryLimit;
+            self::$memoryLimitInMb = (int) $memoryLimit;
         }
 
         return self::$memoryLimitInMb;

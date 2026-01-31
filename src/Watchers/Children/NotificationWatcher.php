@@ -61,6 +61,10 @@ class NotificationWatcher extends AbstractWatcher
             return 'Anonymous:' . implode(',', $routes);
         }
 
+        if (!is_object($notifiable)) {
+            return (string) $notifiable;
+        }
+
         return get_class($notifiable);
     }
 }

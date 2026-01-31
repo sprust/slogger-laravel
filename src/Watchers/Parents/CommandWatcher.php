@@ -107,6 +107,12 @@ class CommandWatcher extends AbstractWatcher
 
     protected function makeCommandView(?string $command, InputInterface $input): string
     {
-        return $command ?? $input->getArguments()['command'] ?? 'default';
+        $command = $command ?? $input->getArguments()['command'] ?? 'default';
+
+        if (!is_string($command)) {
+            return 'default';
+        }
+
+        return $command;
     }
 }
