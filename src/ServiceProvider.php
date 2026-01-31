@@ -13,6 +13,8 @@ use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\Dispatcher\ApiClients\ApiClientFactory;
 use SLoggerLaravel\Dispatcher\ApiClients\ApiClientInterface;
 use SLoggerLaravel\Dispatcher\Items\DispatcherFactory;
+use SLoggerLaravel\Dispatcher\Items\Memory\MemoryDispatcher;
+use SLoggerLaravel\Dispatcher\Items\Queue\QueueDispatcher;
 use SLoggerLaravel\Dispatcher\Items\TraceDispatcherInterface;
 use SLoggerLaravel\Dispatcher\StartDispatcherCommand;
 use SLoggerLaravel\Dispatcher\StopDispatcherCommand;
@@ -65,6 +67,9 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
                 );
             }
         );
+
+        $this->app->singleton(QueueDispatcher::class);
+        $this->app->singleton(MemoryDispatcher::class);
 
         $this->app->singleton(
             TraceDispatcherInterface::class,

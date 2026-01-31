@@ -9,7 +9,9 @@
             <directory>tests/Feature</directory>
         </testsuite>
     </testsuites>
-<!--    <php>-->
-<!--        <env name="SPARALLEL_SERVER_HOST" value="spl-server"/>-->
-<!--    </php>-->
+    <php>
+        <env name="QUEUE_CONNECTION" value="sync"/>
+        <env name="SLOGGER_ENABLED" value="true"/>
+        <env name="SLOGGER_DISPATCHER" value="memory"/>
+    </php>
 </phpunit>
