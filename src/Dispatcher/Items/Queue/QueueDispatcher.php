@@ -11,7 +11,7 @@ use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TracesObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
 
-class TraceQueueDispatcher implements TraceDispatcherInterface
+class QueueDispatcher implements TraceDispatcherInterface
 {
     private TracesObject $traces;
 

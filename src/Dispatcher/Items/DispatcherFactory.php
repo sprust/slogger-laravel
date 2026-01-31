@@ -5,7 +5,8 @@ namespace SLoggerLaravel\Dispatcher\Items;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Contracts\Foundation\Application;
 use RuntimeException;
-use SLoggerLaravel\Dispatcher\Items\Queue\TraceQueueDispatcher;
+use SLoggerLaravel\Dispatcher\Items\Memory\MemoryDispatcher;
+use SLoggerLaravel\Dispatcher\Items\Queue\QueueDispatcher;
 
 readonly class DispatcherFactory
 {
@@ -19,7 +20,8 @@ readonly class DispatcherFactory
     public function create(string $dispatcher): TraceDispatcherInterface
     {
         return match ($dispatcher) {
-            'queue' => $this->app->make(TraceQueueDispatcher::class),
+            'queue' => $this->app->make(QueueDispatcher::class),
+            'memory' => $this->app->make(MemoryDispatcher::class),
             default => throw new RuntimeException("Unknown dispatcher: $dispatcher"),
         };
     }
