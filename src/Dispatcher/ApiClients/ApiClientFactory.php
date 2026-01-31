@@ -1,16 +1,15 @@
 <?php
 
-namespace SLoggerLaravel\Dispatcher\Items\Queue\ApiClients;
+namespace SLoggerLaravel\Dispatcher\ApiClients;
 
-use Exception;
 use GuzzleHttp\Client;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
 use SLoggerLaravel\Configs\DispatcherQueueConfig;
 use SLoggerLaravel\Configs\GeneralConfig;
-use SLoggerLaravel\Dispatcher\Items\Queue\ApiClients\Http\HttpClient;
-use SLoggerLaravel\Dispatcher\Items\Queue\ApiClients\Socket\Connection;
-use SLoggerLaravel\Dispatcher\Items\Queue\ApiClients\Socket\SocketClient;
+use SLoggerLaravel\Dispatcher\ApiClients\Http\HttpClient;
+use SLoggerLaravel\Dispatcher\ApiClients\Socket\Connection;
+use SLoggerLaravel\Dispatcher\ApiClients\Socket\SocketClient;
 
 readonly class ApiClientFactory
 {

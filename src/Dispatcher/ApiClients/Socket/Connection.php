@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace SLoggerLaravel\Dispatcher\Items\Queue\ApiClients\Socket;
+namespace SLoggerLaravel\Dispatcher\ApiClients\Socket;
 
 use JsonException;
 use LogicException;

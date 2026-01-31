@@ -9,7 +9,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Support\Facades\Log;
 use SLoggerLaravel\Configs\DispatcherQueueConfig;
 use SLoggerLaravel\Configs\GeneralConfig;
-use SLoggerLaravel\Dispatcher\Items\Queue\ApiClients\ApiClientInterface;
+use SLoggerLaravel\Dispatcher\ApiClients\ApiClientInterface;
 use SLoggerLaravel\Objects\TracesObject;
 use SLoggerLaravel\Processor;
 use Throwable;

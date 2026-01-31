@@ -1,10 +1,10 @@
 <?php
 
-namespace SLoggerLaravel\Dispatcher\Items\Queue\ApiClients\Http;
+namespace SLoggerLaravel\Dispatcher\ApiClients\Http;
 
 use GuzzleHttp\ClientInterface;
 use GuzzleHttp\Exception\GuzzleException;
-use SLoggerLaravel\Dispatcher\Items\Queue\ApiClients\ApiClientInterface;
+use SLoggerLaravel\Dispatcher\ApiClients\ApiClientInterface;
 use SLoggerLaravel\Objects\TracesObject;
 use SLoggerLaravel\Profiling\Dto\ProfilingObjects;
 

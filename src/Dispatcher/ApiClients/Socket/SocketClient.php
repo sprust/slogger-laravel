@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace SLoggerLaravel\Dispatcher\Items\Queue\ApiClients\Socket;
+namespace SLoggerLaravel\Dispatcher\ApiClients\Socket;
 
 use Illuminate\Support\Carbon;
 use RuntimeException;
-use SLoggerLaravel\Dispatcher\Items\Queue\ApiClients\ApiClientInterface;
+use SLoggerLaravel\Dispatcher\ApiClients\ApiClientInterface;
 use SLoggerLaravel\Objects\TracesObject;
 use Throwable;
 
