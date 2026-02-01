@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace Feature\Watchers\Parents\Job;
 
+use RuntimeException;
 use SLoggerLaravel\Tests\Feature\BaseTestCase;
 use SLoggerLaravel\Watchers\Parents\JobWatcher;
+use Throwable;
 
 class JobWatcherTest extends BaseTestCase
 {
@@ -16,18 +18,27 @@ class JobWatcherTest extends BaseTestCase
         $this->registerWatcher(JobWatcher::class);
     }
 
-    public function test(): void
+    public function testSuccess(): void
     {
         dispatch(static fn() => null);
 
-        self::assertCount(
-            1,
-            $this->dispatcher->getCreatingTraces()
-        );
+        $this->assertParentTraces(isSuccess: true);
+    }
 
-        self::assertCount(
-            1,
-            $this->dispatcher->getUpdatingTraces()
-        );
+    public function testException(): void
+    {
+        $message = uniqid();
+
+        $exception = null;
+
+        try {
+            dispatch(static fn() => throw new RuntimeException($message));
+        } catch (Throwable $exception) {
+            //
+        }
+
+        self::assertNotNull($exception);
+
+        $this->assertParentTraces(isSuccess: false);
     }
 }

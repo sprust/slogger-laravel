@@ -11,11 +11,11 @@ use SLoggerLaravel\Objects\TraceUpdateObject;
 class MemoryDispatcher implements TraceDispatcherInterface
 {
     /**
-     * @var array<string, TraceCreateObject>
+     * @var list<TraceCreateObject>
      */
     private array $creatingTraces = [];
     /**
-     * @var array<string, TraceUpdateObject>
+     * @var list<TraceUpdateObject>
      */
     private array $updatingTraces = [];
 
@@ -26,16 +26,16 @@ class MemoryDispatcher implements TraceDispatcherInterface
 
     public function create(TraceCreateObject $parameters): void
     {
-        $this->creatingTraces[$parameters->traceId] = $parameters;
+        $this->creatingTraces[] = $parameters;
     }
 
     public function update(TraceUpdateObject $parameters): void
     {
-        $this->updatingTraces[$parameters->traceId] = $parameters;
+        $this->updatingTraces[] = $parameters;
     }
 
     /**
-     * @return array<string, TraceCreateObject>
+     * @return list<TraceCreateObject>
      */
     public function getCreatingTraces(): array
     {
@@ -43,10 +43,16 @@ class MemoryDispatcher implements TraceDispatcherInterface
     }
 
     /**
-     * @return array<string, TraceUpdateObject>
+     * @return list<TraceUpdateObject>
      */
     public function getUpdatingTraces(): array
     {
         return $this->updatingTraces;
+    }
+
+    public function flush(): void
+    {
+        $this->creatingTraces = [];
+        $this->updatingTraces = [];
     }
 }
