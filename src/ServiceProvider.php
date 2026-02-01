@@ -23,7 +23,7 @@ use SLoggerLaravel\Middleware\HttpMiddleware;
 use SLoggerLaravel\Profiling\AbstractProfiling;
 use SLoggerLaravel\Profiling\XHProfProfiler;
 use SLoggerLaravel\Traces\TraceIdContainer;
-use SLoggerLaravel\Watchers\AbstractWatcher;
+use SLoggerLaravel\Watchers\WatcherInterface;
 
 class ServiceProvider extends \Illuminate\Support\ServiceProvider
 {
@@ -114,9 +114,9 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
      */
     private function registerWatchers(): void
     {
-        $state = $this->app->make(State::class);
+        $processor = $this->app->make(Processor::class);
 
-        /** @var array{enabled: bool, class: class-string<AbstractWatcher>}[] $watcherConfigs */
+        /** @var array{enabled: bool, class: class-string<WatcherInterface>}[] $watcherConfigs */
         $watcherConfigs = $this->app->make(Repository::class)['slogger.watchers'] ?? [];
 
         foreach ($watcherConfigs as $watcherConfig) {
@@ -124,14 +124,7 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
                 continue;
             }
 
-            $watcherClass = $watcherConfig['class'];
-
-            $state->addEnabledWatcher($watcherClass);
-
-            /** @var AbstractWatcher $watcher */
-            $watcher = $this->app->make($watcherClass);
-
-            $watcher->register();
+            $processor->registerWatcher($watcherConfig['class']);
         }
     }
 

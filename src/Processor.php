@@ -3,11 +3,15 @@
 namespace SLoggerLaravel;
 
 use Closure;
+use Illuminate\Contracts\Container\BindingResolutionException;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\Carbon;
 use LogicException;
+use RuntimeException;
 use SLoggerLaravel\Dispatcher\Items\TraceDispatcherInterface;
 use SLoggerLaravel\Enums\TraceStatusEnum;
+use SLoggerLaravel\Events\WatcherErrorEvent;
 use SLoggerLaravel\Helpers\DataFormatter;
 use SLoggerLaravel\Helpers\MetricsHelper;
 use SLoggerLaravel\Helpers\TraceDataComplementer;
@@ -16,6 +20,7 @@ use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
 use SLoggerLaravel\Profiling\AbstractProfiling;
 use SLoggerLaravel\Traces\TraceIdContainer;
+use SLoggerLaravel\Watchers\WatcherInterface;
 use Throwable;
 
 class Processor
@@ -31,6 +36,8 @@ class Processor
 
     public function __construct(
         private readonly Application $app,
+        private readonly State $state,
+        private readonly Dispatcher $dispatcher,
         private readonly TraceDispatcherInterface $traceDispatcher,
         private readonly TraceIdContainer $traceIdContainer,
         private readonly AbstractProfiling $profiler,
@@ -46,6 +53,56 @@ class Processor
     public function isPaused(): bool
     {
         return $this->paused;
+    }
+
+    /**
+     * @param class-string<WatcherInterface> $watcherClass
+     */
+    public function registerWatcher(string $watcherClass): void
+    {
+        /** @var WatcherInterface $watcher */
+        $watcher = $this->app->make($watcherClass);
+
+        $watcher->register();
+
+        $this->state->addEnabledWatcher($watcherClass);
+    }
+
+    public function registerEvent(string $event, callable $listener): void
+    {
+        $this->dispatcher->listen(
+            $event,
+            fn(object $event) => $this->handleWatcher(
+                fn() => call_user_func($listener, $event)
+            )
+        );
+    }
+
+    /**
+     * @param Closure(): mixed $callback
+     */
+    public function handleWatcher(Closure $callback): mixed
+    {
+        if ($this->isPaused()) {
+            return null;
+        }
+
+        try {
+            return $callback();
+        } catch (Throwable $exception) {
+            try {
+                $this->handleWithoutTracing(function () use ($exception) {
+                    $this->dispatcher->dispatch(new WatcherErrorEvent($exception));
+                });
+            } catch (Throwable $exception) {
+                throw new RuntimeException(
+                    message: $exception->getMessage(),
+                    previous: $exception
+                );
+            }
+        }
+
+        return null;
     }
 
     /**

@@ -2,6 +2,7 @@
 
 namespace SLoggerLaravel\Watchers\Parents;
 
+use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Foundation\Http\Events\RequestHandled;
 use Illuminate\Foundation\Http\Kernel;
 use Illuminate\Http\Request;
@@ -12,22 +13,24 @@ use Illuminate\Support\Str;
 use Illuminate\View\View;
 use Psr\Container\ContainerExceptionInterface;
 use Psr\Container\NotFoundExceptionInterface;
+use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\DataResolver;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Events\RequestHandling;
 use SLoggerLaravel\Helpers\TraceHelper;
 use SLoggerLaravel\Middleware\HttpMiddleware;
+use SLoggerLaravel\Processor;
 use SLoggerLaravel\RequestPreparer\RequestDataFormatter;
 use SLoggerLaravel\RequestPreparer\RequestDataFormatters;
-use SLoggerLaravel\Watchers\AbstractWatcher;
+use SLoggerLaravel\Watchers\WatcherInterface;
 use Symfony\Component\HttpFoundation\RedirectResponse;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
  * @see HttpMiddleware - required for a tracing of requests
  */
-class RequestWatcher extends AbstractWatcher
+class RequestWatcher implements WatcherInterface
 {
     /**
      * @var array<array{trace_id: string, boot_time: float, started_at: Carbon, logged_at: Carbon}>
@@ -40,29 +43,28 @@ class RequestWatcher extends AbstractWatcher
 
     protected RequestDataFormatters $formatters;
 
-    protected function init(): void
-    {
-        $this->exceptedPaths = $this->loggerConfig->requestsExceptedPaths();
+    public function __construct(
+        protected readonly Application $app,
+        protected readonly Processor $processor,
+        protected readonly WatchersConfig $watchersConfig
+    ) {
+        $this->exceptedPaths = $this->watchersConfig->requestsExceptedPaths();
 
+        // TODO: fill at necessity
         $this->fillMaskers();
     }
 
     public function register(): void
     {
-        $this->listenEvent(RequestHandling::class, [$this, 'handleRequestHandling']);
-        $this->listenEvent(RequestHandled::class, [$this, 'handleRequestHandled']);
-    }
-
-    public function handleRequestHandling(RequestHandling $event): void
-    {
-        $this->safeHandleWatching(fn() => $this->onHandleRequestHandling($event));
+        $this->processor->registerEvent(RequestHandling::class, [$this, 'handleRequestHandling']);
+        $this->processor->registerEvent(RequestHandled::class, [$this, 'handleRequestHandled']);
     }
 
     /**
      * @throws ContainerExceptionInterface
      * @throws NotFoundExceptionInterface
      */
-    protected function onHandleRequestHandling(RequestHandling $event): void
+    public function handleRequestHandling(RequestHandling $event): void
     {
         if ($this->isRequestByPatterns($event->request, $this->exceptedPaths)) {
             return;
@@ -108,11 +110,6 @@ class RequestWatcher extends AbstractWatcher
     }
 
     public function handleRequestHandled(RequestHandled $event): void
-    {
-        $this->safeHandleWatching(fn() => $this->onHandleRequestHandled($event));
-    }
-
-    protected function onHandleRequestHandled(RequestHandled $event): void
     {
         if ($this->isRequestByPatterns($event->request, $this->exceptedPaths)) {
             return;
@@ -379,42 +376,42 @@ class RequestWatcher extends AbstractWatcher
         /** @var array<string, RequestDataFormatter> $formatterMap */
         $formatterMap = [];
 
-        $inputFullHiding = $this->loggerConfig->requestsInputFullHiding();
+        $inputFullHiding = $this->watchersConfig->requestsInputFullHiding();
 
         foreach ($inputFullHiding as $urlPattern) {
             $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
             $formatterMap[$urlPattern]->setHideAllRequestParameters(true);
         }
 
-        $inputMaskHeadersMasking = $this->loggerConfig->requestsInputMaskHeadersMasking();
+        $inputMaskHeadersMasking = $this->watchersConfig->requestsInputMaskHeadersMasking();
 
         foreach ($inputMaskHeadersMasking as $urlPattern => $headers) {
             $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
             $formatterMap[$urlPattern]->addRequestHeaders($headers);
         }
 
-        $inputParametersMasking = $this->loggerConfig->requestsInputParametersMasking();
+        $inputParametersMasking = $this->watchersConfig->requestsInputParametersMasking();
 
         foreach ($inputParametersMasking as $urlPattern => $parameters) {
             $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
             $formatterMap[$urlPattern]->addRequestParameters($parameters);
         }
 
-        $outputFullHiding = $this->loggerConfig->requestsOutputFullHiding();
+        $outputFullHiding = $this->watchersConfig->requestsOutputFullHiding();
 
         foreach ($outputFullHiding as $urlPattern) {
             $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
             $formatterMap[$urlPattern]->setHideAllResponseData(true);
         }
 
-        $outputHeadersMasking = $this->loggerConfig->requestsOutputHeadersMasking();
+        $outputHeadersMasking = $this->watchersConfig->requestsOutputHeadersMasking();
 
         foreach ($outputHeadersMasking as $urlPattern => $headers) {
             $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
             $formatterMap[$urlPattern]->addResponseHeaders($headers);
         }
 
-        $outputFieldsMasking = $this->loggerConfig->requestsOutputFieldsMasking();
+        $outputFieldsMasking = $this->watchersConfig->requestsOutputFieldsMasking();
 
         foreach ($outputFieldsMasking as $urlPattern => $fields) {
             $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);

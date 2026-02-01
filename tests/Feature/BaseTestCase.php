@@ -8,15 +8,15 @@ use Illuminate\Contracts\Container\BindingResolutionException;
 use Orchestra\Testbench\Concerns\WithWorkbench;
 use Orchestra\Testbench\TestCase;
 use SLoggerLaravel\Dispatcher\Items\Memory\MemoryDispatcher;
+use SLoggerLaravel\Processor;
 use SLoggerLaravel\ServiceProvider;
-use SLoggerLaravel\State;
-use SLoggerLaravel\Watchers\AbstractWatcher;
+use SLoggerLaravel\Watchers\WatcherInterface;
 
 abstract class BaseTestCase extends TestCase
 {
     use WithWorkbench;
 
-    protected State $state;
+    protected Processor $processor;
     protected MemoryDispatcher $dispatcher;
 
     /**
@@ -26,7 +26,7 @@ abstract class BaseTestCase extends TestCase
     {
         parent::setUp();
 
-        $this->state      = $this->app->make(State::class);
+        $this->processor  = $this->app->make(Processor::class);
         $this->dispatcher = $this->app->make(MemoryDispatcher::class);
     }
 
@@ -39,15 +39,10 @@ abstract class BaseTestCase extends TestCase
     }
 
     /**
-     * @param class-string<AbstractWatcher> $watcherClass
+     * @param class-string<WatcherInterface> $watcherClass
      */
     protected function registerWatcher(string $watcherClass): void
     {
-        $this->state->addEnabledWatcher($watcherClass);
-
-        /** @var AbstractWatcher $watcher */
-        $watcher = $this->app->make($watcherClass);
-
-        $watcher->register();
+        $this->processor->registerWatcher($watcherClass);
     }
 }

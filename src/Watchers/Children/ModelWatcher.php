@@ -4,40 +4,36 @@ namespace SLoggerLaravel\Watchers\Children;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Str;
+use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Helpers\MaskHelper;
-use SLoggerLaravel\Watchers\AbstractWatcher;
+use SLoggerLaravel\Processor;
+use SLoggerLaravel\Watchers\WatcherInterface;
 
-class ModelWatcher extends AbstractWatcher
+class ModelWatcher implements WatcherInterface
 {
     /**
      * @var array<string, string[]>
      */
     protected array $masks = [];
 
-    protected function init(): void
-    {
-        $this->masks = $this->loggerConfig->modelsMasks();
+    public function __construct(
+        protected Processor $processor,
+        WatchersConfig $watchersConfig
+    ) {
+        $this->masks = $watchersConfig->modelsMasks();
     }
 
     public function register(): void
     {
-        $this->listenEvent('eloquent.*', [$this, 'handleEvent']);
+        $this->processor->registerEvent('eloquent.*', [$this, 'handleEvent']);
     }
 
     /**
      * @param array{model: Model}|Model[] $eventData
      */
     public function handleEvent(string $eventName, array $eventData): void
-    {
-        $this->safeHandleWatching(fn() => $this->onHandleEvent($eventName, $eventData));
-    }
-
-    /**
-     * @param array{model: Model}|Model[] $eventData
-     */
-    protected function onHandleEvent(string $eventName, array $eventData): void
     {
         if (!$this->shouldRecord($eventName)) {
             return;

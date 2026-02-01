@@ -5,25 +5,26 @@ namespace SLoggerLaravel\Watchers\Children;
 use Illuminate\Mail\Events\MessageSent;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
-use SLoggerLaravel\Watchers\AbstractWatcher;
+use SLoggerLaravel\Processor;
+use SLoggerLaravel\Watchers\WatcherInterface;
 use Symfony\Component\Mime\Address;
 
 /**
  * Not tested
  */
-class MailWatcher extends AbstractWatcher
+class MailWatcher implements WatcherInterface
 {
+    public function __construct(
+        protected Processor $processor
+    ) {
+    }
+
     public function register(): void
     {
-        $this->listenEvent(MessageSent::class, [$this, 'handleMessageSent']);
+        $this->processor->registerEvent(MessageSent::class, [$this, 'handleMessageSent']);
     }
 
     public function handleMessageSent(MessageSent $event): void
-    {
-        $this->safeHandleWatching(fn() => $this->onHandleMessageSent($event));
-    }
-
-    protected function onHandleMessageSent(MessageSent $event): void
     {
         $data = [
             'mailable' => $this->getMailable($event),

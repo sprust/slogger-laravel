@@ -9,31 +9,32 @@ use Illuminate\Support\Arr;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Helpers\DataFormatter;
-use SLoggerLaravel\Watchers\AbstractWatcher;
+use SLoggerLaravel\Processor;
+use SLoggerLaravel\Watchers\WatcherInterface;
 
-class GateWatcher extends AbstractWatcher
+class GateWatcher implements WatcherInterface
 {
-    private const ALLOWED = 'allowed';
-    private const DENIED  = 'denied';
+    protected const ALLOWED = 'allowed';
+    protected const DENIED  = 'denied';
+
+    public function __construct(
+        protected Processor $processor
+    ) {
+    }
 
     public function register(): void
     {
-        $this->listenEvent(GateEvaluated::class, [$this, 'handleGateEvaluated']);
+        $this->processor->registerEvent(GateEvaluated::class, [$this, 'handleGateEvaluated']);
     }
 
     public function handleGateEvaluated(GateEvaluated $event): void
     {
-        $this->safeHandleWatching(fn() => $this->onHandleGateEvaluated($event));
-    }
-
-    protected function onHandleGateEvaluated(GateEvaluated $event): void
-    {
         $result = $this->prepareResult($event->result);
 
         $data = [
-            'ability'   => $event->ability,
-            'result'    => $result,
-            'user_id'   => $event->user?->getAuthIdentifier(),
+            'ability' => $event->ability,
+            'result' => $result,
+            'user_id' => $event->user?->getAuthIdentifier(),
             'arguments' => $this->prepareArguments($event->arguments),
         ];
 

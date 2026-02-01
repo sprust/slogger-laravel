@@ -9,24 +9,25 @@ use Illuminate\Notifications\Events\NotificationSent;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Helpers\DataFormatter;
-use SLoggerLaravel\Watchers\AbstractWatcher;
+use SLoggerLaravel\Processor;
+use SLoggerLaravel\Watchers\WatcherInterface;
 
 /**
  * Not tested
  */
-class NotificationWatcher extends AbstractWatcher
+class NotificationWatcher implements WatcherInterface
 {
+    public function __construct(
+        protected Processor $processor
+    ) {
+    }
+
     public function register(): void
     {
-        $this->listenEvent(NotificationSent::class, [$this, 'handleNotification']);
+        $this->processor->registerEvent(NotificationSent::class, [$this, 'handleNotification']);
     }
 
     public function handleNotification(NotificationSent $event): void
-    {
-        $this->safeHandleWatching(fn() => $this->onHandleNotification($event));
-    }
-
-    protected function onHandleNotification(NotificationSent $event): void
     {
         $notification = get_class($event->notification);
 

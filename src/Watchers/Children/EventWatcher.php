@@ -4,69 +4,55 @@ namespace SLoggerLaravel\Watchers\Children;
 
 use Closure;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
-use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Events\Dispatcher;
 use Illuminate\Support\Str;
-use Psr\Container\ContainerExceptionInterface;
-use Psr\Container\NotFoundExceptionInterface;
 use ReflectionFunction;
 use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
-use SLoggerLaravel\Watchers\AbstractWatcher;
+use SLoggerLaravel\Processor;
+use SLoggerLaravel\Watchers\WatcherInterface;
 
 /**
  * Not tested on custom events
  */
-class EventWatcher extends AbstractWatcher
+class EventWatcher implements WatcherInterface
 {
     /**
      * @var string[]
      */
-    private array $ignoreEvents = [];
+    protected array $ignoreEvents;
 
     /**
      * @var string[]
      */
-    private array $serializeEvents = [];
+    protected array $serializeEvents;
 
     /**
      * @var string[]
      */
-    private array $possibleOrphans = [];
+    protected array $possibleOrphans;
 
-    /**
-     * @throws BindingResolutionException
-     */
-    protected function init(): void
-    {
-        parent::init();
-
-        $config = $this->app->make(WatchersConfig::class);
-
-        $this->ignoreEvents    = $config->eventsIgnoreEvents();
-        $this->serializeEvents = $config->eventsSerializeEvents();
-        $this->possibleOrphans = $config->eventsCanBeOrphan();
+    public function __construct(
+        protected Dispatcher $dispatcher,
+        protected Processor $processor,
+        WatchersConfig $watchersConfig,
+    ) {
+        $this->ignoreEvents    = $watchersConfig->eventsIgnoreEvents();
+        $this->serializeEvents = $watchersConfig->eventsSerializeEvents();
+        $this->possibleOrphans = $watchersConfig->eventsCanBeOrphan();
     }
 
     public function register(): void
     {
-        $this->listenEvent('*', [$this, 'handleEvent']);
+        $this->processor->registerEvent('*', [$this, 'handleEvent']);
     }
 
     /**
      * @param array<string, mixed> $payload
      */
     public function handleEvent(string $eventName, array $payload): void
-    {
-        $this->safeHandleWatching(fn() => $this->onHandleEvent($eventName, $payload));
-    }
-
-    /**
-     * @param array<string, mixed> $payload
-     */
-    protected function onHandleEvent(string $eventName, array $payload): void
     {
         if ($this->shouldIgnore($eventName)) {
             return;
@@ -97,9 +83,6 @@ class EventWatcher extends AbstractWatcher
      * @param array<string, mixed> $payload
      *
      * @return array<string, mixed>
-     *
-     * @throws NotFoundExceptionInterface
-     * @throws ContainerExceptionInterface
      */
     protected function prepareData(string $eventName, array $payload): array
     {
@@ -150,14 +133,10 @@ class EventWatcher extends AbstractWatcher
 
     /**
      * @return array<array{name: string, queued: bool}>
-     *
-     * @throws NotFoundExceptionInterface
-     * @throws ContainerExceptionInterface
      */
     protected function formatListeners(string $eventName): array
     {
-        /** @var array<Closure|string|object> $listeners */
-        $listeners = $this->app->get(Dispatcher::class)->getListeners($eventName);
+        $listeners = $this->dispatcher->getListeners($eventName);
 
         return collect($listeners)
             ->map(

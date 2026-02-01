@@ -5,13 +5,15 @@ namespace SLoggerLaravel\Watchers\Parents;
 use Illuminate\Console\Events\CommandFinished;
 use Illuminate\Console\Events\CommandStarting;
 use Illuminate\Support\Carbon;
+use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Helpers\TraceHelper;
-use SLoggerLaravel\Watchers\AbstractWatcher;
+use SLoggerLaravel\Processor;
+use SLoggerLaravel\Watchers\WatcherInterface;
 use Symfony\Component\Console\Input\InputInterface;
 
-class CommandWatcher extends AbstractWatcher
+class CommandWatcher implements WatcherInterface
 {
     /**
      * @var array<array{trace_id: string, started_at: Carbon}>
@@ -22,23 +24,20 @@ class CommandWatcher extends AbstractWatcher
      */
     protected array $exceptedCommands = [];
 
-    protected function init(): void
-    {
-        $this->exceptedCommands = $this->loggerConfig->commandsExcepted();
+    public function __construct(
+        protected readonly Processor $processor,
+        WatchersConfig $watchersConfig
+    ) {
+        $this->exceptedCommands = $watchersConfig->commandsExcepted();
     }
 
     public function register(): void
     {
-        $this->listenEvent(CommandStarting::class, [$this, 'handleCommandStarting']);
-        $this->listenEvent(CommandFinished::class, [$this, 'handleCommandFinished']);
+        $this->processor->registerEvent(CommandStarting::class, [$this, 'handleCommandStarting']);
+        $this->processor->registerEvent(CommandFinished::class, [$this, 'handleCommandFinished']);
     }
 
     public function handleCommandStarting(CommandStarting $event): void
-    {
-        $this->safeHandleWatching(fn() => $this->onHandleCommandStarting($event));
-    }
-
-    protected function onHandleCommandStarting(CommandStarting $event): void
     {
         if (in_array($event->command, $this->exceptedCommands)) {
             return;
@@ -70,7 +69,7 @@ class CommandWatcher extends AbstractWatcher
 
     public function handleCommandFinished(CommandFinished $event): void
     {
-        $this->safeHandleWatching(fn() => $this->onHandleCommandFinished($event));
+        $this->processor->handleWatcher(fn() => $this->onHandleCommandFinished($event));
     }
 
     protected function onHandleCommandFinished(CommandFinished $event): void

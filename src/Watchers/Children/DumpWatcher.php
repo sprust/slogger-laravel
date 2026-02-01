@@ -4,11 +4,17 @@ namespace SLoggerLaravel\Watchers\Children;
 
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
-use SLoggerLaravel\Watchers\AbstractWatcher;
+use SLoggerLaravel\Processor;
+use SLoggerLaravel\Watchers\WatcherInterface;
 use Symfony\Component\VarDumper\VarDumper;
 
-class DumpWatcher extends AbstractWatcher
+class DumpWatcher implements WatcherInterface
 {
+    public function __construct(
+        protected Processor $processor
+    ) {
+    }
+
     public function register(): void
     {
         VarDumper::setHandler(function (mixed $dump) {
@@ -28,7 +34,7 @@ class DumpWatcher extends AbstractWatcher
             return;
         }
 
-        $this->safeHandleWatching(fn() => $this->onHandleDump($dump));
+        $this->processor->handleWatcher(fn() => $this->onHandleDump($dump));
     }
 
     protected function onHandleDump(mixed $dump): void
