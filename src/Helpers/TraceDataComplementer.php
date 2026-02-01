@@ -73,16 +73,16 @@ class TraceDataComplementer
                 }
             }
 
-            if (Str::startsWith($file, $this->basePathVendor)
+            if (
+                Str::startsWith($file, $this->basePathVendor)
                 || Str::startsWith($file, $this->basePathPackages)
             ) {
                 continue;
             }
 
             $trace[] = [
-                'file' => $file,
+                ...($class ? ['class' => $class] : ['file' => $file]),
                 'line' => $line,
-                ...($class ? ['class' => $class] : []),
             ];
         }
 
