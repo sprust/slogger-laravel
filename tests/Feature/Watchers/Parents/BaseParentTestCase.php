@@ -10,7 +10,7 @@ use SLoggerLaravel\Objects\TraceUpdateObject;
 use SLoggerLaravel\Tests\Feature\BaseTestCase;
 use SLoggerLaravel\Watchers\Children\EventWatcher;
 use SLoggerLaravel\Watchers\WatcherInterface;
-use SLoggerTestEntities\NestedEvent;
+use SLoggerTestEntities\Events\NestedEvent;
 
 abstract class BaseParentTestCase extends BaseTestCase
 {

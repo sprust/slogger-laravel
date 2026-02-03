@@ -4,38 +4,27 @@ declare(strict_types=1);
 
 namespace SLoggerLaravel\Tests\Feature\Watchers\Parents\Job;
 
-use RuntimeException;
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
-use SLoggerTestEntities\Events\NestedEvent;
+use SLoggerTestEntities\Jobs\FailedJob;
+use SLoggerTestEntities\Jobs\NestedEventJob;
+use SLoggerTestEntities\Jobs\SuccessJob;
 use Throwable;
 
-class ClosureJobWatcherTest extends BaseJobWatcherTestCase
+class ClassJobWatcherTest extends BaseJobWatcherTestCase
 {
     protected function runSuccess(): void
     {
-        dispatch(static fn() => null);
+        dispatch(new SuccessJob());
     }
 
     protected function assertSuccess(
         TraceCreateObject $creatingTrace,
         TraceUpdateObject $updatingTrace,
     ): void {
-        $testClassName = class_basename(__CLASS__);
-
-        $hasClosureTag = false;
-
-        $mask = "/^Closure \($testClassName\.php:\d+\)$/";
-
-        foreach ($creatingTrace->tags as $tag) {
-            if (preg_match($mask, $tag)) {
-                $hasClosureTag = true;
-
-                break;
-            }
-        }
-
-        self::assertTrue($hasClosureTag);
+        self::assertTrue(
+            in_array(SuccessJob::class, $creatingTrace->tags, true)
+        );
 
         self::assertNull($updatingTrace->tags);
     }
@@ -47,7 +36,7 @@ class ClosureJobWatcherTest extends BaseJobWatcherTestCase
         $exception = null;
 
         try {
-            dispatch(static fn() => throw new RuntimeException($message));
+            dispatch(new FailedJob($message));
         } catch (Throwable $exception) {
             //
         }
@@ -64,7 +53,7 @@ class ClosureJobWatcherTest extends BaseJobWatcherTestCase
 
     protected function runWithNestedEvent(): void
     {
-        dispatch(static fn() => event(new NestedEvent()));
+        dispatch(new NestedEventJob());
     }
 
     protected function assertWithNestedEvent(
