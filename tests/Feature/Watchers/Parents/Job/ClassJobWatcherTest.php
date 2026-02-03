@@ -22,11 +22,11 @@ class ClassJobWatcherTest extends BaseJobWatcherTestCase
         TraceCreateObject $creatingTrace,
         TraceUpdateObject $updatingTrace,
     ): void {
-        self::assertTrue(
-            in_array(SuccessJob::class, $creatingTrace->tags, true)
+        $this->assertTags(
+            jobClass: SuccessJob::class,
+            creatingTraceTags: $creatingTrace->tags,
+            updatingTraceTags: $updatingTrace->tags
         );
-
-        self::assertNull($updatingTrace->tags);
     }
 
     protected function runFailed(): void
@@ -48,7 +48,11 @@ class ClassJobWatcherTest extends BaseJobWatcherTestCase
         TraceCreateObject $creatingTrace,
         TraceUpdateObject $updatingTrace
     ): void {
-        // no action
+        $this->assertTags(
+            jobClass: FailedJob::class,
+            creatingTraceTags: $creatingTrace->tags,
+            updatingTraceTags: $updatingTrace->tags
+        );
     }
 
     protected function runWithNestedEvent(): void
@@ -61,6 +65,19 @@ class ClassJobWatcherTest extends BaseJobWatcherTestCase
         TraceUpdateObject $updatingTrace,
         TraceCreateObject $creatingEventTrace,
     ): void {
-        // no action
+        $this->assertTags(
+            jobClass: NestedEventJob::class,
+            creatingTraceTags: $creatingTrace->tags,
+            updatingTraceTags: $updatingTrace->tags
+        );
+    }
+
+    protected function assertTags(string $jobClass, array $creatingTraceTags, ?array $updatingTraceTags): void
+    {
+        self::assertTrue(
+            in_array($jobClass, $creatingTraceTags, true)
+        );
+
+        self::assertNull($updatingTraceTags);
     }
 }

@@ -21,23 +21,10 @@ class ClosureJobWatcherTest extends BaseJobWatcherTestCase
         TraceCreateObject $creatingTrace,
         TraceUpdateObject $updatingTrace,
     ): void {
-        $testClassName = class_basename(__CLASS__);
-
-        $hasClosureTag = false;
-
-        $mask = "/^Closure \($testClassName\.php:\d+\)$/";
-
-        foreach ($creatingTrace->tags as $tag) {
-            if (preg_match($mask, $tag)) {
-                $hasClosureTag = true;
-
-                break;
-            }
-        }
-
-        self::assertTrue($hasClosureTag);
-
-        self::assertNull($updatingTrace->tags);
+        $this->assertTags(
+            creatingTraceTags: $creatingTrace->tags,
+            updatingTraceTags: $updatingTrace->tags
+        );
     }
 
     protected function runFailed(): void
@@ -59,7 +46,10 @@ class ClosureJobWatcherTest extends BaseJobWatcherTestCase
         TraceCreateObject $creatingTrace,
         TraceUpdateObject $updatingTrace
     ): void {
-        // no action
+        $this->assertTags(
+            creatingTraceTags: $creatingTrace->tags,
+            updatingTraceTags: $updatingTrace->tags
+        );
     }
 
     protected function runWithNestedEvent(): void
@@ -72,6 +62,30 @@ class ClosureJobWatcherTest extends BaseJobWatcherTestCase
         TraceUpdateObject $updatingTrace,
         TraceCreateObject $creatingEventTrace,
     ): void {
-        // no action
+        $this->assertTags(
+            creatingTraceTags: $creatingTrace->tags,
+            updatingTraceTags: $updatingTrace->tags
+        );
+    }
+
+    protected function assertTags(array $creatingTraceTags, ?array $updatingTraceTags): void
+    {
+        $testClassName = class_basename(__CLASS__);
+
+        $hasClosureTag = false;
+
+        $mask = "/^Closure \($testClassName\.php:\d+\)$/";
+
+        foreach ($creatingTraceTags as $tag) {
+            if (preg_match($mask, $tag)) {
+                $hasClosureTag = true;
+
+                break;
+            }
+        }
+
+        self::assertTrue($hasClosureTag);
+
+        self::assertNull($updatingTraceTags);
     }
 }
