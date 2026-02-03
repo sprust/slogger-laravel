@@ -52,7 +52,7 @@ class EventWatcher implements WatcherInterface
     /**
      * @param array<string, mixed> $payload
      */
-    public function handleEvent(string $eventName, array $payload): void
+    public function handleEvent(string $eventName, array $payload = []): void
     {
         if ($this->shouldIgnore($eventName)) {
             return;
