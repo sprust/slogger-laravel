@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace SLoggerLaravel\Dispatcher\ApiClients\Socket;
 
 use Illuminate\Support\Carbon;
+use JsonException;
 use RuntimeException;
 use SLoggerLaravel\Dispatcher\ApiClients\ApiClientInterface;
 use SLoggerLaravel\Objects\TracesObject;
@@ -19,7 +20,7 @@ class SocketClient implements ApiClientInterface
     }
 
     /**
-     * @throws \JsonException
+     * @throws JsonException
      */
     public function sendTraces(TracesObject $traces): void
     {
