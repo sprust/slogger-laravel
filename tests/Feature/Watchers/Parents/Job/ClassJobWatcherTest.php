@@ -72,6 +72,10 @@ class ClassJobWatcherTest extends BaseJobWatcherTestCase
         );
     }
 
+    /**
+     * @param string[]      $creatingTraceTags
+     * @param string[]|null $updatingTraceTags
+     */
     protected function assertTags(string $jobClass, array $creatingTraceTags, ?array $updatingTraceTags): void
     {
         self::assertTrue(

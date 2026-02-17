@@ -68,6 +68,10 @@ class ClosureJobWatcherTest extends BaseJobWatcherTestCase
         );
     }
 
+    /**
+     * @param string[]      $creatingTraceTags
+     * @param string[]|null $updatingTraceTags
+     */
     protected function assertTags(array $creatingTraceTags, ?array $updatingTraceTags): void
     {
         $testClassName = class_basename(__CLASS__);
