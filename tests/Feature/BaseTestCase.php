@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace SLoggerLaravel\Tests\Feature;
 
+use App\Providers\WorkbenchServiceProvider;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Orchestra\Testbench\Concerns\WithWorkbench;
 use Orchestra\Testbench\TestCase;
@@ -38,6 +39,7 @@ abstract class BaseTestCase extends TestCase
     {
         return [
             ServiceProvider::class,
+            WorkbenchServiceProvider::class,
             ...parent::getPackageProviders($app),
         ];
     }
