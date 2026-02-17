@@ -17,6 +17,7 @@ use SLoggerLaravel\Watchers\Children\ScheduleWatcher;
 use SLoggerLaravel\Watchers\Parents\CommandWatcher;
 use SLoggerLaravel\Watchers\Parents\JobWatcher;
 use SLoggerLaravel\Watchers\Parents\RequestWatcher;
+use SLoggerTestEntities\Jobs\ExceptedJob;
 
 $defaultQueueConnection = env('QUEUE_CONNECTION');
 
@@ -133,6 +134,7 @@ return [
         'jobs' => [
             'excepted' => [
                 SendTracesJob::class,
+                ExceptedJob::class,
             ],
         ],
 
