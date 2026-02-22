@@ -4,7 +4,6 @@ namespace SLoggerLaravel\Watchers\Children;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Str;
-use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Helpers\MaskHelper;
@@ -20,13 +19,15 @@ class ModelWatcher implements WatcherInterface
 
     public function __construct(
         protected Processor $processor,
-        WatchersConfig $watchersConfig
     ) {
-        $this->masks = $watchersConfig->modelsMasks();
     }
 
     public function register(?array $config): void
     {
+        if ($config !== null) {
+            $this->masks = $config['masks'] ?? [];
+        }
+
         $this->processor->registerEvent('eloquent.*', [$this, 'handleEvent']);
     }
 

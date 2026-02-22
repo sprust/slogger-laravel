@@ -8,7 +8,6 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Events\Dispatcher;
 use Illuminate\Support\Str;
 use ReflectionFunction;
-use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Processor;
@@ -22,30 +21,32 @@ class EventWatcher implements WatcherInterface
     /**
      * @var string[]
      */
-    protected array $ignoreEvents;
+    protected array $ignoreEvents = [];
 
     /**
      * @var string[]
      */
-    protected array $serializeEvents;
+    protected array $serializeEvents = [];
 
     /**
      * @var string[]
      */
-    protected array $possibleOrphans;
+    protected array $possibleOrphans = [];
 
     public function __construct(
         protected Dispatcher $dispatcher,
         protected Processor $processor,
-        WatchersConfig $watchersConfig,
     ) {
-        $this->ignoreEvents    = $watchersConfig->eventsIgnoreEvents();
-        $this->serializeEvents = $watchersConfig->eventsSerializeEvents();
-        $this->possibleOrphans = $watchersConfig->eventsCanBeOrphan();
     }
 
     public function register(?array $config): void
     {
+        if ($config !== null) {
+            $this->ignoreEvents    = $config['ignore_events'] ?? [];
+            $this->serializeEvents = $config['serialize_events'] ?? [];
+            $this->possibleOrphans = $config['can_be_orphan'] ?? [];
+        }
+
         $this->processor->registerEvent('*', [$this, 'handleEvent']);
     }
 

@@ -65,30 +65,6 @@ return [
         ],
     ],
 
-    'watchers_customizing' => [
-        'models' => [
-            /** model_class => field_patterns */
-            'masks' => [
-                '*' => [
-                    '*token*',
-                    '*password*',
-                ],
-            ],
-        ],
-
-        'events' => [
-            'ignore_events'    => [
-                //
-            ],
-            'serialize_events' => [
-                //
-            ],
-            'can_be_orphan'    => [
-                //
-            ],
-        ],
-    ],
-
     'http_parent_trace_id_header_key' => env(
         'SLOGGER_REQUESTS_HEADER_PARENT_TRACE_ID_KEY',
         'x-parent-trace-id'
@@ -100,7 +76,7 @@ return [
             'enabled' => env('SLOGGER_LOG_REQUESTS_ENABLED', false),
             'config'  => [
                 /** url_patterns */
-                'excepted_paths'             => [
+                'excepted_paths' => [
                     //
                 ],
 
@@ -184,6 +160,15 @@ return [
         [
             'class'   => ModelWatcher::class,
             'enabled' => env('SLOGGER_LOG_MODEL_ENABLED', false),
+            'config'  => [
+                /** model_class => field_patterns */
+                'masks' => [
+                    '*' => [
+                        '*token*',
+                        '*password*',
+                    ],
+                ],
+            ],
         ],
         [
             'class'   => GateWatcher::class,
@@ -192,6 +177,17 @@ return [
         [
             'class'   => EventWatcher::class,
             'enabled' => env('SLOGGER_LOG_EVENT_ENABLED', false),
+            'config'  => [
+                'ignore_events'    => [
+                    //
+                ],
+                'serialize_events' => [
+                    //
+                ],
+                'can_be_orphan'    => [
+                    //
+                ],
+            ],
         ],
         [
             'class'   => MailWatcher::class,
