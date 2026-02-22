@@ -2,15 +2,16 @@
 
 declare(strict_types=1);
 
-namespace SLoggerLaravel\Tests\Feature\Watchers\Children\Event;
+namespace Feature\Watchers\Children\Event;
 
+use App\Events\NestedEvent;
 use App\Events\SuccessEvent;
 use SLoggerLaravel\Tests\Feature\Watchers\BaseWatcherTestCase;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Watchers\Children\EventWatcher;
 use SLoggerLaravel\Watchers\Parents\JobWatcher;
 
-class IgnoreEventWatcherTest extends BaseWatcherTestCase
+class OnlyEventWatcherTest extends BaseWatcherTestCase
 {
     public function test(): void
     {
@@ -22,7 +23,7 @@ class IgnoreEventWatcherTest extends BaseWatcherTestCase
         $this->registerWatcher(
             watcherClass: EventWatcher::class,
             config: [
-                'ignore_events' => [
+                'only_events' => [
                     SuccessEvent::class,
                 ],
             ],
@@ -34,16 +35,26 @@ class IgnoreEventWatcherTest extends BaseWatcherTestCase
             )
         );
 
+        dispatch(
+            static fn() => event(
+                new NestedEvent()
+            )
+        );
+
         $creating = $this->dispatcher->findCreating(
             type: 'event',
             status: TraceStatusEnum::Success,
-            tag: SuccessEvent::class,
             isParent: false,
         );
 
         self::assertCount(
-            0,
+            1,
             $creating
+        );
+
+        self::assertEquals(
+            SuccessEvent::class,
+            $creating[0]->tags[0]
         );
     }
 }
