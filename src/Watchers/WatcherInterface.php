@@ -4,5 +4,8 @@ namespace SLoggerLaravel\Watchers;
 
 interface WatcherInterface
 {
-    public function register(): void;
+    /**
+     * @param array<string, mixed>|null $config
+     */
+    public function register(?array $config): void;
 }

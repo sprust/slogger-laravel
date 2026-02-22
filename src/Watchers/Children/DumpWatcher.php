@@ -10,13 +10,20 @@ use Symfony\Component\VarDumper\VarDumper;
 
 class DumpWatcher implements WatcherInterface
 {
+    /**
+     * @var array<string, mixed>|null
+     */
+    protected ?array $config = [];
+
     public function __construct(
         protected Processor $processor
     ) {
     }
 
-    public function register(): void
+    public function register(?array $config): void
     {
+        $this->config = $config;
+
         VarDumper::setHandler(function (mixed $dump) {
             $this->handleDump($dump);
         });
@@ -28,7 +35,7 @@ class DumpWatcher implements WatcherInterface
 
         VarDumper::dump($dump);
 
-        $this->register();
+        $this->register($this->config);
 
         if ($this->processor->isPaused()) {
             return;

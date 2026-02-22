@@ -19,7 +19,7 @@ class MailWatcher implements WatcherInterface
     ) {
     }
 
-    public function register(): void
+    public function register(?array $config): void
     {
         $this->processor->registerEvent(MessageSent::class, [$this, 'handleMessageSent']);
     }

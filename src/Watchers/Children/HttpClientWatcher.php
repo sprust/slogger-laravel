@@ -37,7 +37,7 @@ class HttpClientWatcher implements WatcherInterface
         $this->headerParentTraceIdKey = $watchersConfig->requestsHeaderParentTraceIdKey();
     }
 
-    public function register(): void
+    public function register(?array $config): void
     {
         /** @see GuzzleHandlerFactory */
     }

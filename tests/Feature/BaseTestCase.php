@@ -54,7 +54,7 @@ abstract class BaseTestCase extends TestCase
      */
     protected function registerWatcher(string $watcherClass): void
     {
-        $this->processor->registerWatcher($watcherClass);
+        $this->processor->registerWatcher($watcherClass, null);
     }
 
     protected function artisanCall(string $command): int

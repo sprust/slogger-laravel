@@ -163,58 +163,72 @@ return [
         [
             'class'   => RequestWatcher::class,
             'enabled' => env('SLOGGER_LOG_REQUESTS_ENABLED', false),
+            'config'  => [],
         ],
         [
             'class'   => CommandWatcher::class,
             'enabled' => env('SLOGGER_LOG_COMMANDS_ENABLED', false),
+            'config'  => [],
         ],
         [
             'class'   => DatabaseWatcher::class,
             'enabled' => env('SLOGGER_LOG_DATABASE_ENABLED', false),
+            'config'  => [],
         ],
         [
             'class'   => LogWatcher::class,
             'enabled' => env('SLOGGER_LOG_LOG_ENABLED', false),
+            'config'  => [],
         ],
         [
             'class'   => ScheduleWatcher::class,
             'enabled' => env('SLOGGER_LOG_LOG_ENABLED', false),
+            'config'  => [],
         ],
         [
             'class'   => JobWatcher::class,
             'enabled' => env('SLOGGER_LOG_JOBS_ENABLED', false),
+            'config'  => [],
         ],
         [
             'class'   => ModelWatcher::class,
             'enabled' => env('SLOGGER_LOG_MODEL_ENABLED', false),
+            'config'  => [],
         ],
         [
             'class'   => GateWatcher::class,
             'enabled' => env('SLOGGER_LOG_GATE_ENABLED', false),
+            'config'  => [],
         ],
         [
             'class'   => EventWatcher::class,
             'enabled' => env('SLOGGER_LOG_EVENT_ENABLED', false),
+            'config'  => [],
         ],
         [
             'class'   => MailWatcher::class,
             'enabled' => env('SLOGGER_LOG_MAIL_ENABLED', false),
+            'config'  => [],
         ],
         [
             'class'   => NotificationWatcher::class,
             'enabled' => env('SLOGGER_LOG_NOTIFICATION_ENABLED', false),
+            'config'  => [],
         ],
         [
             'class'   => CacheWatcher::class,
             'enabled' => env('SLOGGER_LOG_CACHE_ENABLED', false),
+            'config'  => [],
         ],
         [
             'class'   => DumpWatcher::class,
             'enabled' => env('SLOGGER_LOG_DUMP_ENABLED', false),
+            'config'  => [],
         ],
         [
             'class'   => HttpClientWatcher::class,
             'enabled' => env('SLOGGER_LOG_HTTP_ENABLED', false),
+            'config'  => [],
         ],
     ],
 ];

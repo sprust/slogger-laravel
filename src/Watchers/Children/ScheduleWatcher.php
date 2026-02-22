@@ -23,7 +23,7 @@ class ScheduleWatcher implements WatcherInterface
     ) {
     }
 
-    public function register(): void
+    public function register(?array $config): void
     {
         $this->processor->registerEvent(ScheduledTaskSkipped::class, [$this, 'handleScheduledTaskSkipped']);
         $this->processor->registerEvent(ScheduledTaskStarting::class, [$this, 'handleScheduledTaskStarting']);

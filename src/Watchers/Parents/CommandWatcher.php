@@ -31,7 +31,7 @@ class CommandWatcher implements WatcherInterface
         $this->exceptedCommands = $watchersConfig->commandsExcepted();
     }
 
-    public function register(): void
+    public function register(?array $config): void
     {
         $this->processor->registerEvent(CommandStarting::class, [$this, 'handleCommandStarting']);
         $this->processor->registerEvent(CommandFinished::class, [$this, 'handleCommandFinished']);

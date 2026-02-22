@@ -37,7 +37,7 @@ class JobWatcher implements WatcherInterface
         $this->exceptedJobs = $watchersConfig->jobsExcepted();
     }
 
-    public function register(): void
+    public function register(?array $config): void
     {
         Queue::createPayloadUsing(
             function () {

@@ -116,7 +116,7 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
     {
         $processor = $this->app->make(Processor::class);
 
-        /** @var array{enabled: bool, class: class-string<WatcherInterface>}[] $watcherConfigs */
+        /** @var array{enabled: bool, class: class-string<WatcherInterface>, config?: array<string, mixed>}[] $watcherConfigs */
         $watcherConfigs = $this->app->make(Repository::class)['slogger.watchers'] ?? [];
 
         foreach ($watcherConfigs as $watcherConfig) {
@@ -124,7 +124,10 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
                 continue;
             }
 
-            $processor->registerWatcher($watcherConfig['class']);
+            $processor->registerWatcher(
+                watcherClass: $watcherConfig['class'],
+                config: $watcherConfig['config'] ?? null,
+            );
         }
     }
 

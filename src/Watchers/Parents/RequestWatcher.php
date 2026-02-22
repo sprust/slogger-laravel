@@ -54,7 +54,7 @@ class RequestWatcher implements WatcherInterface
         $this->fillMaskers();
     }
 
-    public function register(): void
+    public function register(?array $config): void
     {
         $this->processor->registerEvent(RequestHandling::class, [$this, 'handleRequestHandling']);
         $this->processor->registerEvent(RequestHandled::class, [$this, 'handleRequestHandled']);

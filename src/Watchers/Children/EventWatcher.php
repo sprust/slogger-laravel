@@ -44,7 +44,7 @@ class EventWatcher implements WatcherInterface
         $this->possibleOrphans = $watchersConfig->eventsCanBeOrphan();
     }
 
-    public function register(): void
+    public function register(?array $config): void
     {
         $this->processor->registerEvent('*', [$this, 'handleEvent']);
     }

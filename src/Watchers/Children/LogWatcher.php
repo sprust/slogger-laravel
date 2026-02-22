@@ -17,7 +17,7 @@ class LogWatcher implements WatcherInterface
     ) {
     }
 
-    public function register(): void
+    public function register(?array $config): void
     {
         $this->processor->registerEvent(MessageLogged::class, [$this, 'handleMessageLogged']);
     }

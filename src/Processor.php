@@ -57,13 +57,14 @@ class Processor
 
     /**
      * @param class-string<WatcherInterface> $watcherClass
+     * @param array<string, mixed>|null           $config
      */
-    public function registerWatcher(string $watcherClass): void
+    public function registerWatcher(string $watcherClass, ?array $config): void
     {
         /** @var WatcherInterface $watcher */
         $watcher = $this->app->make($watcherClass);
 
-        $watcher->register();
+        $watcher->register($config);
 
         $this->state->addEnabledWatcher($watcherClass);
     }

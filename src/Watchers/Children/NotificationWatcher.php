@@ -22,7 +22,7 @@ class NotificationWatcher implements WatcherInterface
     ) {
     }
 
-    public function register(): void
+    public function register(?array $config): void
     {
         $this->processor->registerEvent(NotificationSent::class, [$this, 'handleNotification']);
     }

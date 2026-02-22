@@ -25,7 +25,7 @@ class ModelWatcher implements WatcherInterface
         $this->masks = $watchersConfig->modelsMasks();
     }
 
-    public function register(): void
+    public function register(?array $config): void
     {
         $this->processor->registerEvent('eloquent.*', [$this, 'handleEvent']);
     }

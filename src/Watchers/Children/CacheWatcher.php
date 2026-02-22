@@ -21,7 +21,7 @@ readonly class CacheWatcher implements WatcherInterface
     ) {
     }
 
-    public function register(): void
+    public function register(?array $config): void
     {
         $this->processor->registerEvent(CacheHit::class, [$this, 'handleCacheHit']);
         $this->processor->registerEvent(CacheMissed::class, [$this, 'handleCacheMissed']);

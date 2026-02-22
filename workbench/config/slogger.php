@@ -172,6 +172,18 @@ return [
             'enabled' => env('SLOGGER_LOG_COMMANDS_ENABLED', false),
         ],
         [
+            'class'   => JobWatcher::class,
+            'enabled' => env('SLOGGER_LOG_JOBS_ENABLED', false),
+            'config' => [
+                'excepted' => [
+                    'queue:work',
+                    'queue:listen',
+                    'schedule:run',
+                    'slogger:test-excepted',
+                ],
+            ]
+        ],
+        [
             'class'   => DatabaseWatcher::class,
             'enabled' => env('SLOGGER_LOG_DATABASE_ENABLED', false),
         ],
@@ -182,10 +194,6 @@ return [
         [
             'class'   => ScheduleWatcher::class,
             'enabled' => env('SLOGGER_LOG_LOG_ENABLED', false),
-        ],
-        [
-            'class'   => JobWatcher::class,
-            'enabled' => env('SLOGGER_LOG_JOBS_ENABLED', false),
         ],
         [
             'class'   => ModelWatcher::class,

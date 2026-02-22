@@ -22,7 +22,7 @@ class GateWatcher implements WatcherInterface
     ) {
     }
 
-    public function register(): void
+    public function register(?array $config): void
     {
         $this->processor->registerEvent(GateEvaluated::class, [$this, 'handleGateEvaluated']);
     }
