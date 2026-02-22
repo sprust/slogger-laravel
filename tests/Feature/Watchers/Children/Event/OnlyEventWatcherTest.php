@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Feature\Watchers\Children\Event;
+namespace SLoggerLaravel\Tests\Feature\Watchers\Children\Event;
 
 use App\Events\NestedEvent;
 use App\Events\SuccessEvent;

@@ -9,6 +9,47 @@
 php artisan vendor:publish --tag=slogger-laravel
 ```
 
+## Guarantees
+
+### What Is Written
+
+For each enabled watcher, SLogger writes traces with:
+- `trace_id`, `parent_trace_id`, `type`, `status`, `tags`
+- `data` payload (watcher specific)
+- `duration`, `memory`, `cpu`, `logged_at`
+
+Watcher data highlights:
+- `request`: url, method, action, headers/params, response (for JSON responses)
+- `job`: connection, payload, status, exception
+- `event`: listeners, broadcast, optional serialized payload
+- `model`: action, model class, key, changes
+- `mail`: from/to/cc/bcc, subject, queued, mailable/notification
+- `notification`: notifiable, channel, queued, response
+- `cache`: type, key, tags, value
+- `db`: query, bindings, time
+- `http-client`: method, url, request/response
+- `schedule`: command, description, cron, output
+- `dump`, `log`, `gate`: dump/message/ability info
+
+### Masking
+
+Masking is pattern-based and configurable. It is applied to:
+- request headers, params, and response fields (per URL patterns)
+- model changes (per model class and field patterns)
+
+Masked values keep basic types:
+- `bool` -> `false`, `int` -> `0`, `float` -> `0.0`, other types -> masked string
+
+Large JSON responses can be skipped and marked with `__skipped: response_too_large`.
+
+### Storage And Delivery
+
+SLogger does not persist traces locally:
+- `memory` dispatcher stores only in-memory (for tests/dev).
+- `queue` dispatcher batches child traces (default batch size is 5), sends parent traces immediately, sends orphan traces immediately, and flushes on termination.
+
+All delivery happens via the configured dispatcher API client.
+
 ### ENV
 
 ```dotenv
@@ -16,6 +57,8 @@ php artisan vendor:publish --tag=slogger-laravel
 SLOGGER_ENABLED=false
 
 SLOGGER_TOKEN=
+
+SLOGGER_TRACE_ID_PREFIX=
 
 ## slogger.dispatcher
 # one of: queue, memory
@@ -39,20 +82,20 @@ SLOGGER_PROFILING_ENABLED=true
 SLOGGER_REQUESTS_HEADER_PARENT_TRACE_ID_KEY=x-parent-trace-id
 
 ## slogger.watchers
-SLOGGER_LOG_REQUESTS_ENABLED=true
 SLOGGER_LOG_COMMANDS_ENABLED=true
-SLOGGER_LOG_DATABASE_ENABLED=true
-SLOGGER_LOG_LOG_ENABLED=true
-SLOGGER_LOG_SCHEDULE_ENABLED=true
 SLOGGER_LOG_JOBS_ENABLED=true
-SLOGGER_LOG_MODEL_ENABLED=true
-SLOGGER_LOG_GATE_ENABLED=true
-SLOGGER_LOG_EVENT_ENABLED=true
-SLOGGER_LOG_MAIL_ENABLED=true
-SLOGGER_LOG_NOTIFICATION_ENABLED=true
+SLOGGER_LOG_REQUESTS_ENABLED=true
 SLOGGER_LOG_CACHE_ENABLED=true
+SLOGGER_LOG_DATABASE_ENABLED=true
 SLOGGER_LOG_DUMP_ENABLED=true
+SLOGGER_LOG_EVENT_ENABLED=true
+SLOGGER_LOG_GATE_ENABLED=true
 SLOGGER_LOG_HTTP_ENABLED=true
+SLOGGER_LOG_LOG_ENABLED=true
+SLOGGER_LOG_MAIL_ENABLED=true
+SLOGGER_LOG_MODEL_ENABLED=true
+SLOGGER_LOG_NOTIFICATION_ENABLED=true
+SLOGGER_LOG_SCHEDULE_ENABLED=true
 ```
 
 ## Requests (env.SLOGGER_LOG_REQUESTS_ENABLED)
@@ -106,7 +149,7 @@ The queue dispatcher works like the Horizon (master and children processes of qu
 
 .gitignore
 ```gitignore
-storage/slogger-dispatcher-state*
+storage/slogger/*
 ```
 
 ## Profiling (only for an http client)

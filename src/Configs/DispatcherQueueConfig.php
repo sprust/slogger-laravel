@@ -19,16 +19,6 @@ class DispatcherQueueConfig
         return (int) config('slogger.dispatchers.queue.workers_num');
     }
 
-    public function getWorkerTries(): int
-    {
-        return (int) config('slogger.dispatchers.queue.worker_tries');
-    }
-
-    public function getWorkerBackoff(): int
-    {
-        return (int) config('slogger.dispatchers.queue.worker_backoff');
-    }
-
     public function getDefaultApiClient(): string
     {
         return (string) config('slogger.dispatchers.queue.api_clients.default');

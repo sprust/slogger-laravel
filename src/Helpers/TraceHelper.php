@@ -7,19 +7,11 @@ use Illuminate\Support\Str;
 
 class TraceHelper
 {
+    private static ?string $prefix = null;
+
     public static function makeTraceId(): string
     {
-        $prefix = (string) config('slogger.trace_id_prefix');
-
-        if ($prefix === '') {
-            $prefix = Str::slug((string) config('app.name'));
-        }
-
-        if ($prefix === '') {
-            $prefix = 'app';
-        }
-
-        return $prefix . '-' . Str::uuid()->toString();
+        return self::getPrefix() . '-' . Str::uuid()->toString();
     }
 
     public static function calcDuration(Carbon $startedAt): float
@@ -33,5 +25,24 @@ class TraceHelper
     public static function roundDuration(float $duration): float
     {
         return round($duration, 6);
+    }
+
+    private static function getPrefix(): string
+    {
+        if (self::$prefix === null) {
+            $prefix = (string) config('slogger.trace_id_prefix');
+
+            if ($prefix === '') {
+                $prefix = Str::slug((string) config('app.name'));
+            }
+
+            if ($prefix === '') {
+                $prefix = 'app';
+            }
+
+            self::$prefix = $prefix;
+        }
+
+        return self::$prefix;
     }
 }

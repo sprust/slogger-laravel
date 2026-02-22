@@ -24,8 +24,8 @@ readonly class QueueDispatcherProcessor implements DispatcherProcessorInterface
             app(WorkCommand::class)->getName(),
             $config->getConnection(),
             $config->getName(),
-            $config->getWorkerTries(),
-            $config->getWorkerBackoff()
+            120,
+            2
         );
     }
 

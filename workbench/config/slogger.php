@@ -25,6 +25,8 @@ return [
 
     'token' => env('SLOGGER_TOKEN'),
 
+    'trace_id_prefix' => env('SLOGGER_TRACE_ID_PREFIX', ''),
+
     'dispatchers' => [
         'default' => env('SLOGGER_DISPATCHER', 'queue'),
 

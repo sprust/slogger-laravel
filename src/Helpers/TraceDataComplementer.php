@@ -35,7 +35,7 @@ class TraceDataComplementer
         $this->basePathPackages  = base_path('packages' . DIRECTORY_SEPARATOR);
         $this->excludedClasses   = [self::class, static::class];
         $this->excludedFileMasks = $watchersConfig->getDataCompleterExcludedFileMasks();
-        $this->maxDepth          = $watchersConfig->getDataCompleterMaxDepth();
+        $this->maxDepth          = 30;
     }
 
     public function add(string $key, mixed $value): void
