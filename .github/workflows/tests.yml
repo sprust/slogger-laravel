@@ -32,4 +32,5 @@ jobs:
             ${{ runner.os }}-php-${{ matrix.php }}-laravel-${{ matrix.laravel }}-
       - run: composer require "laravel/framework:${{ matrix.laravel }}" --no-update
       - run: composer update --with-all-dependencies --prefer-dist --no-interaction
+      - run: vendor/bin/phpstan analyse
       - run: vendor/bin/phpunit

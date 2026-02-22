@@ -165,14 +165,17 @@ class RequestWatcher implements WatcherInterface
     {
         $url = str_replace($request->root(), '', $request->fullUrl());
 
+        /**
+         * for support for Laravel 10, 12
+         *
+         * @var Route|object|string|null $route
+         */
         $route = $request->route();
 
-        /** @phpstan-ignore-next-line instanceof.alwaysTrue */
         if ($route instanceof Route) {
             $action      = $route->getActionName();
             $middlewares = $route->gatherMiddleware();
         } else {
-            /** @phpstan-ignore-next-line function.alreadyNarrowedType */
             $action      = is_string($route) ? $route : null;
             $middlewares = null;
         }
@@ -203,21 +206,23 @@ class RequestWatcher implements WatcherInterface
      */
     protected function getPostTags(Request $request, Response $response): array
     {
+        /**
+         * for support for Laravel 10, 12
+         *
+         * @var Route|object|string|null $route
+         */
         $route = $request->route();
 
-        /** @phpstan-ignore-next-line booleanNot.alwaysFalse */
         if (!$route) {
             return [];
         }
 
-        /** @phpstan-ignore-next-line function.impossibleType */
         if (is_string($route)) {
             return [
                 $route,
             ];
         }
 
-        /** @phpstan-ignore-next-line instanceof.alwaysTrue */
         if (!$route instanceof Route) {
             return [];
         }

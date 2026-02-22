@@ -66,6 +66,14 @@ cs-fixer-check:
 cs-fixer-fix:
 	"$(PHP_CLI)" ./vendor/bin/php-cs-fixer fix --config php-cs-fixer.dist.php --verbose
 
+check-laravel-all:
+	make set-laravel-10
+	make check
+	make set-laravel-11
+	make check
+	make set-laravel-12
+	make check
+
 set-laravel-10:
 	make composer c="require "laravel/framework:^10" --no-update"
 	make composer c="update --with-all-dependencies --prefer-dist --no-interaction"

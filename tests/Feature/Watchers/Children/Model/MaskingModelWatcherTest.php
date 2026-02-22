@@ -39,6 +39,7 @@ class MaskingModelWatcherTest extends BaseWatcherTestCase
 
         $this->registerWatcher(JobWatcher::class, null);
 
+        /** @var TestModel $model */
         $model = TestModel::query()->create([
             'name'      => 'Initial',
             'api_token' => 'initial-token',

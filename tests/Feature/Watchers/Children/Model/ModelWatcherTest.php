@@ -35,6 +35,7 @@ class ModelWatcherTest extends BaseChildWatcherTestCase
 
     protected function successCallback(): Closure
     {
+        /** @var TestModel $model */
         $model = TestModel::query()->create([
             'name'      => 'Initial',
             'api_token' => 'initial-token',

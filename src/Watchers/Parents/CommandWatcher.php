@@ -38,16 +38,26 @@ class CommandWatcher implements WatcherInterface
         $this->processor->registerEvent(CommandFinished::class, [$this, 'handleCommandFinished']);
     }
 
-    public function handleCommandStarting(CommandStarting $event): void
+    public function handleCommandStarting(?CommandStarting $event): void
     {
-        if (in_array($event->command, $this->exceptedCommands)) {
+        if (in_array($event?->command, $this->exceptedCommands)) {
             return;
         }
 
+        /**
+         * for support for Laravel 10, 12
+         *
+         * @var InputInterface|null $input
+         */
+        $input = $event?->input;
+
         $data = [
-            'command'   => $this->makeCommandView($event->command, $event->input),
-            'arguments' => $event->input->getArguments(),
-            'options'   => $event->input->getOptions(),
+            'command' => $this->makeCommandView(
+                command: $event?->command,
+                input: $input
+            ),
+            'arguments' => $input?->getArguments(),
+            'options'   => $input?->getOptions(),
         ];
 
         $loggedAt = Carbon::now('UTC');
@@ -55,7 +65,10 @@ class CommandWatcher implements WatcherInterface
         $traceId = $this->processor->startAndGetTraceId(
             type: TraceTypeEnum::Command->value,
             tags: [
-                $this->makeCommandView($event->command, $event->input),
+                $this->makeCommandView(
+                    command: $event?->command,
+                    input: $input
+                ),
             ],
             data: $data,
             loggedAt: $loggedAt,
@@ -68,12 +81,12 @@ class CommandWatcher implements WatcherInterface
         ];
     }
 
-    public function handleCommandFinished(CommandFinished $event): void
+    public function handleCommandFinished(?CommandFinished $event): void
     {
         $this->processor->handleWatcher(fn() => $this->onHandleCommandFinished($event));
     }
 
-    protected function onHandleCommandFinished(CommandFinished $event): void
+    protected function onHandleCommandFinished(?CommandFinished $event): void
     {
         $commandData = array_pop($this->commands);
 
@@ -86,16 +99,26 @@ class CommandWatcher implements WatcherInterface
         /** @var Carbon $startedAt */
         $startedAt = $commandData['started_at'];
 
+        /**
+         * for support for Laravel 10, 12
+         *
+         * @var InputInterface|null $input
+         */
+        $input = $event?->input;
+
         $data = [
-            'command'   => $this->makeCommandView($event->command, $event->input),
-            'exit_code' => $event->exitCode,
-            'arguments' => $event->input->getArguments(),
-            'options'   => $event->input->getOptions(),
+            'command' => $this->makeCommandView(
+                command: $event?->command,
+                input: $input
+            ),
+            'exit_code' => $event?->exitCode,
+            'arguments' => $input?->getArguments(),
+            'options'   => $input?->getOptions(),
         ];
 
         $this->processor->stop(
             traceId: $traceId,
-            status: $event->exitCode
+            status: $event?->exitCode
                 ? TraceStatusEnum::Failed->value
                 : TraceStatusEnum::Success->value,
             tags: null,
@@ -105,12 +128,12 @@ class CommandWatcher implements WatcherInterface
         );
     }
 
-    protected function makeCommandView(?string $command, InputInterface $input): string
+    protected function makeCommandView(?string $command, ?InputInterface $input): string
     {
-        $command = $command ?? $input->getArguments()['command'] ?? 'default';
+        $command = $command ?? $input?->getArguments()['command'] ?? 'unknown';
 
         if (!is_string($command)) {
-            return 'default';
+            return 'unknown';
         }
 
         return $command;
