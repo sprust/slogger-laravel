@@ -53,6 +53,7 @@ stan:
 		--memory-limit=1G
 
 check:
+	make code-analyse-cs-fixer-check
 	make stan
 	make test
 
@@ -60,7 +61,7 @@ declare-strict:
 	grep -Lr "declare(strict_types=1);" ./src | grep .php
 
 code-analyse-cs-fixer-check:
-	"$(PHP_CLI)" ./vendor/bin/php-cs-fixer fix --dry-run --diff --verbose
+	"$(PHP_CLI)" ./vendor/bin/php-cs-fixer fix --config php-cs-fixer.dist.php --dry-run --diff --verbose
 
 code-analyse-cs-fixer-fix:
-	"$(PHP_CLI)" ./vendor/bin/php-cs-fixer fix --verbose
+	"$(PHP_CLI)" ./vendor/bin/php-cs-fixer fix --config php-cs-fixer.dist.php --verbose
