@@ -58,3 +58,9 @@ check:
 
 declare-strict:
 	grep -Lr "declare(strict_types=1);" ./src | grep .php
+
+code-analyse-cs-fixer-check:
+	"$(PHP_CLI)" ./vendor/bin/php-cs-fixer fix --dry-run --diff --verbose
+
+code-analyse-cs-fixer-fix:
+	"$(PHP_CLI)" ./vendor/bin/php-cs-fixer fix --verbose
