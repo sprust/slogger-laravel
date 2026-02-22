@@ -128,6 +128,7 @@ return [
                 'queue:work',
                 'queue:listen',
                 'schedule:run',
+                'slogger:test-excepted',
             ],
         ],
 
