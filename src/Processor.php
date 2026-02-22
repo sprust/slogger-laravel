@@ -153,7 +153,7 @@ class Processor
             customParentTraceId: $customParentTraceId,
         );
 
-        $startedAt = Carbon::now();
+        $startedAt = Carbon::now('UTC');
 
         $exception = null;
 

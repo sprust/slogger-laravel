@@ -18,7 +18,7 @@ class TraceHelper
     {
         return self::roundDuration(
             $startedAt->clone()->setTimezone('UTC')
-                ->diffInMicroseconds(Carbon::now()->setTimezone('UTC')) * 0.000001
+                ->diffInMicroseconds(Carbon::now('UTC')) * 0.000001
         );
     }
 
