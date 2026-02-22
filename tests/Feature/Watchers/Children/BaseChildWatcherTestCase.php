@@ -93,7 +93,10 @@ abstract class BaseChildWatcherTestCase extends BaseWatcherTestCase
 
         $reflection = new ReflectionFunction($callback);
 
-        self::assertTrue($reflection->isStatic(), 'Callback must be static');
+        self::assertTrue(
+            $reflection->isStatic(),
+            'Callback must be static'
+        );
 
         return $callback;
     }
