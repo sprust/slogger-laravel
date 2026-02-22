@@ -66,62 +66,6 @@ return [
     ],
 
     'watchers_customizing' => [
-        'requests' => [
-            'header_parent_trace_id_key' => env(
-                'SLOGGER_REQUESTS_HEADER_PARENT_TRACE_ID_KEY',
-                'x-parent-trace-id'
-            ),
-
-            /** url_patterns */
-            'excepted_paths'             => [
-                //
-            ],
-
-            'input' => [
-                /** url_patterns */
-                'full_hiding'        => [
-                    //
-                ],
-                /** url_pattern => keys */
-                'headers_masking'    => [
-                    '*' => [
-                        'authorization',
-                        'cookie',
-                        'x-xsrf-token',
-                    ],
-                ],
-                /** url_pattern => key_patterns */
-                'parameters_masking' => [
-                    '*' => [
-                        '*token*',
-                        '*password*',
-                    ],
-                ],
-            ],
-
-            'output' => [
-                /** url_patterns */
-                'full_hiding'     => [
-                    //
-                ],
-
-                /** url_pattern => keys */
-                'headers_masking' => [
-                    '*' => [
-                        'set-cookie',
-                    ],
-                ],
-
-                /** url_pattern => key_patterns */
-                'fields_masking'  => [
-                    '*' => [
-                        '*token*',
-                        '*password*',
-                    ],
-                ],
-            ],
-        ],
-
         'models' => [
             /** model_class => field_patterns */
             'masks' => [
@@ -145,30 +89,85 @@ return [
         ],
     ],
 
+    'http_parent_trace_id_header_key' => env(
+        'SLOGGER_REQUESTS_HEADER_PARENT_TRACE_ID_KEY',
+        'x-parent-trace-id'
+    ),
+
     'watchers' => [
         [
             'class'   => RequestWatcher::class,
             'enabled' => env('SLOGGER_LOG_REQUESTS_ENABLED', false),
+            'config'  => [
+                /** url_patterns */
+                'excepted_paths'             => [
+                    //
+                ],
+
+                'input' => [
+                    /** url_patterns */
+                    'full_hiding'        => [
+                        //
+                    ],
+                    /** url_pattern => keys */
+                    'headers_masking'    => [
+                        '*' => [
+                            'authorization',
+                            'cookie',
+                            'x-xsrf-token',
+                        ],
+                    ],
+                    /** url_pattern => key_patterns */
+                    'parameters_masking' => [
+                        '*' => [
+                            '*token*',
+                            '*password*',
+                        ],
+                    ],
+                ],
+
+                'output' => [
+                    /** url_patterns */
+                    'full_hiding'     => [
+                        //
+                    ],
+
+                    /** url_pattern => keys */
+                    'headers_masking' => [
+                        '*' => [
+                            'set-cookie',
+                        ],
+                    ],
+
+                    /** url_pattern => key_patterns */
+                    'fields_masking'  => [
+                        '*' => [
+                            '*token*',
+                            '*password*',
+                        ],
+                    ],
+                ],
+            ],
         ],
         [
             'class'   => CommandWatcher::class,
             'enabled' => env('SLOGGER_LOG_COMMANDS_ENABLED', false),
-            'config' => [
+            'config'  => [
                 'excepted' => [
                     'queue:work',
                     'queue:listen',
                     'schedule:run',
                 ],
-            ]
+            ],
         ],
         [
             'class'   => JobWatcher::class,
             'enabled' => env('SLOGGER_LOG_JOBS_ENABLED', false),
-            'config' => [
+            'config'  => [
                 'excepted' => [
                     SendTracesJob::class,
                 ],
-            ]
+            ],
         ],
         [
             'class'   => DatabaseWatcher::class,

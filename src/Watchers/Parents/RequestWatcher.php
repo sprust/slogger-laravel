@@ -13,7 +13,6 @@ use Illuminate\Support\Str;
 use Illuminate\View\View;
 use Psr\Container\ContainerExceptionInterface;
 use Psr\Container\NotFoundExceptionInterface;
-use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\DataResolver;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
@@ -46,16 +45,14 @@ class RequestWatcher implements WatcherInterface
     public function __construct(
         protected readonly Application $app,
         protected readonly Processor $processor,
-        protected readonly WatchersConfig $watchersConfig
     ) {
-        $this->exceptedPaths = $this->watchersConfig->requestsExceptedPaths();
-
-        // TODO: fill at necessity
-        $this->fillMaskers();
+        $this->formatters = new RequestDataFormatters();
     }
 
     public function register(?array $config): void
     {
+        $this->parseConfig($config);
+
         $this->processor->registerEvent(RequestHandling::class, [$this, 'handleRequestHandling']);
         $this->processor->registerEvent(RequestHandled::class, [$this, 'handleRequestHandled']);
     }
@@ -371,47 +368,56 @@ class RequestWatcher implements WatcherInterface
         return array_replace_recursive($request->input(), $files);
     }
 
-    protected function fillMaskers(): void
+    /**
+     * @param array<string, mixed>|null $config
+     */
+    protected function parseConfig(?array $config): void
     {
+        if ($config === null) {
+            return;
+        }
+
+        $this->exceptedPaths = $config['excepted_paths'] ?? [];
+
         /** @var array<string, RequestDataFormatter> $formatterMap */
         $formatterMap = [];
 
-        $inputFullHiding = $this->watchersConfig->requestsInputFullHiding();
+        $inputFullHiding = $config['input']['full_hiding'] ?? [];
 
         foreach ($inputFullHiding as $urlPattern) {
             $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
             $formatterMap[$urlPattern]->setHideAllRequestParameters(true);
         }
 
-        $inputMaskHeadersMasking = $this->watchersConfig->requestsInputMaskHeadersMasking();
+        $inputMaskHeadersMasking = $config['input']['headers_masking'] ?? [];
 
         foreach ($inputMaskHeadersMasking as $urlPattern => $headers) {
             $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
             $formatterMap[$urlPattern]->addRequestHeaders($headers);
         }
 
-        $inputParametersMasking = $this->watchersConfig->requestsInputParametersMasking();
+        $inputParametersMasking = $config['input']['parameters_masking'] ?? [];
 
         foreach ($inputParametersMasking as $urlPattern => $parameters) {
             $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
             $formatterMap[$urlPattern]->addRequestParameters($parameters);
         }
 
-        $outputFullHiding = $this->watchersConfig->requestsOutputFullHiding();
+        $outputFullHiding = $config['output']['full_hiding'] ?? [];
 
         foreach ($outputFullHiding as $urlPattern) {
             $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
             $formatterMap[$urlPattern]->setHideAllResponseData(true);
         }
 
-        $outputHeadersMasking = $this->watchersConfig->requestsOutputHeadersMasking();
+        $outputHeadersMasking = $config['output']['headers_masking'] ?? [];
 
         foreach ($outputHeadersMasking as $urlPattern => $headers) {
             $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
             $formatterMap[$urlPattern]->addResponseHeaders($headers);
         }
 
-        $outputFieldsMasking = $this->watchersConfig->requestsOutputFieldsMasking();
+        $outputFieldsMasking = $config['output']['fields_masking'] ?? [];
 
         foreach ($outputFieldsMasking as $urlPattern => $fields) {
             $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
