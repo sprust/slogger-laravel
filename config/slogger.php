@@ -76,6 +76,17 @@ return [
          */
 
         [
+            'class'   => CommandWatcher::class,
+            'enabled' => env('SLOGGER_LOG_COMMANDS_ENABLED', false),
+            'config'  => [
+                'excepted' => [
+                    'queue:work',
+                    'queue:listen',
+                    'schedule:run',
+                ],
+            ],
+        ],
+        [
             'class'   => RequestWatcher::class,
             'enabled' => env('SLOGGER_LOG_REQUESTS_ENABLED', false),
             'config'  => [
@@ -86,11 +97,11 @@ return [
 
                 'input' => [
                     /** url_patterns */
-                    'full_hiding'        => [
+                    'full_hiding' => [
                         //
                     ],
                     /** url_pattern => keys */
-                    'headers_masking'    => [
+                    'headers_masking' => [
                         '*' => [
                             'authorization',
                             'cookie',
@@ -108,7 +119,7 @@ return [
 
                 'output' => [
                     /** url_patterns */
-                    'full_hiding'     => [
+                    'full_hiding' => [
                         //
                     ],
 
@@ -120,23 +131,12 @@ return [
                     ],
 
                     /** url_pattern => key_patterns */
-                    'fields_masking'  => [
+                    'fields_masking' => [
                         '*' => [
                             '*token*',
                             '*password*',
                         ],
                     ],
-                ],
-            ],
-        ],
-        [
-            'class'   => CommandWatcher::class,
-            'enabled' => env('SLOGGER_LOG_COMMANDS_ENABLED', false),
-            'config'  => [
-                'excepted' => [
-                    'queue:work',
-                    'queue:listen',
-                    'schedule:run',
                 ],
             ],
         ],
@@ -170,13 +170,13 @@ return [
             'class'   => EventWatcher::class,
             'enabled' => env('SLOGGER_LOG_EVENT_ENABLED', false),
             'config'  => [
-                'ignore_events'    => [
+                'ignore_events' => [
                     //
                 ],
                 'serialize_events' => [
                     //
                 ],
-                'can_be_orphan'    => [
+                'can_be_orphan' => [
                     //
                 ],
             ],
