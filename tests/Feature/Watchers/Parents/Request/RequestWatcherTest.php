@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Feature\Watchers\Parents\Request;
+namespace SLoggerLaravel\Tests\Feature\Watchers\Parents\Request;
 
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;

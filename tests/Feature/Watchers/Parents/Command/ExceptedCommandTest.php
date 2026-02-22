@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Feature\Watchers\Parents\Command;
+namespace SLoggerLaravel\Tests\Feature\Watchers\Parents\Command;
 
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Tests\Feature\BaseTestCase;

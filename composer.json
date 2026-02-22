@@ -22,7 +22,6 @@
     "autoload-dev": {
       "psr-4": {
         "SLoggerLaravel\\Tests\\": "tests/",
-        "SLoggerTestEntities\\": "tests/Entities",
         "App\\": "workbench/app/"
       }
     },

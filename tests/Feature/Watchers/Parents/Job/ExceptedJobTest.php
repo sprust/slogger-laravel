@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Feature\Watchers\Parents\Job;
+namespace SLoggerLaravel\Tests\Feature\Watchers\Parents\Job;
 
 use App\Jobs\ExceptedJob;
 use App\Jobs\SuccessJob;

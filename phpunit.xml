@@ -10,6 +10,7 @@
         </testsuite>
     </testsuites>
     <php>
+        <env name="CACHE_STORE" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
         <env name="SLOGGER_ENABLED" value="true"/>
         <env name="SLOGGER_DISPATCHER" value="memory"/>

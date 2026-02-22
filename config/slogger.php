@@ -146,6 +146,10 @@ return [
             ],
         ],
         [
+            'class'   => CacheWatcher::class,
+            'enabled' => env('SLOGGER_LOG_CACHE_ENABLED', false),
+        ],
+        [
             'class'   => DatabaseWatcher::class,
             'enabled' => env('SLOGGER_LOG_DATABASE_ENABLED', false),
         ],
@@ -196,10 +200,6 @@ return [
         [
             'class'   => NotificationWatcher::class,
             'enabled' => env('SLOGGER_LOG_NOTIFICATION_ENABLED', false),
-        ],
-        [
-            'class'   => CacheWatcher::class,
-            'enabled' => env('SLOGGER_LOG_CACHE_ENABLED', false),
         ],
         [
             'class'   => DumpWatcher::class,

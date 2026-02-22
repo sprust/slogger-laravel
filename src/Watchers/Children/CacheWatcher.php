@@ -14,6 +14,7 @@ use SLoggerLaravel\Helpers\DataFormatter;
 use SLoggerLaravel\Processor;
 use SLoggerLaravel\Watchers\WatcherInterface;
 
+// TODO: register all cache event
 readonly class CacheWatcher implements WatcherInterface
 {
     public function __construct(

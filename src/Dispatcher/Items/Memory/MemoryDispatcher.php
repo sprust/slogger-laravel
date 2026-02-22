@@ -35,6 +35,11 @@ class MemoryDispatcher implements TraceDispatcherInterface
         $this->updatingTraces[] = $parameters;
     }
 
+    public function totalCount(): int
+    {
+        return count($this->creatingTraces) + count($this->updatingTraces);
+    }
+
     /**
      * @return list<TraceCreateObject>
      */
