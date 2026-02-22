@@ -71,6 +71,10 @@ return [
     ),
 
     'watchers' => [
+        /**
+         * PARENTS
+         */
+
         [
             'class'   => RequestWatcher::class,
             'enabled' => env('SLOGGER_LOG_REQUESTS_ENABLED', false),
@@ -145,6 +149,11 @@ return [
                 ],
             ],
         ],
+
+        /**
+         * CHILDREN
+         */
+
         [
             'class'   => CacheWatcher::class,
             'enabled' => env('SLOGGER_LOG_CACHE_ENABLED', false),
@@ -154,29 +163,8 @@ return [
             'enabled' => env('SLOGGER_LOG_DATABASE_ENABLED', false),
         ],
         [
-            'class'   => LogWatcher::class,
-            'enabled' => env('SLOGGER_LOG_LOG_ENABLED', false),
-        ],
-        [
-            'class'   => ScheduleWatcher::class,
-            'enabled' => env('SLOGGER_LOG_LOG_ENABLED', false),
-        ],
-        [
-            'class'   => ModelWatcher::class,
-            'enabled' => env('SLOGGER_LOG_MODEL_ENABLED', false),
-            'config'  => [
-                /** model_class => field_patterns */
-                'masks' => [
-                    '*' => [
-                        '*token*',
-                        '*password*',
-                    ],
-                ],
-            ],
-        ],
-        [
-            'class'   => GateWatcher::class,
-            'enabled' => env('SLOGGER_LOG_GATE_ENABLED', false),
+            'class'   => DumpWatcher::class,
+            'enabled' => env('SLOGGER_LOG_DUMP_ENABLED', false),
         ],
         [
             'class'   => EventWatcher::class,
@@ -194,20 +182,41 @@ return [
             ],
         ],
         [
+            'class'   => GateWatcher::class,
+            'enabled' => env('SLOGGER_LOG_GATE_ENABLED', false),
+        ],
+        [
+            'class'   => HttpClientWatcher::class,
+            'enabled' => env('SLOGGER_LOG_HTTP_ENABLED', false),
+        ],
+        [
+            'class'   => LogWatcher::class,
+            'enabled' => env('SLOGGER_LOG_LOG_ENABLED', false),
+        ],
+        [
             'class'   => MailWatcher::class,
             'enabled' => env('SLOGGER_LOG_MAIL_ENABLED', false),
+        ],
+        [
+            'class'   => ModelWatcher::class,
+            'enabled' => env('SLOGGER_LOG_MODEL_ENABLED', false),
+            'config'  => [
+                /** model_class => field_patterns */
+                'masks' => [
+                    '*' => [
+                        '*token*',
+                        '*password*',
+                    ],
+                ],
+            ],
         ],
         [
             'class'   => NotificationWatcher::class,
             'enabled' => env('SLOGGER_LOG_NOTIFICATION_ENABLED', false),
         ],
         [
-            'class'   => DumpWatcher::class,
-            'enabled' => env('SLOGGER_LOG_DUMP_ENABLED', false),
-        ],
-        [
-            'class'   => HttpClientWatcher::class,
-            'enabled' => env('SLOGGER_LOG_HTTP_ENABLED', false),
+            'class'   => ScheduleWatcher::class,
+            'enabled' => env('SLOGGER_LOG_LOG_ENABLED', false),
         ],
     ],
 ];
