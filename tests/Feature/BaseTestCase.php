@@ -13,6 +13,12 @@ abstract class BaseTestCase extends TestCase
 {
     use WithWorkbench;
 
+    protected function getEnvironmentSetUp($app): void
+    {
+        $app['config']->set('database.default', 'sqlite');
+        $app['config']->set('database.connections.sqlite.database', ':memory:');
+    }
+
     protected function getPackageProviders($app): array
     {
         return [
