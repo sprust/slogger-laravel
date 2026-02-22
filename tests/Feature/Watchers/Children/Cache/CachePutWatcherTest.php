@@ -11,6 +11,6 @@ class CachePutWatcherTest extends BaseChildCacheWatcherTestCase
 {
     protected function successCallback(): Closure
     {
-        return static fn () => Cache::put('test', 'test');
+        return static fn() => Cache::put('test', 'test');
     }
 }

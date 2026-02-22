@@ -11,6 +11,6 @@ class CacheHasWatcherTest extends BaseChildCacheWatcherTestCase
 {
     protected function successCallback(): Closure
     {
-        return static fn () => Cache::has('test');
+        return static fn() => Cache::has('test');
     }
 }

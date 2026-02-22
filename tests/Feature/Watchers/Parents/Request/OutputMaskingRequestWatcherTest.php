@@ -38,8 +38,8 @@ class OutputMaskingRequestWatcherTest extends BaseWatcherTestCase
         $trace = $this->getRequestUpdatingTrace();
 
         $responseData = $trace->data['response'] ?? [];
-        $headers = $responseData['headers'] ?? [];
-        $data = $responseData['data'] ?? [];
+        $headers      = $responseData['headers'] ?? [];
+        $data         = $responseData['data'] ?? [];
 
         self::assertNotSame('session=response-cookie', $headers['set-cookie'] ?? null);
         self::assertNotSame('response-token', $data['api_token'] ?? null);

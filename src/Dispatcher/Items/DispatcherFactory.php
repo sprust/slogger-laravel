@@ -20,9 +20,9 @@ readonly class DispatcherFactory
     public function create(string $dispatcher): TraceDispatcherInterface
     {
         return match ($dispatcher) {
-            'queue' => $this->app->make(QueueDispatcher::class),
+            'queue'  => $this->app->make(QueueDispatcher::class),
             'memory' => $this->app->make(MemoryDispatcher::class),
-            default => throw new RuntimeException("Unknown dispatcher: $dispatcher"),
+            default  => throw new RuntimeException("Unknown dispatcher: $dispatcher"),
         };
     }
 }

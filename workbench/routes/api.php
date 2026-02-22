@@ -12,20 +12,21 @@ Route::prefix('no-slogger')
 Route::group(
     [
         'middleware' => [HttpMiddleware::class],
-        'prefix' => 'slogger',
-        'as' => 'slogger.'
+        'prefix'     => 'slogger',
+        'as'         => 'slogger.',
     ],
     function () {
         Route::get('/success', function () {
             event(new NestedEvent());
+
             return response()->json(['ok' => true]);
         })->name('success');
 
         Route::get('/sensitive', function () {
             return response()
                 ->json([
-                    'ok' => true,
-                    'api_token' => 'response-token',
+                    'ok'            => true,
+                    'api_token'     => 'response-token',
                     'user_password' => 'response-password',
                 ])
                 ->header('set-cookie', 'session=response-cookie');

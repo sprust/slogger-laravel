@@ -24,7 +24,6 @@ class StartDispatcherCommand extends Command
      */
     protected $description = 'Start dispatcher';
 
-
     /**
      * Execute the console command.
      *

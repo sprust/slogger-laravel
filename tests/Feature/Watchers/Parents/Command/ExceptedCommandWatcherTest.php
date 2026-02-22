@@ -16,7 +16,7 @@ class ExceptedCommandWatcherTest extends BaseWatcherTestCase
             watcherClass: CommandWatcher::class,
             config: [
                 'excepted' => [
-                    'slogger:test-excepted'
+                    'slogger:test-excepted',
                 ],
             ]
         );

@@ -11,6 +11,6 @@ class CachePullWatcherTest extends BaseChildCacheWatcherTestCase
 {
     protected function successCallback(): Closure
     {
-        return static fn () => Cache::pull('test');
+        return static fn() => Cache::pull('test');
     }
 }

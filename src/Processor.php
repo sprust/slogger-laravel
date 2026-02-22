@@ -3,7 +3,6 @@
 namespace SLoggerLaravel;
 
 use Closure;
-use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\Carbon;
@@ -57,7 +56,7 @@ class Processor
 
     /**
      * @param class-string<WatcherInterface> $watcherClass
-     * @param array<string, mixed>|null           $config
+     * @param array<string, mixed>|null      $config
      */
     public function registerWatcher(string $watcherClass, ?array $config): void
     {

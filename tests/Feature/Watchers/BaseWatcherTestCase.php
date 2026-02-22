@@ -29,7 +29,7 @@ abstract class BaseWatcherTestCase extends BaseTestCase
 
         assert($this->app !== null);
 
-        $this->processor = $this->app->make(Processor::class);
+        $this->processor  = $this->app->make(Processor::class);
         $this->dispatcher = $this->app->make(MemoryDispatcher::class);
 
         $this->dispatcher->flush();
@@ -37,7 +37,7 @@ abstract class BaseWatcherTestCase extends BaseTestCase
 
     /**
      * @param class-string<WatcherInterface> $watcherClass
-     * @param array<string, mixed>|null $config
+     * @param array<string, mixed>|null      $config
      */
     protected function registerWatcher(string $watcherClass, ?array $config): void
     {
@@ -46,7 +46,7 @@ abstract class BaseWatcherTestCase extends BaseTestCase
 
     protected function artisanCall(string $command): int
     {
-        $input = new ArrayInput(['command' => $command]);
+        $input  = new ArrayInput(['command' => $command]);
         $output = new BufferedOutput();
 
         event(

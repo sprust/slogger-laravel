@@ -9,7 +9,7 @@ use SLoggerLaravel\Helpers\MaskHelper;
 class RequestDataFormatter
 {
     /**
-     * @var string[] $urlPatterns
+     * @var string[]
      */
     protected array $urlPatterns;
 
@@ -175,11 +175,15 @@ class RequestDataFormatter
         return $this->hideAllResponseData;
     }
 
+    public function isHideAllRequestParameters(): bool
+    {
+        return $this->hideAllRequestParameters;
+    }
+
     protected function is(string $url): bool
     {
         return Str::is($this->urlPatterns, trim($url, '/'));
     }
-
 
     /**
      * @param array<string, mixed> $headers
@@ -191,10 +195,5 @@ class RequestDataFormatter
         return collect($headers)
             ->map(fn($header) => implode(', ', (array) $header))
             ->all();
-    }
-
-    public function isHideAllRequestParameters(): bool
-    {
-        return $this->hideAllRequestParameters;
     }
 }

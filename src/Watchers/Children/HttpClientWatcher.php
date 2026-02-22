@@ -53,6 +53,34 @@ class HttpClientWatcher implements WatcherInterface
         return $requestResult ?: $request;
     }
 
+    /**
+     * @param array<string, mixed> $options
+     */
+    final public function handleResponse(
+        RequestInterface $request,
+        array $options,
+        ResponseInterface $response,
+        RequestDataFormatters $formatters
+    ): void {
+        $this->processor->handleWatcher(
+            function () use ($request, $options, $response, $formatters) {
+                $this->onHandleResponse($request, $options, $response, $formatters);
+            }
+        );
+    }
+
+    final public function handleInvalidResponse(
+        RequestInterface $request,
+        Throwable $exception,
+        RequestDataFormatters $formatters
+    ): void {
+        $this->processor->handleWatcher(
+            function () use ($request, $exception, $formatters) {
+                $this->onHandleInvalidResponse($request, $exception, $formatters);
+            }
+        );
+    }
+
     protected function onHandleRequest(RequestInterface $request): RequestInterface
     {
         if (!$this->isSubscribeRequest($request)) {
@@ -86,22 +114,6 @@ class HttpClientWatcher implements WatcherInterface
         }
 
         return $request;
-    }
-
-    /**
-     * @param array<string, mixed> $options
-     */
-    final public function handleResponse(
-        RequestInterface $request,
-        array $options,
-        ResponseInterface $response,
-        RequestDataFormatters $formatters
-    ): void {
-        $this->processor->handleWatcher(
-            function () use ($request, $options, $response, $formatters) {
-                $this->onHandleResponse($request, $options, $response, $formatters);
-            }
-        );
     }
 
     /**
@@ -152,18 +164,6 @@ class HttpClientWatcher implements WatcherInterface
             ],
             duration: TraceHelper::calcDuration($startedAt),
             parentLoggedAt: $startedAt,
-        );
-    }
-
-    final public function handleInvalidResponse(
-        RequestInterface $request,
-        Throwable $exception,
-        RequestDataFormatters $formatters
-    ): void {
-        $this->processor->handleWatcher(
-            function () use ($request, $exception, $formatters) {
-                $this->onHandleInvalidResponse($request, $exception, $formatters);
-            }
         );
     }
 

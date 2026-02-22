@@ -8,8 +8,6 @@ use Throwable;
 class DataFormatter
 {
     /**
-     * @param Throwable $exception
-     *
      * @return array{
      *     message: string,
      *     exception: string,

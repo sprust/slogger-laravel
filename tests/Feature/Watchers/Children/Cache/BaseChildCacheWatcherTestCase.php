@@ -11,7 +11,6 @@ use SLoggerLaravel\Watchers\Children\CacheWatcher;
 
 abstract class BaseChildCacheWatcherTestCase extends BaseChildWatcherTestCase
 {
-
     protected function getTraceType(): string
     {
         return 'cache';

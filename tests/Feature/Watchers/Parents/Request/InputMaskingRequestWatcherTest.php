@@ -36,19 +36,19 @@ class InputMaskingRequestWatcherTest extends BaseWatcherTestCase
 
         $this->withHeaders([
             'authorization' => 'Bearer super-secret-token',
-            'cookie' => 'session=abc123',
-            'x-xsrf-token' => 'xsrf-secret',
+            'cookie'        => 'session=abc123',
+            'x-xsrf-token'  => 'xsrf-secret',
         ])->getJson(route('slogger.success', [
             'access_token' => 'request-token',
-            'password' => 'request-password',
-            'safe' => 'safe-value',
+            'password'     => 'request-password',
+            'safe'         => 'safe-value',
         ]))->assertOk();
 
         $trace = $this->getRequestUpdatingTrace();
 
         $requestData = $trace->data['request'] ?? [];
-        $headers = $requestData['headers'] ?? [];
-        $parameters = $requestData['parameters'] ?? [];
+        $headers     = $requestData['headers'] ?? [];
+        $parameters  = $requestData['parameters'] ?? [];
 
         self::assertNotSame('Bearer super-secret-token', $headers['authorization'] ?? null);
         self::assertNotSame('session=abc123', $headers['cookie'] ?? null);

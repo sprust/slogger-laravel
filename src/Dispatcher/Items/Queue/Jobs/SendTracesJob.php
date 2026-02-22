@@ -20,7 +20,7 @@ class SendTracesJob implements ShouldQueue
     use InteractsWithQueue;
     use Queueable;
 
-    public int $tries = 120;
+    public int $tries   = 120;
     public int $backoff = 1;
 
     public function __construct(private readonly TracesObject $traces)

@@ -25,9 +25,9 @@ readonly class ApiClientFactory
     public function create(string $apiClientName): ApiClientInterface
     {
         return match ($apiClientName) {
-            'http' => $this->createHttp(),
+            'http'   => $this->createHttp(),
             'socket' => $this->createSocket(),
-            default => throw new RuntimeException("Unknown api client [$apiClientName]"),
+            default  => throw new RuntimeException("Unknown api client [$apiClientName]"),
         };
     }
 

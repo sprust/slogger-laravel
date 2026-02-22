@@ -7,7 +7,7 @@ use Closure;
 class DataResolver
 {
     /**
-     * @var array<string, mixed>|null $data
+     * @var array<string, mixed>|null
      */
     private ?array $data = null;
 

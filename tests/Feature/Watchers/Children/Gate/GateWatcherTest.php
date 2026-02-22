@@ -35,7 +35,7 @@ class GateWatcherTest extends BaseChildWatcherTestCase
         };
     }
 
-    protected function assertSuccess(TraceCreateObject $creatingTrace, TraceUpdateObject $updatingTrace,): void
+    protected function assertSuccess(TraceCreateObject $creatingTrace, TraceUpdateObject $updatingTrace): void
     {
         // no action
     }

@@ -32,9 +32,9 @@ class GateWatcher implements WatcherInterface
         $result = $this->prepareResult($event->result);
 
         $data = [
-            'ability' => $event->ability,
-            'result' => $result,
-            'user_id' => $event->user?->getAuthIdentifier(),
+            'ability'   => $event->ability,
+            'result'    => $result,
+            'user_id'   => $event->user?->getAuthIdentifier(),
             'arguments' => $this->prepareArguments($event->arguments),
         ];
 
