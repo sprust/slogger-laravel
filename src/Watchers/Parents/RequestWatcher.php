@@ -82,9 +82,9 @@ class RequestWatcher implements WatcherInterface
             $startedAt = $this->app->get(Kernel::class)->requestStartedAt();
         }
 
-        $startedAt = $startedAt ?? now('UTC');
+        $startedAt = $startedAt ?? Carbon::now('UTC');
 
-        $loggedAt = now();
+        $loggedAt = Carbon::now();
 
         $traceId = $this->processor->startAndGetTraceId(
             type: TraceTypeEnum::Request->value,
