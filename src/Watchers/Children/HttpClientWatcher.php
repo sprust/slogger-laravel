@@ -64,7 +64,12 @@ class HttpClientWatcher implements WatcherInterface
     ): void {
         $this->processor->handleWatcher(
             function () use ($request, $options, $response, $formatters) {
-                $this->onHandleResponse($request, $options, $response, $formatters);
+                $this->onHandleResponse(
+                    request: $request,
+                    options: $options,
+                    response: $response,
+                    formatters: $formatters
+                );
             }
         );
     }
@@ -76,7 +81,11 @@ class HttpClientWatcher implements WatcherInterface
     ): void {
         $this->processor->handleWatcher(
             function () use ($request, $exception, $formatters) {
-                $this->onHandleInvalidResponse($request, $exception, $formatters);
+                $this->onHandleInvalidResponse(
+                    request: $request,
+                    exception: $exception,
+                    formatters: $formatters
+                );
             }
         );
     }
