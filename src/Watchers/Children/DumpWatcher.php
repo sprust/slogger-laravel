@@ -8,6 +8,7 @@ use SLoggerLaravel\Processor;
 use SLoggerLaravel\Watchers\WatcherInterface;
 use Symfony\Component\VarDumper\VarDumper;
 
+//TODO: refactor
 class DumpWatcher implements WatcherInterface
 {
     /**
