@@ -24,7 +24,7 @@ class LogTest extends BaseChildrenTestCase
 
     protected function successCallback(): Closure
     {
-        return fn() => logger()->info('test');
+        return static fn() => logger()->info('test');
     }
 
     protected function assertSuccess(

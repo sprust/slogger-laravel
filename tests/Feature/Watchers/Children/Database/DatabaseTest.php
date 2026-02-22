@@ -25,7 +25,7 @@ class DatabaseTest extends BaseChildrenTestCase
 
     protected function successCallback(): Closure
     {
-        return fn() => event(
+        return static fn() => event(
             DB::statement('SELECT 1')
         );
     }

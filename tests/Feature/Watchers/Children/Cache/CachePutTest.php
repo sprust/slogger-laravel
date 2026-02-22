@@ -11,6 +11,6 @@ class CachePutTest extends BaseCacheTestCase
 {
     protected function successCallback(): Closure
     {
-        return fn () => Cache::put('test', 'test');
+        return static fn () => Cache::put('test', 'test');
     }
 }

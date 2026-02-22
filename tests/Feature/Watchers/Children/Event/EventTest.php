@@ -25,7 +25,7 @@ class EventTest extends BaseChildrenTestCase
 
     protected function successCallback(): Closure
     {
-        return fn() => event(new SuccessEvent());
+        return static fn() => event(new SuccessEvent());
     }
 
     protected function assertSuccess(

@@ -12,6 +12,6 @@ class CacheForeverTest extends BaseCacheTestCase
 {
     protected function successCallback(): Closure
     {
-        return fn () => Cache::forever('test', 'test');
+        return static fn () => Cache::forever('test', 'test');
     }
 }

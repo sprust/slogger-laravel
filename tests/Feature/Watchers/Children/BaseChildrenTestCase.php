@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace SLoggerLaravel\Tests\Feature\Watchers\Children;
 
 use Closure;
+use ReflectionException;
+use ReflectionFunction;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
@@ -35,9 +37,12 @@ abstract class BaseChildrenTestCase extends BaseTestCase
         $this->registerWatcher($this->getWatcherClass(), null);
     }
 
+    /**
+     * @throws ReflectionException
+     */
     public function testNoParent(): void
     {
-        $this->successCallback()();
+        $this->getSuccessCallback()();
 
         $creating = $this->dispatcher->findCreating(
             type: $this->getTraceType(),
@@ -51,12 +56,15 @@ abstract class BaseChildrenTestCase extends BaseTestCase
         );
     }
 
+    /**
+     * @throws ReflectionException
+     */
     public function testParentIsJob(): void
     {
         $this->registerWatcher(JobWatcher::class, null);
 
         dispatch(
-            $this->successCallback()
+            $this->getSuccessCallback()
         );
 
         self::assertEquals(
@@ -74,5 +82,19 @@ abstract class BaseChildrenTestCase extends BaseTestCase
             1,
             $creating
         );
+    }
+
+    /**
+     * @throws ReflectionException
+     */
+    protected function getSuccessCallback(): Closure
+    {
+        $callback = $this->successCallback();
+
+        $reflection = new ReflectionFunction($callback);
+
+        self::assertTrue($reflection->isStatic(), 'Callback must be static');
+
+        return $callback;
     }
 }
