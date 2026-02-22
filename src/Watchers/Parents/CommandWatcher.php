@@ -5,7 +5,6 @@ namespace SLoggerLaravel\Watchers\Parents;
 use Illuminate\Console\Events\CommandFinished;
 use Illuminate\Console\Events\CommandStarting;
 use Illuminate\Support\Carbon;
-use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Helpers\TraceHelper;
@@ -26,13 +25,15 @@ class CommandWatcher implements WatcherInterface
 
     public function __construct(
         protected readonly Processor $processor,
-        WatchersConfig $watchersConfig
     ) {
-        $this->exceptedCommands = $watchersConfig->commandsExcepted();
     }
 
     public function register(?array $config): void
     {
+        if ($config !== null) {
+            $this->exceptedCommands = $config['excepted'] ?? [];
+        }
+
         $this->processor->registerEvent(CommandStarting::class, [$this, 'handleCommandStarting']);
         $this->processor->registerEvent(CommandFinished::class, [$this, 'handleCommandFinished']);
     }

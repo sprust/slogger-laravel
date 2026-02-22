@@ -12,7 +12,14 @@ class ExceptedCommandTest extends BaseTestCase
 {
     public function testExceptedCommandDoesNotCreateTrace(): void
     {
-        $this->registerWatcher(CommandWatcher::class);
+        $this->registerWatcher(
+            watcherClass: CommandWatcher::class,
+            config: [
+                'excepted' => [
+                    'slogger:test-excepted'
+                ],
+            ]
+        );
 
         $exitCode = $this->artisanCall('slogger:test-success');
         self::assertSame(0, $exitCode);

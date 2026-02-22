@@ -16,7 +16,14 @@ class ExceptedJobTest extends BaseTestCase
     {
         parent::setUp();
 
-        $this->registerWatcher(JobWatcher::class);
+        $this->registerWatcher(
+            watcherClass: JobWatcher::class,
+            config: [
+                'excepted' => [
+                    ExceptedJob::class,
+                ],
+            ]
+        );
     }
 
     public function test(): void

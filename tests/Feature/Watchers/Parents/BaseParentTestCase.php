@@ -47,7 +47,7 @@ abstract class BaseParentTestCase extends BaseTestCase
     {
         parent::setUp();
 
-        $this->registerWatcher($this->getWatcherClass());
+        $this->registerWatcher($this->getWatcherClass(), null);
     }
 
     public function testSuccess(): void
@@ -118,7 +118,7 @@ abstract class BaseParentTestCase extends BaseTestCase
 
     public function testWithNestedEvent(): void
     {
-        $this->registerWatcher(EventWatcher::class);
+        $this->registerWatcher(EventWatcher::class, null);
 
         $this->runWithNestedEvent();
 

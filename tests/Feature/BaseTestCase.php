@@ -51,10 +51,11 @@ abstract class BaseTestCase extends TestCase
 
     /**
      * @param class-string<WatcherInterface> $watcherClass
+     * @param array<string, mixed>|null $config
      */
-    protected function registerWatcher(string $watcherClass): void
+    protected function registerWatcher(string $watcherClass, ?array $config): void
     {
-        $this->processor->registerWatcher($watcherClass, null);
+        $this->processor->registerWatcher($watcherClass, $config);
     }
 
     protected function artisanCall(string $command): int

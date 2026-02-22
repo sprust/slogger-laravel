@@ -32,13 +32,15 @@ class JobWatcher implements WatcherInterface
     public function __construct(
         protected readonly Processor $processor,
         protected readonly TraceIdContainer $traceIdContainer,
-        WatchersConfig $watchersConfig
     ) {
-        $this->exceptedJobs = $watchersConfig->jobsExcepted();
     }
 
     public function register(?array $config): void
     {
+        if ($config !== null) {
+            $this->exceptedJobs = $config['excepted'] ?? [];
+        }
+
         Queue::createPayloadUsing(
             function () {
                 return [

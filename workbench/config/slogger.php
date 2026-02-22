@@ -1,6 +1,5 @@
 <?php
 
-use App\Jobs\ExceptedJob;
 use SLoggerLaravel\Dispatcher\Items\Queue\Jobs\SendTracesJob;
 use SLoggerLaravel\Events\WatcherErrorEvent;
 use SLoggerLaravel\Listeners\WatcherErrorListener;
@@ -123,22 +122,6 @@ return [
             ],
         ],
 
-        'commands' => [
-            'excepted' => [
-                'queue:work',
-                'queue:listen',
-                'schedule:run',
-                'slogger:test-excepted',
-            ],
-        ],
-
-        'jobs' => [
-            'excepted' => [
-                SendTracesJob::class,
-                ExceptedJob::class,
-            ],
-        ],
-
         'models' => [
             /** model_class => field_patterns */
             'masks' => [
@@ -170,16 +153,20 @@ return [
         [
             'class'   => CommandWatcher::class,
             'enabled' => env('SLOGGER_LOG_COMMANDS_ENABLED', false),
+            'config' => [
+                'excepted' => [
+                    'queue:work',
+                    'queue:listen',
+                    'schedule:run',
+                ],
+            ]
         ],
         [
             'class'   => JobWatcher::class,
             'enabled' => env('SLOGGER_LOG_JOBS_ENABLED', false),
             'config' => [
                 'excepted' => [
-                    'queue:work',
-                    'queue:listen',
-                    'schedule:run',
-                    'slogger:test-excepted',
+                    SendTracesJob::class,
                 ],
             ]
         ],
