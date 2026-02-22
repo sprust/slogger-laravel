@@ -151,6 +151,8 @@ class Connection
                 }
 
                 if ((time() - $timeout) < $this->timeoutSeconds) {
+                    usleep(5000);
+
                     continue;
                 }
 
@@ -196,6 +198,8 @@ class Connection
                 }
 
                 if ((time() - $timeout) < $this->timeoutSeconds) {
+                    usleep(5000);
+
                     continue;
                 }
 
@@ -234,6 +238,8 @@ class Connection
                 }
 
                 if ((time() - $timeout) < $this->timeoutSeconds) {
+                    usleep(5000);
+
                     continue;
                 }
 

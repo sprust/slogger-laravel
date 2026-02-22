@@ -43,6 +43,17 @@ class QueueDispatcher implements TraceDispatcherInterface
             return;
         }
 
+        if ($parameters->parentTraceId === null) {
+            dispatch(
+                new SendTracesJob(
+                    (new TracesObject())
+                        ->addCreating($parameters)
+                )
+            );
+
+            return;
+        }
+
         $this->traces->addCreating($parameters);
 
         $this->dispatchAndClear($this->maxBatchSize);

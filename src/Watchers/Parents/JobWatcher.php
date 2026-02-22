@@ -152,10 +152,10 @@ class JobWatcher implements WatcherInterface
         $startedAt = $jobData['started_at'];
 
         $data = [
-            'connectionName' => $event->connectionName,
-            'payload'        => $event->job->payload(),
-            'status'         => 'failed',
-            'exception'      => DataFormatter::exception($event->exception),
+            'connection_name' => $event->connectionName,
+            'payload'         => $event->job->payload(),
+            'status'          => 'failed',
+            'exception'       => DataFormatter::exception($event->exception),
         ];
 
         $this->processor->stop(
@@ -192,9 +192,9 @@ class JobWatcher implements WatcherInterface
         $startedAt = $jobData['started_at'];
 
         $data = [
-            'connectionName' => $event->connectionName,
-            'payload'        => $event->job->payload(),
-            'status'         => 'released_after_exception',
+            'connection_name' => $event->connectionName,
+            'payload'         => $event->job->payload(),
+            'status'          => 'released_after_exception',
         ];
 
         $this->processor->stop(

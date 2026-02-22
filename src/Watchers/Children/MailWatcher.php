@@ -46,7 +46,9 @@ class MailWatcher implements WatcherInterface
 
     protected function getMailable(MessageSent $event): string
     {
-        return $event->data['__laravel_notification'] ?? '';
+        return $event->data['__laravel_mailable']
+            ?? $event->data['__laravel_notification']
+            ?? '';
     }
 
     protected function getQueuedStatus(MessageSent $event): bool

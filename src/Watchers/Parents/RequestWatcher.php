@@ -7,6 +7,7 @@ use Illuminate\Foundation\Http\Events\RequestHandled;
 use Illuminate\Foundation\Http\Kernel;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response as IlluminateResponse;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Routing\Route;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
@@ -135,7 +136,7 @@ class RequestWatcher implements WatcherInterface
                 'headers'    => $this->prepareRequestHeaders($request),
                 'parameters' => $this->prepareRequestParameters($request),
             ],
-            'response'  => [
+            'response' => [
                 'status'  => $response->getStatusCode(),
                 'headers' => $this->prepareResponseHeaders($request, $response),
                 'data'    => $this->prepareResponseData($request, $response),
@@ -359,6 +360,12 @@ class RequestWatcher implements WatcherInterface
         $files = $request->files->all();
 
         array_walk_recursive($files, function (&$file) {
+            if (!$file instanceof UploadedFile) {
+                $file = null;
+
+                return;
+            }
+
             $file = [
                 'name' => $file->getClientOriginalName(),
                 'size' => $file->isFile() ? ($file->getSize() / 1000) . 'KB' : '0',
