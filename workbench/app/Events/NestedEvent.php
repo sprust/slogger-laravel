@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace SLoggerTestEntities\Events;
+namespace App\Events;
 
 readonly class NestedEvent
 {

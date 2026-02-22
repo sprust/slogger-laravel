@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
+use App\Events\NestedEvent;
 use Illuminate\Console\Command;
-use SLoggerTestEntities\Events\NestedEvent;
 
 class SloggerTestNestedEventCommand extends Command
 {

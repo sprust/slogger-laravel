@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace SLoggerLaravel\Tests\Feature\Watchers\Parents\Job;
 
+use App\Events\NestedEvent;
 use RuntimeException;
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
-use SLoggerTestEntities\Events\NestedEvent;
 use Throwable;
 
 class ClosureJobWatcherTest extends BaseJobWatcherTestCase

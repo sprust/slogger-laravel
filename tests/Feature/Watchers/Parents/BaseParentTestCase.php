@@ -4,13 +4,13 @@ declare(strict_types=1);
 
 namespace SLoggerLaravel\Tests\Feature\Watchers\Parents;
 
+use App\Events\NestedEvent;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
 use SLoggerLaravel\Tests\Feature\BaseTestCase;
 use SLoggerLaravel\Watchers\Children\EventWatcher;
 use SLoggerLaravel\Watchers\WatcherInterface;
-use SLoggerTestEntities\Events\NestedEvent;
 
 abstract class BaseParentTestCase extends BaseTestCase
 {

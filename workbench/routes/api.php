@@ -1,8 +1,8 @@
 <?php
 
+use App\Events\NestedEvent;
 use Illuminate\Support\Facades\Route;
 use SLoggerLaravel\Middleware\HttpMiddleware;
-use SLoggerTestEntities\Events\NestedEvent;
 
 Route::prefix('no-slogger')
     ->as('no-slogger.')

@@ -15,7 +15,11 @@ class WorkbenchServiceProvider extends ServiceProvider
 {
     public function boot(): void
     {
-        Route::group([], realpath(__DIR__ . '/../../routes/api.php'));
+        $routes = realpath(__DIR__ . '/../../routes/api.php');
+
+        assert($routes !== false);
+
+        Route::group([], $routes);
 
         $this->commands([
             SloggerTestSuccessCommand::class,

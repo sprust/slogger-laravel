@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace Feature\Watchers\Parents\Job;
 
+use App\Jobs\ExceptedJob;
+use App\Jobs\SuccessJob;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Tests\Feature\BaseTestCase;
 use SLoggerLaravel\Watchers\Parents\JobWatcher;
-use SLoggerTestEntities\Jobs\ExceptedJob;
-use SLoggerTestEntities\Jobs\SuccessJob;
 
 class ExceptedJobTest extends BaseTestCase
 {

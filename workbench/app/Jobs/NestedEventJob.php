@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace SLoggerTestEntities\Jobs;
+namespace App\Jobs;
 
+use App\Events\NestedEvent;
 use Illuminate\Contracts\Queue\ShouldQueue;
-use SLoggerTestEntities\Events\NestedEvent;
 
 readonly class NestedEventJob implements ShouldQueue
 {

@@ -1,5 +1,6 @@
 <?php
 
+use App\Jobs\ExceptedJob;
 use SLoggerLaravel\Dispatcher\Items\Queue\Jobs\SendTracesJob;
 use SLoggerLaravel\Events\WatcherErrorEvent;
 use SLoggerLaravel\Listeners\WatcherErrorListener;
@@ -17,7 +18,6 @@ use SLoggerLaravel\Watchers\Children\ScheduleWatcher;
 use SLoggerLaravel\Watchers\Parents\CommandWatcher;
 use SLoggerLaravel\Watchers\Parents\JobWatcher;
 use SLoggerLaravel\Watchers\Parents\RequestWatcher;
-use SLoggerTestEntities\Jobs\ExceptedJob;
 
 $defaultQueueConnection = env('QUEUE_CONNECTION');
 

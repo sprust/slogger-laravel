@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace SLoggerLaravel\Tests\Feature\Watchers\Parents\Job;
 
+use App\Jobs\FailedJob;
+use App\Jobs\NestedEventJob;
+use App\Jobs\SuccessJob;
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
-use SLoggerTestEntities\Jobs\FailedJob;
-use SLoggerTestEntities\Jobs\NestedEventJob;
-use SLoggerTestEntities\Jobs\SuccessJob;
 use Throwable;
 
 class ClassJobWatcherTest extends BaseJobWatcherTestCase
