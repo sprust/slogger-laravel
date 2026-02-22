@@ -4,13 +4,13 @@ declare(strict_types=1);
 
 namespace SLoggerLaravel\Tests\Feature\Watchers\Parents\Command;
 
+use SLoggerLaravel\Tests\Feature\Watchers\BaseWatcherTestCase;
 use SLoggerLaravel\Enums\TraceStatusEnum;
-use SLoggerLaravel\Tests\Feature\BaseTestCase;
 use SLoggerLaravel\Watchers\Parents\CommandWatcher;
 
-class ExceptedCommandTest extends BaseTestCase
+class ExceptedCommandWatcherTest extends BaseWatcherTestCase
 {
-    public function testExceptedCommandDoesNotCreateTrace(): void
+    public function test(): void
     {
         $this->registerWatcher(
             watcherClass: CommandWatcher::class,

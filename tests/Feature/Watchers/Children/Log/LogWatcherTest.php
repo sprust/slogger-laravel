@@ -2,30 +2,29 @@
 
 declare(strict_types=1);
 
-namespace SLoggerLaravel\Tests\Feature\Watchers\Children\Event;
+namespace SLoggerLaravel\Tests\Feature\Watchers\Children\Log;
 
-use App\Events\SuccessEvent;
 use Closure;
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
-use SLoggerLaravel\Tests\Feature\Watchers\Children\BaseChildTestCase;
-use SLoggerLaravel\Watchers\Children\EventWatcher;
+use SLoggerLaravel\Tests\Feature\Watchers\Children\BaseChildWatcherTestCase;
+use SLoggerLaravel\Watchers\Children\LogWatcher;
 
-class ChildEventTest extends BaseChildTestCase
+class LogWatcherTest extends BaseChildWatcherTestCase
 {
     protected function getTraceType(): string
     {
-        return 'event';
+        return 'log';
     }
 
     protected function getWatcherClass(): string
     {
-        return EventWatcher::class;
+        return LogWatcher::class;
     }
 
     protected function successCallback(): Closure
     {
-        return static fn() => event(new SuccessEvent());
+        return static fn() => logger()->info('test');
     }
 
     protected function assertSuccess(

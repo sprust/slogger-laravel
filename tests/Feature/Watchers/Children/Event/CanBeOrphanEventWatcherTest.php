@@ -6,12 +6,11 @@ namespace SLoggerLaravel\Tests\Feature\Watchers\Children\Event;
 
 use App\Events\NestedEvent;
 use App\Events\SuccessEvent;
+use SLoggerLaravel\Tests\Feature\Watchers\BaseWatcherTestCase;
 use SLoggerLaravel\Enums\TraceStatusEnum;
-use SLoggerLaravel\Tests\Feature\BaseTestCase;
 use SLoggerLaravel\Watchers\Children\EventWatcher;
-use SLoggerLaravel\Watchers\Parents\JobWatcher;
 
-class ConfigCanBeOrphanEventTest extends BaseTestCase
+class CanBeOrphanEventWatcherTest extends BaseWatcherTestCase
 {
     public function test(): void
     {

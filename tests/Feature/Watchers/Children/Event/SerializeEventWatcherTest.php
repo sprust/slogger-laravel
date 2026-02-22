@@ -4,15 +4,15 @@ declare(strict_types=1);
 
 namespace SLoggerLaravel\Tests\Feature\Watchers\Children\Event;
 
-use App\Events\SuccessEvent;
+use App\Events\SerializableEvent;
+use SLoggerLaravel\Tests\Feature\Watchers\BaseWatcherTestCase;
 use SLoggerLaravel\Enums\TraceStatusEnum;
-use SLoggerLaravel\Tests\Feature\BaseTestCase;
 use SLoggerLaravel\Watchers\Children\EventWatcher;
 use SLoggerLaravel\Watchers\Parents\JobWatcher;
 
-class ConfigIgnoreEventTest extends BaseTestCase
+class SerializeEventWatcherTest extends BaseWatcherTestCase
 {
-    public function testIgnoredEventDoesNotCreateTrace(): void
+    public function test(): void
     {
         $this->registerWatcher(
             watcherClass: JobWatcher::class,
@@ -22,28 +22,38 @@ class ConfigIgnoreEventTest extends BaseTestCase
         $this->registerWatcher(
             watcherClass: EventWatcher::class,
             config: [
-                'ignore_events' => [
-                    SuccessEvent::class,
+                'serialize_events' => [
+                    SerializableEvent::class,
                 ],
             ],
         );
 
         dispatch(
             static fn() => event(
-                new SuccessEvent()
+                new SerializableEvent(
+                    name: 'alpha',
+                    attempt: 7
+                )
             )
         );
 
         $creating = $this->dispatcher->findCreating(
             type: 'event',
             status: TraceStatusEnum::Success,
-            tag: SuccessEvent::class,
             isParent: false,
         );
 
         self::assertCount(
-            0,
+            1,
             $creating
+        );
+
+        self::assertSame(
+            [
+                'name'    => 'alpha',
+                'attempt' => 7,
+            ],
+            $creating[0]->data['payload'] ?? null,
         );
     }
 }

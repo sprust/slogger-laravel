@@ -6,10 +6,10 @@ namespace SLoggerLaravel\Tests\Feature\Watchers\Parents\Command;
 
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
-use SLoggerLaravel\Tests\Feature\Watchers\Parents\BaseParentTestCase;
+use SLoggerLaravel\Tests\Feature\Watchers\Parents\BaseParentWatcherTestCase;
 use SLoggerLaravel\Watchers\Parents\CommandWatcher;
 
-class ParentCommandTest extends BaseParentTestCase
+class CommandWatcherTest extends BaseParentWatcherTestCase
 {
     protected function getTraceType(): string
     {

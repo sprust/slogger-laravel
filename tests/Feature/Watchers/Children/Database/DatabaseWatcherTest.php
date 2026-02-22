@@ -2,29 +2,32 @@
 
 declare(strict_types=1);
 
-namespace SLoggerLaravel\Tests\Feature\Watchers\Children\Log;
+namespace SLoggerLaravel\Tests\Feature\Watchers\Children\Database;
 
 use Closure;
+use Illuminate\Support\Facades\DB;
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
-use SLoggerLaravel\Tests\Feature\Watchers\Children\BaseChildTestCase;
-use SLoggerLaravel\Watchers\Children\LogWatcher;
+use SLoggerLaravel\Tests\Feature\Watchers\Children\BaseChildWatcherTestCase;
+use SLoggerLaravel\Watchers\Children\DatabaseWatcher;
 
-class ChildLogTest extends BaseChildTestCase
+class DatabaseWatcherTest extends BaseChildWatcherTestCase
 {
     protected function getTraceType(): string
     {
-        return 'log';
+        return 'database';
     }
 
     protected function getWatcherClass(): string
     {
-        return LogWatcher::class;
+        return DatabaseWatcher::class;
     }
 
     protected function successCallback(): Closure
     {
-        return static fn() => logger()->info('test');
+        return static fn() => event(
+            DB::statement('SELECT 1')
+        );
     }
 
     protected function assertSuccess(

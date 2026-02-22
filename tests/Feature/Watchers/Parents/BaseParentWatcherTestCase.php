@@ -5,14 +5,14 @@ declare(strict_types=1);
 namespace SLoggerLaravel\Tests\Feature\Watchers\Parents;
 
 use App\Events\NestedEvent;
+use SLoggerLaravel\Tests\Feature\Watchers\BaseWatcherTestCase;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
-use SLoggerLaravel\Tests\Feature\BaseTestCase;
 use SLoggerLaravel\Watchers\Children\EventWatcher;
 use SLoggerLaravel\Watchers\WatcherInterface;
 
-abstract class BaseParentTestCase extends BaseTestCase
+abstract class BaseParentWatcherTestCase extends BaseWatcherTestCase
 {
     abstract protected function getTraceType(): string;
 

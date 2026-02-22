@@ -6,11 +6,11 @@ namespace SLoggerLaravel\Tests\Feature\Watchers\Parents\Job;
 
 use App\Jobs\ExceptedJob;
 use App\Jobs\SuccessJob;
+use SLoggerLaravel\Tests\Feature\Watchers\BaseWatcherTestCase;
 use SLoggerLaravel\Enums\TraceStatusEnum;
-use SLoggerLaravel\Tests\Feature\BaseTestCase;
 use SLoggerLaravel\Watchers\Parents\JobWatcher;
 
-class ExceptedJobTest extends BaseTestCase
+class ExceptedJobWatcherTest extends BaseWatcherTestCase
 {
     protected function setUp(): void
     {

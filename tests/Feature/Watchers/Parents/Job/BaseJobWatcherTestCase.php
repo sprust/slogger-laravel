@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace SLoggerLaravel\Tests\Feature\Watchers\Parents\Job;
 
-use SLoggerLaravel\Tests\Feature\Watchers\Parents\BaseParentTestCase;
+use SLoggerLaravel\Tests\Feature\Watchers\Parents\BaseParentWatcherTestCase;
 use SLoggerLaravel\Watchers\Parents\JobWatcher;
 
-abstract class BaseJobWatcherTestCase extends BaseParentTestCase
+abstract class BaseJobWatcherTestCase extends BaseParentWatcherTestCase
 {
     protected function getTraceType(): string
     {

@@ -6,10 +6,10 @@ namespace SLoggerLaravel\Tests\Feature\Watchers\Children\Cache;
 
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
-use SLoggerLaravel\Tests\Feature\Watchers\Children\BaseChildTestCase;
+use SLoggerLaravel\Tests\Feature\Watchers\Children\BaseChildWatcherTestCase;
 use SLoggerLaravel\Watchers\Children\CacheWatcher;
 
-abstract class BaseChildCacheTestCase extends BaseChildTestCase
+abstract class BaseChildCacheWatcherTestCase extends BaseChildWatcherTestCase
 {
 
     protected function getTraceType(): string

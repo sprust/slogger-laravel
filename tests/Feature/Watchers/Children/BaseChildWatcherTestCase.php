@@ -5,16 +5,16 @@ declare(strict_types=1);
 namespace SLoggerLaravel\Tests\Feature\Watchers\Children;
 
 use Closure;
+use SLoggerLaravel\Tests\Feature\Watchers\BaseWatcherTestCase;
 use ReflectionException;
 use ReflectionFunction;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
-use SLoggerLaravel\Tests\Feature\BaseTestCase;
 use SLoggerLaravel\Watchers\Parents\JobWatcher;
 use SLoggerLaravel\Watchers\WatcherInterface;
 
-abstract class BaseChildTestCase extends BaseTestCase
+abstract class BaseChildWatcherTestCase extends BaseWatcherTestCase
 {
     abstract protected function getTraceType(): string;
 
