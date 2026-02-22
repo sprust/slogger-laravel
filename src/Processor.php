@@ -73,8 +73,8 @@ class Processor
     {
         $this->dispatcher->listen(
             $event,
-            fn(mixed $event) => $this->handleWatcher(
-                fn() => call_user_func($listener, $event)
+            fn(mixed ...$eventData) => $this->handleWatcher(
+                fn() => call_user_func_array($listener, $eventData)
             )
         );
     }

@@ -14,7 +14,7 @@ use SLoggerLaravel\Tests\Feature\BaseTestCase;
 use SLoggerLaravel\Watchers\Parents\JobWatcher;
 use SLoggerLaravel\Watchers\WatcherInterface;
 
-abstract class BaseChildrenTestCase extends BaseTestCase
+abstract class BaseChildTestCase extends BaseTestCase
 {
     abstract protected function getTraceType(): string;
 

@@ -2,30 +2,32 @@
 
 declare(strict_types=1);
 
-namespace SLoggerLaravel\Tests\Feature\Watchers\Children\Event;
+namespace SLoggerLaravel\Tests\Feature\Watchers\Children\Database;
 
-use App\Events\SuccessEvent;
 use Closure;
+use Illuminate\Support\Facades\DB;
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
-use SLoggerLaravel\Tests\Feature\Watchers\Children\BaseChildrenTestCase;
-use SLoggerLaravel\Watchers\Children\EventWatcher;
+use SLoggerLaravel\Tests\Feature\Watchers\Children\BaseChildTestCase;
+use SLoggerLaravel\Watchers\Children\DatabaseWatcher;
 
-class EventTest extends BaseChildrenTestCase
+class ChildDatabaseTest extends BaseChildTestCase
 {
     protected function getTraceType(): string
     {
-        return 'event';
+        return 'database';
     }
 
     protected function getWatcherClass(): string
     {
-        return EventWatcher::class;
+        return DatabaseWatcher::class;
     }
 
     protected function successCallback(): Closure
     {
-        return static fn() => event(new SuccessEvent());
+        return static fn() => event(
+            DB::statement('SELECT 1')
+        );
     }
 
     protected function assertSuccess(

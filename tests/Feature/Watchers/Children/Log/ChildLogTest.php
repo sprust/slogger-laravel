@@ -7,10 +7,10 @@ namespace SLoggerLaravel\Tests\Feature\Watchers\Children\Log;
 use Closure;
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
-use SLoggerLaravel\Tests\Feature\Watchers\Children\BaseChildrenTestCase;
+use SLoggerLaravel\Tests\Feature\Watchers\Children\BaseChildTestCase;
 use SLoggerLaravel\Watchers\Children\LogWatcher;
 
-class LogTest extends BaseChildrenTestCase
+class ChildLogTest extends BaseChildTestCase
 {
     protected function getTraceType(): string
     {

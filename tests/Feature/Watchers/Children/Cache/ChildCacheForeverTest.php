@@ -6,9 +6,9 @@ namespace Feature\Watchers\Children\Cache;
 
 use Closure;
 use Illuminate\Support\Facades\Cache;
-use SLoggerLaravel\Tests\Feature\Watchers\Children\Cache\BaseCacheTestCase;
+use SLoggerLaravel\Tests\Feature\Watchers\Children\Cache\BaseChildCacheTestCase;
 
-class CacheForeverTest extends BaseCacheTestCase
+class ChildCacheForeverTest extends BaseChildCacheTestCase
 {
     protected function successCallback(): Closure
     {
