@@ -24,4 +24,10 @@ class TraceIdContainer
     {
         return $this->preParentTraceId;
     }
+
+    public function reset(): void
+    {
+        $this->parentTraceId    = null;
+        $this->preParentTraceId = null;
+    }
 }

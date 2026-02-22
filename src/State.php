@@ -24,6 +24,6 @@ class State
      */
     public function isWatcherEnabled(string $watcherClass): bool
     {
-        return in_array($watcherClass, $this->enabledWatcherClasses);
+        return in_array($watcherClass, $this->enabledWatcherClasses, true);
     }
 }

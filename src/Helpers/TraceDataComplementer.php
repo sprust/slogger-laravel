@@ -22,6 +22,8 @@ class TraceDataComplementer
      */
     private readonly array $excludedFileMasks;
 
+    private readonly int $maxDepth;
+
     /**
      * @var array<string, mixed>
      */
@@ -33,6 +35,7 @@ class TraceDataComplementer
         $this->basePathPackages  = base_path('packages' . DIRECTORY_SEPARATOR);
         $this->excludedClasses   = [self::class, static::class];
         $this->excludedFileMasks = $watchersConfig->getDataCompleterExcludedFileMasks();
+        $this->maxDepth          = $watchersConfig->getDataCompleterMaxDepth();
     }
 
     public function add(string $key, mixed $value): void
@@ -45,7 +48,7 @@ class TraceDataComplementer
      */
     public function inject(array &$data): void
     {
-        $backTrace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS);
+        $backTrace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, $this->maxDepth);
 
         $trace = [];
 

@@ -21,6 +21,11 @@ class EventWatcher implements WatcherInterface
     /**
      * @var string[]
      */
+    protected array $onlyEvents = [];
+
+    /**
+     * @var string[]
+     */
     protected array $ignoreEvents = [];
 
     /**
@@ -42,6 +47,7 @@ class EventWatcher implements WatcherInterface
     public function register(?array $config): void
     {
         if ($config !== null) {
+            $this->onlyEvents      = $config['only_events'] ?? [];
             $this->ignoreEvents    = $config['ignore_events'] ?? [];
             $this->serializeEvents = $config['serialize_events'] ?? [];
             $this->possibleOrphans = $config['can_be_orphan'] ?? [];
@@ -186,6 +192,10 @@ class EventWatcher implements WatcherInterface
 
     protected function shouldIgnore(string $eventName): bool
     {
+        if ($this->onlyEvents) {
+            return !Str::is($this->onlyEvents, $eventName);
+        }
+
         return Str::is(
             [
                 'Illuminate\*',

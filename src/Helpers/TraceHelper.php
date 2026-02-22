@@ -9,7 +9,17 @@ class TraceHelper
 {
     public static function makeTraceId(): string
     {
-        return Str::slug(config('app.name')) . '-' . Str::uuid()->toString();
+        $prefix = (string) config('slogger.trace_id_prefix');
+
+        if ($prefix === '') {
+            $prefix = Str::slug((string) config('app.name'));
+        }
+
+        if ($prefix === '') {
+            $prefix = 'app';
+        }
+
+        return $prefix . '-' . Str::uuid()->toString();
     }
 
     public static function calcDuration(Carbon $startedAt): float

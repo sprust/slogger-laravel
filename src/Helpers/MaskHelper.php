@@ -57,11 +57,23 @@ class MaskHelper
             return $value;
         }
 
+        if (is_bool($value)) {
+            return false;
+        }
+
+        if (is_int($value)) {
+            return 0;
+        }
+
+        if (is_float($value)) {
+            return 0.0;
+        }
+
         if (is_object($value) && method_exists($value, '__toString')) {
             $value = (string) $value;
         }
 
-        if (!is_string($value) && !is_numeric($value) && !is_bool($value)) {
+        if (!is_string($value) && !is_numeric($value)) {
             $value = '********';
         } else {
             $value = (string) $value;

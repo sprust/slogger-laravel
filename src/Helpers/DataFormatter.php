@@ -29,7 +29,9 @@ class DataFormatter
 
     public static function model(Model $model): string
     {
-        return $model::class . ':' . $model->getKey();
+        $key = $model->getKey();
+
+        return $model::class . ':' . ($key === null ? '<new>' : $key);
     }
 
     /**

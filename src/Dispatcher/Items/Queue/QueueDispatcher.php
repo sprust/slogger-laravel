@@ -4,12 +4,15 @@ namespace SLoggerLaravel\Dispatcher\Items\Queue;
 
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Support\Facades\Log;
+use SLoggerLaravel\Configs\GeneralConfig;
 use SLoggerLaravel\Dispatcher\Items\DispatcherProcessorInterface;
 use SLoggerLaravel\Dispatcher\Items\Queue\Jobs\SendTracesJob;
 use SLoggerLaravel\Dispatcher\Items\TraceDispatcherInterface;
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TracesObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
+use Throwable;
 
 class QueueDispatcher implements TraceDispatcherInterface
 {
@@ -75,5 +78,23 @@ class QueueDispatcher implements TraceDispatcherInterface
         dispatch(new SendTracesJob($this->traces));
 
         $this->traces = new TracesObject();
+    }
+
+    /**
+     * @throws BindingResolutionException
+     */
+    public function __destruct()
+    {
+        try {
+            $this->dispatchAndClear(maxBatchSize: 0);
+        } catch (Throwable $exception) {
+            Log::channel($this->app->make(GeneralConfig::class)->getLogChannel())
+                ->error($exception->getMessage(), [
+                    'code'  => $exception->getCode(),
+                    'file'  => $exception->getFile(),
+                    'line'  => $exception->getLine(),
+                    'trace' => $exception->getTraceAsString(),
+                ]);
+        }
     }
 }

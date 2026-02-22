@@ -43,6 +43,8 @@ class RequestWatcher implements WatcherInterface
 
     protected RequestDataFormatters $formatters;
 
+    protected int $maxResponseBytes = 1048576;
+
     public function __construct(
         protected readonly Application $app,
         protected readonly Processor $processor,
@@ -313,6 +315,12 @@ class RequestWatcher implements WatcherInterface
                 return [];
             }
 
+            if (strlen($content) > $this->maxResponseBytes) {
+                return [
+                    '__skipped' => 'response_too_large',
+                ];
+            }
+
             $dataResolver = new DataResolver(
                 fn() => json_decode($content, true) ?: []
             );
@@ -430,6 +438,8 @@ class RequestWatcher implements WatcherInterface
             $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
             $formatterMap[$urlPattern]->addResponseFields($fields);
         }
+
+        $this->maxResponseBytes = (int) ($config['output']['max_content_length'] ?? $this->maxResponseBytes);
 
         $this->formatters = new RequestDataFormatters();
 

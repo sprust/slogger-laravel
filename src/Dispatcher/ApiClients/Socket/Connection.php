@@ -213,7 +213,7 @@ class Connection
             $lengthHeader .= $chunk;
         }
 
-        $response   = ""; // TODO: what!?
+        $response   = '';
         $dataLength = (int) (unpack('N', $lengthHeader)[1] ?? 0);
         $bufferSize = $this->socketBufferSize;
 

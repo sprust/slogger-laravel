@@ -170,6 +170,9 @@ return [
             'class'   => EventWatcher::class,
             'enabled' => env('SLOGGER_LOG_EVENT_ENABLED', false),
             'config'  => [
+                'only_events' => [
+                    //
+                ],
                 'ignore_events' => [
                     //
                 ],

@@ -21,4 +21,9 @@ readonly class WatchersConfig
     {
         return config('slogger.data_completer.excluded_file_masks') ?? [];
     }
+
+    public function getDataCompleterMaxDepth(): int
+    {
+        return (int) (config('slogger.data_completer.max_depth') ?? 10);
+    }
 }
