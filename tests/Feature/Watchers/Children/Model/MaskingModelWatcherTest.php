@@ -48,6 +48,7 @@ class MaskingModelWatcherTest extends BaseWatcherTestCase
         $modelId = $model->getKey();
 
         dispatch(static function () use ($modelId): void {
+            /** @var TestModel $model */
             $model = TestModel::query()->findOrFail($modelId);
 
             $model->update([

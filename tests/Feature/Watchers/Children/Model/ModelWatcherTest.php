@@ -44,6 +44,7 @@ class ModelWatcherTest extends BaseChildWatcherTestCase
         $modelId = $model->getKey();
 
         return static function () use ($modelId): void {
+            /** @var TestModel $model */
             $model = TestModel::query()->findOrFail($modelId);
 
             $model->update([
