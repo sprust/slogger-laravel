@@ -8,10 +8,10 @@ use Illuminate\Support\Str;
 class MaskHelper
 {
     /**
-     * @param array<string, mixed> $data
-     * @param array<string, mixed> $patterns
+     * @param array<int|string, mixed> $data
+     * @param array<int, string>       $patterns
      *
-     * @return array<string, mixed>
+     * @return array<int|string, mixed>
      */
     public static function maskArrayByList(array $data, array $patterns): array
     {
@@ -29,10 +29,10 @@ class MaskHelper
     }
 
     /**
-     * @param array<string, mixed> $data
-     * @param array<string, mixed> $patterns
+     * @param array<int|string, mixed> $data
+     * @param array<int|string, mixed> $patterns
      *
-     * @return array<string, mixed>
+     * @return array<int|string, mixed>
      */
     public static function maskArrayByPatterns(array $data, array $patterns): array
     {
@@ -57,20 +57,34 @@ class MaskHelper
             return $value;
         }
 
+        if (is_bool($value)) {
+            return false;
+        }
+
+        if (is_int($value)) {
+            return 0;
+        }
+
+        if (is_float($value)) {
+            return 0.0;
+        }
+
         if (is_object($value) && method_exists($value, '__toString')) {
             $value = (string) $value;
         }
 
-        if (!is_string($value) && !is_numeric($value) && !is_bool($value)) {
+        if (!is_string($value) && !is_numeric($value)) {
             $value = '********';
         } else {
+            $value = (string) $value;
+
             if (strlen($value) === 1) {
                 $value = '*';
             } else {
                 $batchLength = (int) ceil(Str::length($value) / 3);
 
                 $value = Str::mask(
-                    string: (string) $value,
+                    string: $value,
                     character: '*',
                     index: $batchLength,
                     length: $batchLength

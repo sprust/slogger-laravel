@@ -7,12 +7,12 @@ use Closure;
 class DataResolver
 {
     /**
-     * @var array<string, mixed>|null $data
+     * @var array<int|string, mixed>|null
      */
     private ?array $data = null;
 
     /**
-     * @param Closure(): array<string, mixed> $resolver
+     * @param Closure(): array<int|string, mixed> $resolver
      */
     public function __construct(
         private readonly Closure $resolver
@@ -20,7 +20,7 @@ class DataResolver
     }
 
     /**
-     * @return array<string, mixed>
+     * @return array<int|string, mixed>
      */
     public function getData(): array
     {
@@ -30,7 +30,7 @@ class DataResolver
     }
 
     /**
-     * @param array<string, mixed> $data
+     * @param array<int|string, mixed> $data
      */
     public function setData(array $data): void
     {
@@ -38,7 +38,7 @@ class DataResolver
     }
 
     /**
-     * @return array<string, mixed>
+     * @return array<int|string, mixed>
      */
     private function resolve(): array
     {

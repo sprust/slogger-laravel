@@ -3,6 +3,7 @@
 namespace SLoggerLaravel\Dispatcher;
 
 use Illuminate\Console\Command;
+use RuntimeException;
 use SLoggerLaravel\Configs\DispatcherConfig;
 use SLoggerLaravel\Dispatcher\State\DispatcherProcessState;
 use Throwable;
@@ -23,7 +24,6 @@ class StartDispatcherCommand extends Command
      */
     protected $description = 'Start dispatcher';
 
-
     /**
      * Execute the console command.
      *
@@ -33,14 +33,24 @@ class StartDispatcherCommand extends Command
     {
         $this->info('Dispatcher starting...');
 
+        $masterCommandName = $this->getName();
+
+        if (!$masterCommandName) {
+            throw new RuntimeException(
+                'Master command name cannot be empty'
+            );
+        }
+
         $processState = new DispatcherProcessState(
-            masterCommandName: $this->getName()
+            masterCommandName: $masterCommandName
         );
 
         try {
+            $argument = $this->argument('dispatcher');
+
             $dispatcher->start(
                 processState: $processState,
-                dispatcher: $this->argument('dispatcher') ?: $config->getDefault()
+                dispatcher: is_string($argument) ? $argument : $config->getDefault()
             );
         } catch (Throwable $exception) {
             $state = $processState->getSaved();

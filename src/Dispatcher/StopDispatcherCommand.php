@@ -3,6 +3,7 @@
 namespace SLoggerLaravel\Dispatcher;
 
 use Illuminate\Console\Command;
+use RuntimeException;
 use SLoggerLaravel\Dispatcher\State\DispatcherProcessState;
 
 class StopDispatcherCommand extends Command
@@ -26,8 +27,16 @@ class StopDispatcherCommand extends Command
      */
     public function handle(Dispatcher $dispatcher): void
     {
+        $masterCommandName = app(StartDispatcherCommand::class)->getName();
+
+        if (!$masterCommandName) {
+            throw new RuntimeException(
+                'Master command name cannot be empty'
+            );
+        }
+
         $processState = new DispatcherProcessState(
-            app(StartDispatcherCommand::class)->getName()
+            masterCommandName: $masterCommandName
         );
 
         $state = $processState->getSaved();

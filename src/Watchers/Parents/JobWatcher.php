@@ -13,9 +13,11 @@ use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Helpers\DataFormatter;
 use SLoggerLaravel\Helpers\TraceHelper;
-use SLoggerLaravel\Watchers\AbstractWatcher;
+use SLoggerLaravel\Processor;
+use SLoggerLaravel\Traces\TraceIdContainer;
+use SLoggerLaravel\Watchers\WatcherInterface;
 
-class JobWatcher extends AbstractWatcher
+class JobWatcher implements WatcherInterface
 {
     /**
      * @var array<array{trace_id: string, started_at: Carbon}>
@@ -26,32 +28,34 @@ class JobWatcher extends AbstractWatcher
      */
     protected array $exceptedJobs = [];
 
-    protected function init(): void
-    {
-        $this->exceptedJobs = $this->loggerConfig->jobsExcepted();
+    public function __construct(
+        protected readonly Processor $processor,
+        protected readonly TraceIdContainer $traceIdContainer,
+    ) {
     }
 
-    public function register(): void
+    public function register(?array $config): void
     {
-        Queue::createPayloadUsing(function ($connection, $queue, $payload) {
-            return [
-                'slogger_uuid'            => Str::uuid()->toString(),
-                'slogger_parent_trace_id' => $this->traceIdContainer->getParentTraceId(),
-            ];
-        });
+        if ($config !== null) {
+            $this->exceptedJobs = $config['excepted'] ?? [];
+        }
 
-        $this->listenEvent(JobProcessing::class, [$this, 'handleJobProcessing']);
-        $this->listenEvent(JobProcessed::class, [$this, 'handleJobProcessed']);
-        $this->listenEvent(JobFailed::class, [$this, 'handleJobFailed']);
-        $this->listenEvent(JobReleasedAfterException::class, [$this, 'handleJobReleasedAfterException']);
+        Queue::createPayloadUsing(
+            function () {
+                return [
+                    'slogger_uuid'            => Str::uuid()->toString(),
+                    'slogger_parent_trace_id' => $this->traceIdContainer->getParentTraceId(),
+                ];
+            }
+        );
+
+        $this->processor->registerEvent(JobProcessing::class, [$this, 'handleJobProcessing']);
+        $this->processor->registerEvent(JobProcessed::class, [$this, 'handleJobProcessed']);
+        $this->processor->registerEvent(JobFailed::class, [$this, 'handleJobFailed']);
+        $this->processor->registerEvent(JobReleasedAfterException::class, [$this, 'handleJobReleasedAfterException']);
     }
 
     public function handleJobProcessing(JobProcessing $event): void
-    {
-        $this->safeHandleWatching(fn() => $this->onHandleJobProcessing($event));
-    }
-
-    protected function onHandleJobProcessing(JobProcessing $event): void
     {
         $payload = $event->job->payload();
 
@@ -69,7 +73,7 @@ class JobWatcher extends AbstractWatcher
 
         $parentTraceId = $payload['slogger_parent_trace_id'] ?? null;
 
-        $loggedAt = now();
+        $loggedAt = Carbon::now('UTC');
 
         $traceId = $this->processor->startAndGetTraceId(
             type: TraceTypeEnum::Job->value,
@@ -88,11 +92,6 @@ class JobWatcher extends AbstractWatcher
     }
 
     public function handleJobProcessed(JobProcessed $event): void
-    {
-        $this->safeHandleWatching(fn() => $this->onHandleJobProcessed($event));
-    }
-
-    protected function onHandleJobProcessed(JobProcessed $event): void
     {
         $payload = $event->job->payload();
 
@@ -133,11 +132,6 @@ class JobWatcher extends AbstractWatcher
 
     public function handleJobFailed(JobFailed $event): void
     {
-        $this->safeHandleWatching(fn() => $this->onHandleJobFailed($event));
-    }
-
-    protected function onHandleJobFailed(JobFailed $event): void
-    {
         $payload = $event->job->payload();
 
         $uuid = $payload['slogger_uuid'] ?? null;
@@ -158,10 +152,10 @@ class JobWatcher extends AbstractWatcher
         $startedAt = $jobData['started_at'];
 
         $data = [
-            'connectionName' => $event->connectionName,
-            'payload'        => $event->job->payload(),
-            'status'         => 'failed',
-            'exception'      => DataFormatter::exception($event->exception),
+            'connection_name' => $event->connectionName,
+            'payload'         => $event->job->payload(),
+            'status'          => 'failed',
+            'exception'       => DataFormatter::exception($event->exception),
         ];
 
         $this->processor->stop(
@@ -178,11 +172,6 @@ class JobWatcher extends AbstractWatcher
 
     public function handleJobReleasedAfterException(JobReleasedAfterException $event): void
     {
-        $this->safeHandleWatching(fn() => $this->onHandleJobReleasedAfterException($event));
-    }
-
-    protected function onHandleJobReleasedAfterException(JobReleasedAfterException $event): void
-    {
         $payload = $event->job->payload();
 
         $uuid = $payload['slogger_uuid'] ?? null;
@@ -203,9 +192,9 @@ class JobWatcher extends AbstractWatcher
         $startedAt = $jobData['started_at'];
 
         $data = [
-            'connectionName' => $event->connectionName,
-            'payload'        => $event->job->payload(),
-            'status'         => 'released_after_exception',
+            'connection_name' => $event->connectionName,
+            'payload'         => $event->job->payload(),
+            'status'          => 'released_after_exception',
         ];
 
         $this->processor->stop(

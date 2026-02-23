@@ -17,7 +17,7 @@ class HttpMiddleware implements TerminableInterface
 
     private ?TraceIdContainer $traceIdContainer = null;
 
-    private ?string $traceId = null;
+    private ?string $traceId                = null;
     private ?string $headerParentTraceIdKey = null;
 
     public function __construct(GeneralConfig $config)

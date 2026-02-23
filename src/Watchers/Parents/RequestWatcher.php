@@ -2,30 +2,35 @@
 
 namespace SLoggerLaravel\Watchers\Parents;
 
-use Illuminate\Contracts\Http\Kernel;
+use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Foundation\Http\Events\RequestHandled;
+use Illuminate\Foundation\Http\Kernel;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response as IlluminateResponse;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Routing\Route;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Illuminate\View\View;
+use Psr\Container\ContainerExceptionInterface;
+use Psr\Container\NotFoundExceptionInterface;
 use SLoggerLaravel\DataResolver;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Events\RequestHandling;
 use SLoggerLaravel\Helpers\TraceHelper;
 use SLoggerLaravel\Middleware\HttpMiddleware;
+use SLoggerLaravel\Processor;
 use SLoggerLaravel\RequestPreparer\RequestDataFormatter;
 use SLoggerLaravel\RequestPreparer\RequestDataFormatters;
-use SLoggerLaravel\Watchers\AbstractWatcher;
+use SLoggerLaravel\Watchers\WatcherInterface;
 use Symfony\Component\HttpFoundation\RedirectResponse;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
  * @see HttpMiddleware - required for a tracing of requests
  */
-class RequestWatcher extends AbstractWatcher
+class RequestWatcher implements WatcherInterface
 {
     /**
      * @var array<array{trace_id: string, boot_time: float, started_at: Carbon, logged_at: Carbon}>
@@ -34,30 +39,51 @@ class RequestWatcher extends AbstractWatcher
     /**
      * @var string[]
      */
+    protected array $onlyPaths = [];
+    /**
+     * @var string[]
+     */
     protected array $exceptedPaths = [];
+
+    /**
+     * @var string[]
+     */
+    protected array $inputOnlyPaths = [];
+
+    /**
+     * @var string[]
+     */
+    protected array $outputOnlyPaths = [];
 
     protected RequestDataFormatters $formatters;
 
-    protected function init(): void
-    {
-        $this->exceptedPaths = $this->loggerConfig->requestsExceptedPaths();
+    protected int $maxResponseBytes = 1048576;
 
-        $this->fillMaskers();
+    public function __construct(
+        protected readonly Application $app,
+        protected readonly Processor $processor,
+    ) {
+        $this->formatters = new RequestDataFormatters();
     }
 
-    public function register(): void
+    public function register(?array $config): void
     {
-        $this->listenEvent(RequestHandling::class, [$this, 'handleRequestHandling']);
-        $this->listenEvent(RequestHandled::class, [$this, 'handleRequestHandled']);
+        $this->parseConfig($config);
+
+        $this->processor->registerEvent(RequestHandling::class, [$this, 'handleRequestHandling']);
+        $this->processor->registerEvent(RequestHandled::class, [$this, 'handleRequestHandled']);
     }
 
+    /**
+     * @throws ContainerExceptionInterface
+     * @throws NotFoundExceptionInterface
+     */
     public function handleRequestHandling(RequestHandling $event): void
     {
-        $this->safeHandleWatching(fn() => $this->onHandleRequestHandling($event));
-    }
+        if ($this->onlyPaths && !$this->isRequestByPatterns($event->request, $this->onlyPaths)) {
+            return;
+        }
 
-    protected function onHandleRequestHandling(RequestHandling $event): void
-    {
         if ($this->isRequestByPatterns($event->request, $this->exceptedPaths)) {
             return;
         }
@@ -71,10 +97,12 @@ class RequestWatcher extends AbstractWatcher
         if (defined('LARAVEL_START')) {
             $startedAt = new Carbon(LARAVEL_START);
         } else {
-            $startedAt = $this->app[Kernel::class]->requestStartedAt();
+            $startedAt = $this->app->get(Kernel::class)->requestStartedAt();
         }
 
-        $loggedAt = now();
+        $startedAt = $startedAt?->clone()->setTimezone('UTC') ?? Carbon::now('UTC');
+
+        $loggedAt = Carbon::now('UTC');
 
         $traceId = $this->processor->startAndGetTraceId(
             type: TraceTypeEnum::Request->value,
@@ -101,11 +129,10 @@ class RequestWatcher extends AbstractWatcher
 
     public function handleRequestHandled(RequestHandled $event): void
     {
-        $this->safeHandleWatching(fn() => $this->onHandleRequestHandled($event));
-    }
+        if ($this->onlyPaths && !$this->isRequestByPatterns($event->request, $this->onlyPaths)) {
+            return;
+        }
 
-    protected function onHandleRequestHandled(RequestHandled $event): void
-    {
         if ($this->isRequestByPatterns($event->request, $this->exceptedPaths)) {
             return;
         }
@@ -133,7 +160,7 @@ class RequestWatcher extends AbstractWatcher
                 'headers'    => $this->prepareRequestHeaders($request),
                 'parameters' => $this->prepareRequestParameters($request),
             ],
-            'response'  => [
+            'response' => [
                 'status'  => $response->getStatusCode(),
                 'headers' => $this->prepareResponseHeaders($request, $response),
                 'data'    => $this->prepareResponseData($request, $response),
@@ -160,14 +187,17 @@ class RequestWatcher extends AbstractWatcher
     {
         $url = str_replace($request->root(), '', $request->fullUrl());
 
+        /**
+         * for support for Laravel 10, 12
+         *
+         * @var Route|object|string|null $route
+         */
         $route = $request->route();
 
-        /** @phpstan-ignore-next-line instanceof.alwaysTrue */
         if ($route instanceof Route) {
             $action      = $route->getActionName();
             $middlewares = $route->gatherMiddleware();
         } else {
-            /** @phpstan-ignore-next-line function.alreadyNarrowedType */
             $action      = is_string($route) ? $route : null;
             $middlewares = null;
         }
@@ -198,21 +228,23 @@ class RequestWatcher extends AbstractWatcher
      */
     protected function getPostTags(Request $request, Response $response): array
     {
+        /**
+         * for support for Laravel 10, 12
+         *
+         * @var Route|object|string|null $route
+         */
         $route = $request->route();
 
-        /** @phpstan-ignore-next-line booleanNot.alwaysFalse */
         if (!$route) {
             return [];
         }
 
-        /** @phpstan-ignore-next-line function.impossibleType */
         if (is_string($route)) {
             return [
                 $route,
             ];
         }
 
-        /** @phpstan-ignore-next-line instanceof.alwaysTrue */
         if (!$route instanceof Route) {
             return [];
         }
@@ -237,10 +269,14 @@ class RequestWatcher extends AbstractWatcher
     }
 
     /**
-     * @return array<string, mixed>
+     * @return array<int|string, mixed>
      */
     protected function prepareRequestHeaders(Request $request): array
     {
+        if ($this->inputOnlyPaths && !$this->isRequestByPatterns($request, $this->inputOnlyPaths)) {
+            return [];
+        }
+
         $uri = $this->getRequestPath($request);
 
         $headers = $request->headers->all();
@@ -253,10 +289,16 @@ class RequestWatcher extends AbstractWatcher
     }
 
     /**
-     * @return array<string, mixed>
+     * @return array<int|string, mixed>
      */
     protected function prepareRequestParameters(Request $request): array
     {
+        if ($this->inputOnlyPaths && !$this->isRequestByPatterns($request, $this->inputOnlyPaths)) {
+            return [
+                '__cleaned' => null,
+            ];
+        }
+
         $uri = $this->getRequestPath($request);
 
         $parameters = $this->getRequestParameters($request);
@@ -269,10 +311,14 @@ class RequestWatcher extends AbstractWatcher
     }
 
     /**
-     * @return array<string, mixed>
+     * @return array<int|string, mixed>
      */
     protected function prepareResponseHeaders(Request $request, Response $response): array
     {
+        if ($this->outputOnlyPaths && !$this->isRequestByPatterns($request, $this->outputOnlyPaths)) {
+            return [];
+        }
+
         $uri = $this->getRequestPath($request);
 
         $headers = $response->headers->all();
@@ -285,10 +331,16 @@ class RequestWatcher extends AbstractWatcher
     }
 
     /**
-     * @return array<string, mixed>
+     * @return array<int|string, mixed>
      */
     protected function prepareResponseData(Request $request, Response $response): array
     {
+        if ($this->outputOnlyPaths && !$this->isRequestByPatterns($request, $this->outputOnlyPaths)) {
+            return [
+                '__cleaned' => null,
+            ];
+        }
+
         if ($response instanceof RedirectResponse) {
             return [
                 'redirect' => $response->getTargetUrl(),
@@ -304,8 +356,20 @@ class RequestWatcher extends AbstractWatcher
         if ($request->acceptsJson()) {
             $url = $this->getRequestPath($request);
 
+            $content = $response->getContent();
+
+            if ($content === false) {
+                return [];
+            }
+
+            if (strlen($content) > $this->maxResponseBytes) {
+                return [
+                    '__skipped' => 'response_too_large',
+                ];
+            }
+
             $dataResolver = new DataResolver(
-                fn() => json_decode($response->getContent(), true) ?: []
+                fn() => json_decode($content, true) ?: []
             );
 
             foreach ($this->formatters->getItems() as $formatter) {
@@ -351,6 +415,12 @@ class RequestWatcher extends AbstractWatcher
         $files = $request->files->all();
 
         array_walk_recursive($files, function (&$file) {
+            if (!$file instanceof UploadedFile) {
+                $file = null;
+
+                return;
+            }
+
             $file = [
                 'name' => $file->getClientOriginalName(),
                 'size' => $file->isFile() ? ($file->getSize() / 1000) . 'KB' : '0',
@@ -360,52 +430,67 @@ class RequestWatcher extends AbstractWatcher
         return array_replace_recursive($request->input(), $files);
     }
 
-    protected function fillMaskers(): void
+    /**
+     * @param array<string, mixed>|null $config
+     */
+    protected function parseConfig(?array $config): void
     {
+        if ($config === null) {
+            return;
+        }
+
+        $this->onlyPaths     = $config['only_paths'] ?? [];
+        $this->exceptedPaths = $config['excepted_paths'] ?? [];
+
+        $this->inputOnlyPaths  = $config['input']['only_paths'] ?? [];
+        $this->outputOnlyPaths = $config['output']['only_paths'] ?? [];
+
         /** @var array<string, RequestDataFormatter> $formatterMap */
         $formatterMap = [];
 
-        $inputFullHiding = $this->loggerConfig->requestsInputFullHiding();
+        $inputFullHiding = $config['input']['hidden_paths'] ?? [];
 
         foreach ($inputFullHiding as $urlPattern) {
             $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
             $formatterMap[$urlPattern]->setHideAllRequestParameters(true);
         }
 
-        $inputMaskHeadersMasking = $this->loggerConfig->requestsInputMaskHeadersMasking();
+        $inputMaskHeadersMasking = $config['input']['headers_masking'] ?? [];
 
         foreach ($inputMaskHeadersMasking as $urlPattern => $headers) {
             $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
             $formatterMap[$urlPattern]->addRequestHeaders($headers);
         }
 
-        $inputParametersMasking = $this->loggerConfig->requestsInputParametersMasking();
+        $inputParametersMasking = $config['input']['parameters_masking'] ?? [];
 
         foreach ($inputParametersMasking as $urlPattern => $parameters) {
             $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
             $formatterMap[$urlPattern]->addRequestParameters($parameters);
         }
 
-        $outputFullHiding = $this->loggerConfig->requestsOutputFullHiding();
+        $outputFullHiding = $config['output']['hidden_paths'] ?? [];
 
         foreach ($outputFullHiding as $urlPattern) {
             $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
             $formatterMap[$urlPattern]->setHideAllResponseData(true);
         }
 
-        $outputHeadersMasking = $this->loggerConfig->requestsOutputHeadersMasking();
+        $outputHeadersMasking = $config['output']['headers_masking'] ?? [];
 
         foreach ($outputHeadersMasking as $urlPattern => $headers) {
             $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
             $formatterMap[$urlPattern]->addResponseHeaders($headers);
         }
 
-        $outputFieldsMasking = $this->loggerConfig->requestsOutputFieldsMasking();
+        $outputFieldsMasking = $config['output']['fields_masking'] ?? [];
 
         foreach ($outputFieldsMasking as $urlPattern => $fields) {
             $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
             $formatterMap[$urlPattern]->addResponseFields($fields);
         }
+
+        $this->maxResponseBytes = (int) ($config['output']['max_content_length'] ?? $this->maxResponseBytes);
 
         $this->formatters = new RequestDataFormatters();
 

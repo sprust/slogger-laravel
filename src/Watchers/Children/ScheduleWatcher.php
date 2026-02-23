@@ -10,19 +10,25 @@ use Illuminate\Console\Scheduling\CallbackEvent;
 use Illuminate\Console\Scheduling\Event;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
-use SLoggerLaravel\Watchers\AbstractWatcher;
+use SLoggerLaravel\Processor;
+use SLoggerLaravel\Watchers\WatcherInterface;
 
 /**
  * Not tested
  */
-class ScheduleWatcher extends AbstractWatcher
+class ScheduleWatcher implements WatcherInterface
 {
-    public function register(): void
+    public function __construct(
+        protected Processor $processor
+    ) {
+    }
+
+    public function register(?array $config): void
     {
-        $this->listenEvent(ScheduledTaskSkipped::class, [$this, 'handleScheduledTaskSkipped']);
-        $this->listenEvent(ScheduledTaskStarting::class, [$this, 'handleScheduledTaskStarting']);
-        $this->listenEvent(ScheduledTaskFailed::class, [$this, 'handleScheduledTaskFailed']);
-        $this->listenEvent(ScheduledTaskFinished::class, [$this, 'handleScheduledTaskFinished']);
+        $this->processor->registerEvent(ScheduledTaskSkipped::class, [$this, 'handleScheduledTaskSkipped']);
+        $this->processor->registerEvent(ScheduledTaskStarting::class, [$this, 'handleScheduledTaskStarting']);
+        $this->processor->registerEvent(ScheduledTaskFailed::class, [$this, 'handleScheduledTaskFailed']);
+        $this->processor->registerEvent(ScheduledTaskFinished::class, [$this, 'handleScheduledTaskFinished']);
     }
 
     public function handleScheduledTaskSkipped(ScheduledTaskSkipped $event): void
@@ -46,11 +52,6 @@ class ScheduleWatcher extends AbstractWatcher
     }
 
     protected function pushTask(Event $task, string $tag): void
-    {
-        $this->safeHandleWatching(fn() => $this->onPushTask($task, $tag));
-    }
-
-    protected function onPushTask(Event $task, string $tag): void
     {
         $data = [
             'command'     => $task instanceof CallbackEvent ? 'Closure' : $task->command,
@@ -81,6 +82,12 @@ class ScheduleWatcher extends AbstractWatcher
             return '';
         }
 
-        return trim(file_get_contents($event->output));
+        $contents = file_get_contents($event->output);
+
+        if ($contents === false) {
+            return '';
+        }
+
+        return trim($contents);
     }
 }

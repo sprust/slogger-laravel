@@ -1,0 +1,87 @@
+PHP_CLI="docker-compose exec php"
+
+env-copy:
+	cp -i .env.example .env
+
+setup:
+	make down
+	make build
+	make up
+	make composer c=i
+
+build:
+	docker-compose build
+
+down:
+	docker-compose down
+
+up:
+	docker-compose up -d
+
+stop:
+	docker-compose stop
+
+restart:
+	make stop
+	make up
+
+bash-php:
+	"$(PHP_CLI)" bash
+
+composer:
+	"$(PHP_CLI)" composer ${c}
+
+artisan:
+	"$(PHP_CLI)" ./vendor/bin/testbench ${c}
+
+test:
+	"$(PHP_CLI)" ./vendor/bin/phpunit \
+		-d memory_limit=512M \
+		--colors=auto \
+		--testdox \
+		--display-incomplete \
+		--display-skipped \
+		--display-deprecations \
+		--display-phpunit-deprecations \
+		--display-errors \
+		--display-notices \
+		--display-warnings \
+		tests ${c}
+
+stan:
+	"$(PHP_CLI)" ./vendor/bin/phpstan analyse \
+		--memory-limit=1G
+
+check:
+	make cs-fixer-check
+	make stan
+	make test
+
+declare-strict:
+	grep -Lr "declare(strict_types=1);" ./src | grep .php
+
+cs-fixer-check:
+	"$(PHP_CLI)" ./vendor/bin/php-cs-fixer fix --config php-cs-fixer.dist.php --dry-run --diff --verbose
+
+cs-fixer-fix:
+	"$(PHP_CLI)" ./vendor/bin/php-cs-fixer fix --config php-cs-fixer.dist.php --verbose
+
+check-laravel-all:
+	make set-laravel-10
+	make check
+	make set-laravel-11
+	make check
+	make set-laravel-12
+	make check
+
+set-laravel-10:
+	make composer c="require "laravel/framework:^10" --no-update"
+	make composer c="update --with-all-dependencies --prefer-dist --no-interaction"
+
+set-laravel-11:
+	make composer c="require "laravel/framework:^11" --no-update"
+	make composer c="update --with-all-dependencies --prefer-dist --no-interaction"
+
+set-laravel-12:
+	make composer c="require "laravel/framework:^12" --no-update"
+	make composer c="update --with-all-dependencies --prefer-dist --no-interaction"

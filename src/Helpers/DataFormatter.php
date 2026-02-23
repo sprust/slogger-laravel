@@ -3,20 +3,17 @@
 namespace SLoggerLaravel\Helpers;
 
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Arr;
 use Throwable;
 
 class DataFormatter
 {
     /**
-     * @param Throwable $exception
-     *
      * @return array{
      *     message: string,
      *     exception: string,
      *     file: string,
      *     line: int,
-     *     trace: array<array{file: string, line: int}>
+     *     trace: array<array{file?: string, line?: int}>
      * }
      */
     public static function exception(Throwable $exception): array
@@ -32,21 +29,28 @@ class DataFormatter
 
     public static function model(Model $model): string
     {
-        return $model::class . ':' . $model->getKey();
+        $key = $model->getKey();
+
+        return $model::class . ':' . ($key === null ? '<new>' : $key);
     }
 
     /**
+     * @param array<array{file?: string, line?: int}> $stackTrace
+     *
+     * @return array<array{file?: string, line?: int}>
+     *
      * @see Throwable::getTrace()
-     *
-     * @param array<array{file: string, line: int}> $stackTrace
-     *
-     * @return array<array{file: string, line: int}>
      */
     private static function stackTrace(array $stackTrace): array
     {
-        return array_map(
-            fn(array $item) => Arr::only($item, ['file', 'line']),
-            $stackTrace
+        return array_filter(
+            array_map(
+                static fn(array $item) => array_filter([
+                    'file' => $item['file'] ?? null,
+                    'line' => $item['line'] ?? null,
+                ]),
+                $stackTrace
+            )
         );
     }
 }

@@ -2,15 +2,19 @@
 
 namespace SLoggerLaravel;
 
+use Illuminate\Config\Repository;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Events\Dispatcher;
 use SLoggerLaravel\Configs\DispatcherConfig;
 use SLoggerLaravel\Configs\DispatcherQueueConfig;
 use SLoggerLaravel\Configs\GeneralConfig;
 use SLoggerLaravel\Configs\WatchersConfig;
+use SLoggerLaravel\Dispatcher\ApiClients\ApiClientFactory;
+use SLoggerLaravel\Dispatcher\ApiClients\ApiClientInterface;
 use SLoggerLaravel\Dispatcher\Items\DispatcherFactory;
-use SLoggerLaravel\Dispatcher\Items\Queue\ApiClients\ApiClientFactory;
-use SLoggerLaravel\Dispatcher\Items\Queue\ApiClients\ApiClientInterface;
+use SLoggerLaravel\Dispatcher\Items\Memory\MemoryDispatcher;
+use SLoggerLaravel\Dispatcher\Items\Queue\QueueDispatcher;
 use SLoggerLaravel\Dispatcher\Items\TraceDispatcherInterface;
 use SLoggerLaravel\Dispatcher\StartDispatcherCommand;
 use SLoggerLaravel\Dispatcher\StopDispatcherCommand;
@@ -19,7 +23,7 @@ use SLoggerLaravel\Middleware\HttpMiddleware;
 use SLoggerLaravel\Profiling\AbstractProfiling;
 use SLoggerLaravel\Profiling\XHProfProfiler;
 use SLoggerLaravel\Traces\TraceIdContainer;
-use SLoggerLaravel\Watchers\AbstractWatcher;
+use SLoggerLaravel\Watchers\WatcherInterface;
 
 class ServiceProvider extends \Illuminate\Support\ServiceProvider
 {
@@ -64,6 +68,9 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
             }
         );
 
+        $this->app->singleton(QueueDispatcher::class);
+        $this->app->singleton(MemoryDispatcher::class);
+
         $this->app->singleton(
             TraceDispatcherInterface::class,
             static function (Application $app) {
@@ -74,7 +81,6 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         );
 
         $this->registerListeners();
-
         $this->registerWatchers();
 
         $this->publishes(
@@ -87,11 +93,16 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         );
     }
 
+    /**
+     * @throws BindingResolutionException
+     */
     private function registerListeners(): void
     {
-        $events = $this->app['events'];
+        $events = $this->app->make(Dispatcher::class);
 
-        foreach ($this->app['config']['slogger.listeners'] ?? [] as $eventClass => $listenerClasses) {
+        $listeners = $this->app->make(Repository::class)['slogger.listeners'] ?? [];
+
+        foreach ($listeners as $eventClass => $listenerClasses) {
             foreach ($listenerClasses as $listenerClass) {
                 $events->listen($eventClass, $listenerClass);
             }
@@ -103,24 +114,20 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
      */
     private function registerWatchers(): void
     {
-        $state = $this->app->make(State::class);
+        $processor = $this->app->make(Processor::class);
 
-        /** @var array{enabled: bool, class: class-string<AbstractWatcher>}[] $watcherConfigs */
-        $watcherConfigs = $this->app['config']['slogger.watchers'] ?? [];
+        /** @var array{enabled: bool, class: class-string<WatcherInterface>, config?: array<string, mixed>}[] $watcherConfigs */
+        $watcherConfigs = $this->app->make(Repository::class)['slogger.watchers'] ?? [];
 
         foreach ($watcherConfigs as $watcherConfig) {
             if (!$watcherConfig['enabled']) {
                 continue;
             }
 
-            $watcherClass = $watcherConfig['class'];
-
-            $state->addEnabledWatcher($watcherClass);
-
-            /** @var AbstractWatcher $watcher */
-            $watcher = $this->app->make($watcherClass);
-
-            $watcher->register();
+            $processor->registerWatcher(
+                watcherClass: $watcherConfig['class'],
+                config: $watcherConfig['config'] ?? null,
+            );
         }
     }
 

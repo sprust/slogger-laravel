@@ -4,66 +4,62 @@ namespace SLoggerLaravel\Watchers\Children;
 
 use Closure;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
-use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Events\Dispatcher;
 use Illuminate\Support\Str;
 use ReflectionFunction;
-use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
-use SLoggerLaravel\Watchers\AbstractWatcher;
+use SLoggerLaravel\Processor;
+use SLoggerLaravel\Watchers\WatcherInterface;
 
 /**
  * Not tested on custom events
  */
-class EventWatcher extends AbstractWatcher
+class EventWatcher implements WatcherInterface
 {
     /**
      * @var string[]
      */
-    private array $ignoreEvents = [];
+    protected array $onlyEvents = [];
 
     /**
      * @var string[]
      */
-    private array $serializeEvents = [];
+    protected array $ignoreEvents = [];
 
     /**
      * @var string[]
      */
-    private array $possibleOrphans = [];
+    protected array $serializeEvents = [];
 
     /**
-     * @throws BindingResolutionException
+     * @var string[]
      */
-    protected function init(): void
-    {
-        parent::init();
+    protected array $possibleOrphans = [];
 
-        $config = $this->app->make(WatchersConfig::class);
-
-        $this->ignoreEvents    = $config->eventsIgnoreEvents();
-        $this->serializeEvents = $config->eventsSerializeEvents();
-        $this->possibleOrphans = $config->eventsCanBeOrphan();
+    public function __construct(
+        protected Dispatcher $dispatcher,
+        protected Processor $processor,
+    ) {
     }
 
-    public function register(): void
+    public function register(?array $config): void
     {
-        $this->listenEvent('*', [$this, 'handleEvent']);
+        if ($config !== null) {
+            $this->onlyEvents      = $config['only_events'] ?? [];
+            $this->ignoreEvents    = $config['ignore_events'] ?? [];
+            $this->serializeEvents = $config['serialize_events'] ?? [];
+            $this->possibleOrphans = $config['can_be_orphan'] ?? [];
+        }
+
+        $this->processor->registerEvent('*', [$this, 'handleEvent']);
     }
 
     /**
      * @param array<string, mixed> $payload
      */
-    public function handleEvent(string $eventName, array $payload): void
-    {
-        $this->safeHandleWatching(fn() => $this->onHandleEvent($eventName, $payload));
-    }
-
-    /**
-     * @param array<string, mixed> $payload
-     */
-    protected function onHandleEvent(string $eventName, array $payload): void
+    public function handleEvent(string $eventName, array $payload = []): void
     {
         if ($this->shouldIgnore($eventName)) {
             return;
@@ -130,7 +126,13 @@ class EventWatcher extends AbstractWatcher
         $event = $payload[$payloadKeys[0]] ?? null;
 
         if (is_object($event) && in_array(get_class($event), $this->serializeEvents)) {
-            return json_decode(json_encode($event), true) ?: [];
+            $encodedEvent = json_encode($event);
+
+            if ($encodedEvent === false) {
+                return [];
+            }
+
+            return json_decode($encodedEvent, true) ?: [];
         }
 
         return [];
@@ -141,42 +143,59 @@ class EventWatcher extends AbstractWatcher
      */
     protected function formatListeners(string $eventName): array
     {
-        /** @var array<Closure|string|object> $listeners */
-        $listeners = $this->app['events']->getListeners($eventName);
+        $listeners = $this->dispatcher->getListeners($eventName);
 
         return collect($listeners)
-            ->map(function ($listener) {
-                $listener = (new ReflectionFunction($listener))
-                    ->getStaticVariables()['listener'];
+            ->map(
+                static function ($listener) {
+                    if (is_object($listener)) {
+                        return get_class($listener);
+                    }
 
-                if (is_string($listener)) {
-                    return Str::contains($listener, '@') ? $listener : $listener . '@handle';
-                } elseif (is_array($listener) && is_string($listener[0])) {
-                    return $listener[0] . '@' . $listener[1];
-                } elseif (is_array($listener) && is_object($listener[0])) {
-                    return get_class($listener[0]) . '@' . $listener[1];
-                } elseif (is_object($listener) && is_callable($listener) && !$listener instanceof Closure) {
-                    return get_class($listener) . '@__invoke';
+                    $listener = (new ReflectionFunction($listener))
+                        ->getStaticVariables()['listener'];
+
+                    if (is_string($listener)) {
+                        return Str::contains($listener, '@') ? $listener : $listener . '@handle';
+                    } elseif (is_array($listener) && is_string($listener[0])) {
+                        return $listener[0] . '@' . $listener[1];
+                    } elseif (is_array($listener) && is_object($listener[0])) {
+                        return get_class($listener[0]) . '@' . $listener[1];
+                    } elseif (is_object($listener) && is_callable($listener) && !$listener instanceof Closure) {
+                        return get_class($listener) . '@__invoke';
+                    }
+
+                    return 'unknown';
                 }
+            )
+            ->map(
+                static function ($listener) {
+                    $queued = false;
 
-                return 'closure';
-            })
-            ->map(function ($listener) {
-                if (Str::contains($listener, '@')) {
-                    $queued = in_array(ShouldQueue::class, class_implements(Str::beforeLast($listener, '@')));
+                    if (Str::contains($listener, '@')) {
+                        $classImplements = class_implements(Str::beforeLast($listener, '@'));
+
+                        if ($classImplements !== false) {
+                            $queued = in_array(ShouldQueue::class, $classImplements);
+                        }
+                    }
+
+                    return [
+                        'name'   => $listener,
+                        'queued' => $queued,
+                    ];
                 }
-
-                return [
-                    'name'   => $listener,
-                    'queued' => $queued ?? false,
-                ];
-            })
+            )
             ->values()
             ->toArray();
     }
 
     protected function shouldIgnore(string $eventName): bool
     {
+        if ($this->onlyEvents) {
+            return !Str::is($this->onlyEvents, $eventName);
+        }
+
         return Str::is(
             [
                 'Illuminate\*',

@@ -6,18 +6,21 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
+use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\DataResolver;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Guzzle\GuzzleHandlerFactory;
 use SLoggerLaravel\Helpers\DataFormatter;
 use SLoggerLaravel\Helpers\TraceHelper;
+use SLoggerLaravel\Processor;
 use SLoggerLaravel\RequestPreparer\RequestDataFormatters;
-use SLoggerLaravel\Watchers\AbstractWatcher;
+use SLoggerLaravel\Traces\TraceIdContainer;
+use SLoggerLaravel\Watchers\WatcherInterface;
 use Throwable;
 
-class HttpClientWatcher extends AbstractWatcher
+class HttpClientWatcher implements WatcherInterface
 {
-    protected ?string $headerTraceIdKey;
+    protected string $headerTraceIdKey;
     protected ?string $headerParentTraceIdKey;
 
     /**
@@ -25,20 +28,23 @@ class HttpClientWatcher extends AbstractWatcher
      */
     protected array $requests = [];
 
-    protected function init(): void
-    {
+    public function __construct(
+        protected Processor $processor,
+        protected TraceIdContainer $traceIdContainer,
+        WatchersConfig $watchersConfig
+    ) {
         $this->headerTraceIdKey       = Str::random(20);
-        $this->headerParentTraceIdKey = $this->loggerConfig->requestsHeaderParentTraceIdKey();
+        $this->headerParentTraceIdKey = $watchersConfig->requestsHeaderParentTraceIdKey();
     }
 
-    public function register(): void
+    public function register(?array $config): void
     {
         /** @see GuzzleHandlerFactory */
     }
 
     final public function handleRequest(RequestInterface $request): RequestInterface
     {
-        $requestResult = $this->safeHandleWatching(
+        $requestResult = $this->processor->handleWatcher(
             function () use ($request) {
                 return $this->onHandleRequest($request);
             }
@@ -47,13 +53,50 @@ class HttpClientWatcher extends AbstractWatcher
         return $requestResult ?: $request;
     }
 
+    /**
+     * @param array<string, mixed> $options
+     */
+    final public function handleResponse(
+        RequestInterface $request,
+        array $options,
+        ResponseInterface $response,
+        RequestDataFormatters $formatters
+    ): void {
+        $this->processor->handleWatcher(
+            function () use ($request, $options, $response, $formatters) {
+                $this->onHandleResponse(
+                    request: $request,
+                    options: $options,
+                    response: $response,
+                    formatters: $formatters
+                );
+            }
+        );
+    }
+
+    final public function handleInvalidResponse(
+        RequestInterface $request,
+        Throwable $exception,
+        RequestDataFormatters $formatters
+    ): void {
+        $this->processor->handleWatcher(
+            function () use ($request, $exception, $formatters) {
+                $this->onHandleInvalidResponse(
+                    request: $request,
+                    exception: $exception,
+                    formatters: $formatters
+                );
+            }
+        );
+    }
+
     protected function onHandleRequest(RequestInterface $request): RequestInterface
     {
         if (!$this->isSubscribeRequest($request)) {
             return $request;
         }
 
-        $loggedAt = now();
+        $loggedAt = Carbon::now('UTC');
 
         $traceId = $this->processor->startAndGetTraceId(
             type: 'http-client',
@@ -71,29 +114,15 @@ class HttpClientWatcher extends AbstractWatcher
         $request = $request->withHeader($this->headerTraceIdKey, $traceId);
 
         if ($this->headerParentTraceIdKey) {
-            $request = $request->withHeader(
-                $this->headerParentTraceIdKey,
-                $this->traceIdContainer->getParentTraceId()
-            );
+            if ($parentTraceId = $this->traceIdContainer->getParentTraceId()) {
+                $request = $request->withHeader(
+                    $this->headerParentTraceIdKey,
+                    $parentTraceId
+                );
+            }
         }
 
         return $request;
-    }
-
-    /**
-     * @param array<string, mixed> $options
-     */
-    final public function handleResponse(
-        RequestInterface $request,
-        array $options,
-        ResponseInterface $response,
-        RequestDataFormatters $formatters
-    ): void {
-        $this->safeHandleWatching(
-            function () use ($request, $options, $response, $formatters) {
-                $this->onHandleResponse($request, $options, $response, $formatters);
-            }
-        );
     }
 
     /**
@@ -144,18 +173,6 @@ class HttpClientWatcher extends AbstractWatcher
             ],
             duration: TraceHelper::calcDuration($startedAt),
             parentLoggedAt: $startedAt,
-        );
-    }
-
-    final public function handleInvalidResponse(
-        RequestInterface $request,
-        Throwable $exception,
-        RequestDataFormatters $formatters
-    ): void {
-        $this->safeHandleWatching(
-            function () use ($request, $exception, $formatters) {
-                $this->onHandleInvalidResponse($request, $exception, $formatters);
-            }
         );
     }
 
@@ -223,7 +240,7 @@ class HttpClientWatcher extends AbstractWatcher
     }
 
     /**
-     * @return array<string, mixed>
+     * @return array<int|string, mixed>
      */
     protected function prepareRequestParameters(
         RequestInterface $request,
@@ -272,7 +289,7 @@ class HttpClientWatcher extends AbstractWatcher
     }
 
     /**
-     * @return array<string, mixed>
+     * @return array<int|string, mixed>
      */
     protected function prepareResponseBody(
         RequestInterface $request,

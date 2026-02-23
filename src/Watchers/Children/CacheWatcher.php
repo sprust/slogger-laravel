@@ -11,25 +11,27 @@ use Illuminate\Support\Str;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Helpers\DataFormatter;
-use SLoggerLaravel\Watchers\AbstractWatcher;
+use SLoggerLaravel\Processor;
+use SLoggerLaravel\Watchers\WatcherInterface;
 
-class CacheWatcher extends AbstractWatcher
+// TODO: register all cache event
+readonly class CacheWatcher implements WatcherInterface
 {
-    public function register(): void
-    {
-        $this->listenEvent(CacheHit::class, [$this, 'handleCacheHit']);
-        $this->listenEvent(CacheMissed::class, [$this, 'handleCacheMissed']);
+    public function __construct(
+        protected Processor $processor,
+    ) {
+    }
 
-        $this->listenEvent(KeyWritten::class, [$this, 'handleKeyWritten']);
-        $this->listenEvent(KeyForgotten::class, [$this, 'handleKeyForgotten']);
+    public function register(?array $config): void
+    {
+        $this->processor->registerEvent(CacheHit::class, [$this, 'handleCacheHit']);
+        $this->processor->registerEvent(CacheMissed::class, [$this, 'handleCacheMissed']);
+
+        $this->processor->registerEvent(KeyWritten::class, [$this, 'handleKeyWritten']);
+        $this->processor->registerEvent(KeyForgotten::class, [$this, 'handleKeyForgotten']);
     }
 
     public function handleCacheHit(CacheHit $event): void
-    {
-        $this->safeHandleWatching(fn() => $this->onHandleCacheHit($event));
-    }
-
-    protected function onHandleCacheHit(CacheHit $event): void
     {
         if ($this->shouldIgnore($event->key)) {
             return;
@@ -57,11 +59,6 @@ class CacheWatcher extends AbstractWatcher
 
     public function handleCacheMissed(CacheMissed $event): void
     {
-        $this->safeHandleWatching(fn() => $this->onHandleCacheMissed($event));
-    }
-
-    protected function onHandleCacheMissed(CacheMissed $event): void
-    {
         if ($this->shouldIgnore($event->key)) {
             return;
         }
@@ -86,11 +83,6 @@ class CacheWatcher extends AbstractWatcher
     }
 
     public function handleKeyWritten(KeyWritten $event): void
-    {
-        $this->safeHandleWatching(fn() => $this->onHandleKeyWritten($event));
-    }
-
-    protected function onHandleKeyWritten(KeyWritten $event): void
     {
         if ($this->shouldIgnore($event->key)) {
             return;
@@ -118,11 +110,6 @@ class CacheWatcher extends AbstractWatcher
     }
 
     public function handleKeyForgotten(KeyForgotten $event): void
-    {
-        $this->safeHandleWatching(fn() => $this->onHandleKeyForgotten($event));
-    }
-
-    protected function onHandleKeyForgotten(KeyForgotten $event): void
     {
         if ($this->shouldIgnore($event->key)) {
             return;

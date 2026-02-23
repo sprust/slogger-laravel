@@ -8,21 +8,22 @@ use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Helpers\TraceHelper;
-use SLoggerLaravel\Watchers\AbstractWatcher;
+use SLoggerLaravel\Processor;
+use SLoggerLaravel\Watchers\WatcherInterface;
 
-class DatabaseWatcher extends AbstractWatcher
+readonly class DatabaseWatcher implements WatcherInterface
 {
-    public function register(): void
+    public function __construct(
+        protected Processor $processor,
+    ) {
+    }
+
+    public function register(?array $config): void
     {
-        $this->listenEvent(QueryExecuted::class, [$this, 'handleQueryExecuted']);
+        $this->processor->registerEvent(QueryExecuted::class, [$this, 'handleQueryExecuted']);
     }
 
     public function handleQueryExecuted(QueryExecuted $event): void
-    {
-        $this->safeHandleWatching(fn() => $this->onHandleQueryExecuted($event));
-    }
-
-    protected function onHandleQueryExecuted(QueryExecuted $event): void
     {
         $data = [
             'connection' => $event->connectionName,

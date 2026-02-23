@@ -8,10 +8,11 @@ use Illuminate\Support\Carbon;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Helpers\TraceHelper;
-use SLoggerLaravel\Watchers\AbstractWatcher;
+use SLoggerLaravel\Processor;
+use SLoggerLaravel\Watchers\WatcherInterface;
 use Symfony\Component\Console\Input\InputInterface;
 
-class CommandWatcher extends AbstractWatcher
+class CommandWatcher implements WatcherInterface
 {
     /**
      * @var array<array{trace_id: string, started_at: Carbon}>
@@ -22,40 +23,52 @@ class CommandWatcher extends AbstractWatcher
      */
     protected array $exceptedCommands = [];
 
-    protected function init(): void
-    {
-        $this->exceptedCommands = $this->loggerConfig->commandsExcepted();
+    public function __construct(
+        protected readonly Processor $processor,
+    ) {
     }
 
-    public function register(): void
+    public function register(?array $config): void
     {
-        $this->listenEvent(CommandStarting::class, [$this, 'handleCommandStarting']);
-        $this->listenEvent(CommandFinished::class, [$this, 'handleCommandFinished']);
+        if ($config !== null) {
+            $this->exceptedCommands = $config['excepted'] ?? [];
+        }
+
+        $this->processor->registerEvent(CommandStarting::class, [$this, 'handleCommandStarting']);
+        $this->processor->registerEvent(CommandFinished::class, [$this, 'handleCommandFinished']);
     }
 
-    public function handleCommandStarting(CommandStarting $event): void
+    public function handleCommandStarting(?CommandStarting $event): void
     {
-        $this->safeHandleWatching(fn() => $this->onHandleCommandStarting($event));
-    }
-
-    protected function onHandleCommandStarting(CommandStarting $event): void
-    {
-        if (in_array($event->command, $this->exceptedCommands)) {
+        if (in_array($event?->command, $this->exceptedCommands)) {
             return;
         }
 
+        /**
+         * for support for Laravel 10, 12
+         *
+         * @var InputInterface|null $input
+         */
+        $input = $event?->input;
+
         $data = [
-            'command'   => $this->makeCommandView($event->command, $event->input),
-            'arguments' => $event->input->getArguments(),
-            'options'   => $event->input->getOptions(),
+            'command' => $this->makeCommandView(
+                command: $event?->command,
+                input: $input
+            ),
+            'arguments' => $input?->getArguments(),
+            'options'   => $input?->getOptions(),
         ];
 
-        $loggedAt = now();
+        $loggedAt = Carbon::now('UTC');
 
         $traceId = $this->processor->startAndGetTraceId(
             type: TraceTypeEnum::Command->value,
             tags: [
-                $this->makeCommandView($event->command, $event->input),
+                $this->makeCommandView(
+                    command: $event?->command,
+                    input: $input
+                ),
             ],
             data: $data,
             loggedAt: $loggedAt,
@@ -68,12 +81,12 @@ class CommandWatcher extends AbstractWatcher
         ];
     }
 
-    public function handleCommandFinished(CommandFinished $event): void
+    public function handleCommandFinished(?CommandFinished $event): void
     {
-        $this->safeHandleWatching(fn() => $this->onHandleCommandFinished($event));
+        $this->processor->handleWatcher(fn() => $this->onHandleCommandFinished($event));
     }
 
-    protected function onHandleCommandFinished(CommandFinished $event): void
+    protected function onHandleCommandFinished(?CommandFinished $event): void
     {
         $commandData = array_pop($this->commands);
 
@@ -86,16 +99,26 @@ class CommandWatcher extends AbstractWatcher
         /** @var Carbon $startedAt */
         $startedAt = $commandData['started_at'];
 
+        /**
+         * for support for Laravel 10, 12
+         *
+         * @var InputInterface|null $input
+         */
+        $input = $event?->input;
+
         $data = [
-            'command'   => $this->makeCommandView($event->command, $event->input),
-            'exit_code' => $event->exitCode,
-            'arguments' => $event->input->getArguments(),
-            'options'   => $event->input->getOptions(),
+            'command' => $this->makeCommandView(
+                command: $event?->command,
+                input: $input
+            ),
+            'exit_code' => $event?->exitCode,
+            'arguments' => $input?->getArguments(),
+            'options'   => $input?->getOptions(),
         ];
 
         $this->processor->stop(
             traceId: $traceId,
-            status: $event->exitCode
+            status: $event?->exitCode
                 ? TraceStatusEnum::Failed->value
                 : TraceStatusEnum::Success->value,
             tags: null,
@@ -105,8 +128,14 @@ class CommandWatcher extends AbstractWatcher
         );
     }
 
-    protected function makeCommandView(?string $command, InputInterface $input): string
+    protected function makeCommandView(?string $command, ?InputInterface $input): string
     {
-        return $command ?? $input->getArguments()['command'] ?? 'default';
+        $command = $command ?? $input?->getArguments()['command'] ?? 'unknown';
+
+        if (!is_string($command)) {
+            return 'unknown';
+        }
+
+        return $command;
     }
 }

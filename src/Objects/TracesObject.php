@@ -53,5 +53,3 @@ class TracesObject
         return count($this->creating) + count($this->updating);
     }
 }
-
-

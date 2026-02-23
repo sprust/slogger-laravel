@@ -25,7 +25,7 @@ readonly class QueueDispatcherProcessor implements DispatcherProcessorInterface
             $config->getConnection(),
             $config->getName(),
             120,
-            1
+            2
         );
     }
 

@@ -3,11 +3,14 @@
 namespace SLoggerLaravel;
 
 use Closure;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\Carbon;
 use LogicException;
+use RuntimeException;
 use SLoggerLaravel\Dispatcher\Items\TraceDispatcherInterface;
 use SLoggerLaravel\Enums\TraceStatusEnum;
+use SLoggerLaravel\Events\WatcherErrorEvent;
 use SLoggerLaravel\Helpers\DataFormatter;
 use SLoggerLaravel\Helpers\MetricsHelper;
 use SLoggerLaravel\Helpers\TraceDataComplementer;
@@ -16,6 +19,7 @@ use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
 use SLoggerLaravel\Profiling\AbstractProfiling;
 use SLoggerLaravel\Traces\TraceIdContainer;
+use SLoggerLaravel\Watchers\WatcherInterface;
 use Throwable;
 
 class Processor
@@ -31,6 +35,8 @@ class Processor
 
     public function __construct(
         private readonly Application $app,
+        private readonly State $state,
+        private readonly Dispatcher $dispatcher,
         private readonly TraceDispatcherInterface $traceDispatcher,
         private readonly TraceIdContainer $traceIdContainer,
         private readonly AbstractProfiling $profiler,
@@ -46,6 +52,57 @@ class Processor
     public function isPaused(): bool
     {
         return $this->paused;
+    }
+
+    /**
+     * @param class-string<WatcherInterface> $watcherClass
+     * @param array<string, mixed>|null      $config
+     */
+    public function registerWatcher(string $watcherClass, ?array $config): void
+    {
+        /** @var WatcherInterface $watcher */
+        $watcher = $this->app->make($watcherClass);
+
+        $watcher->register($config);
+
+        $this->state->addEnabledWatcher($watcherClass);
+    }
+
+    public function registerEvent(string $event, callable $listener): void
+    {
+        $this->dispatcher->listen(
+            $event,
+            fn(mixed ...$eventData) => $this->handleWatcher(
+                fn() => call_user_func_array($listener, $eventData)
+            )
+        );
+    }
+
+    /**
+     * @param Closure(): mixed $callback
+     */
+    public function handleWatcher(Closure $callback): mixed
+    {
+        if ($this->isPaused()) {
+            return null;
+        }
+
+        try {
+            return $callback();
+        } catch (Throwable $exception) {
+            try {
+                $this->handleWithoutTracing(function () use ($exception) {
+                    $this->dispatcher->dispatch(new WatcherErrorEvent($exception));
+                });
+            } catch (Throwable $exception) {
+                throw new RuntimeException(
+                    message: $exception->getMessage(),
+                    previous: $exception
+                );
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -96,7 +153,7 @@ class Processor
             customParentTraceId: $customParentTraceId,
         );
 
-        $startedAt = now();
+        $startedAt = Carbon::now('UTC');
 
         $exception = null;
 
@@ -215,7 +272,7 @@ class Processor
                 memory: MetricsHelper::getMemoryUsagePercent(),
                 cpu: MetricsHelper::getCpuAvgPercent(),
                 isParent: false,
-                loggedAt: ($loggedAt ?: now())->clone()->setTimezone('UTC')
+                loggedAt: ($loggedAt ?: Carbon::now())->clone()->setTimezone('UTC')
             )
         );
     }
