@@ -80,21 +80,22 @@ class QueueDispatcher implements TraceDispatcherInterface
         $this->traces = new TracesObject();
     }
 
-    /**
-     * @throws BindingResolutionException
-     */
     public function __destruct()
     {
         try {
             $this->dispatchAndClear(maxBatchSize: 0);
         } catch (Throwable $exception) {
-            Log::channel($this->app->make(GeneralConfig::class)->getLogChannel())
-                ->error($exception->getMessage(), [
-                    'code'  => $exception->getCode(),
-                    'file'  => $exception->getFile(),
-                    'line'  => $exception->getLine(),
-                    'trace' => $exception->getTraceAsString(),
-                ]);
+            try {
+                Log::channel($this->app->make(GeneralConfig::class)->getLogChannel())
+                    ->error($exception->getMessage(), [
+                        'code'  => $exception->getCode(),
+                        'file'  => $exception->getFile(),
+                        'line'  => $exception->getLine(),
+                        'trace' => $exception->getTraceAsString(),
+                    ]);
+            } catch (Throwable) {
+                // no action
+            }
         }
     }
 }

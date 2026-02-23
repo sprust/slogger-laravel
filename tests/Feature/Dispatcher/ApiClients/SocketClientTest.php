@@ -1,0 +1,154 @@
+<?php
+
+declare(strict_types=1);
+
+namespace SLoggerLaravel\Tests\Feature\Dispatcher\ApiClients;
+
+use Illuminate\Support\Carbon;
+use JsonException;
+use RuntimeException;
+use SLoggerLaravel\Dispatcher\ApiClients\Socket\Connection;
+use SLoggerLaravel\Dispatcher\ApiClients\Socket\SocketClient;
+use SLoggerLaravel\Objects\TraceCreateObject;
+use SLoggerLaravel\Objects\TracesObject;
+use SLoggerLaravel\Objects\TraceUpdateObject;
+use SLoggerLaravel\Tests\Feature\BaseTestCase;
+
+class SocketClientTest extends BaseTestCase
+{
+    /**
+     * @throws JsonException
+     */
+    public function testSendTracesConnectsAndSendsPayload(): void
+    {
+        $connection = $this->createMock(Connection::class);
+
+        $connection->expects(self::once())
+            ->method('isConnected')
+            ->willReturn(false);
+
+        $connection->expects(self::once())
+            ->method('connect')
+            ->with('token-1');
+
+        $connection->expects(self::once())
+            ->method('write')
+            ->with(
+                self::callback(
+                    function (string $payloadJson) {
+                        $payload = json_decode($payloadJson, true);
+
+                        self::assertArrayHasKey('c', $payload);
+                        self::assertArrayHasKey('u', $payload);
+
+                        $creating = json_decode($payload['c'], true);
+                        $updating = json_decode($payload['u'], true);
+
+                        self::assertSame('trace-1', $creating[0]['tid']);
+                        self::assertSame('trace-1', $updating[0]['tid']);
+
+                        return true;
+                    }
+                )
+            );
+
+        $connection->expects(self::once())
+            ->method('read')
+            ->willReturn('received');
+
+        $client = new SocketClient('token-1', $connection);
+
+        $client->sendTraces($this->makeTraces());
+    }
+
+    /**
+     * @throws JsonException
+     */
+    public function testSendTracesReconnectsOnWriteFailure(): void
+    {
+        $connection = $this->createMock(Connection::class);
+
+        $connection->expects(self::once())
+            ->method('isConnected')
+            ->willReturn(true);
+
+        $connection->expects(self::once())
+            ->method('connect')
+            ->with('token-1');
+
+        $connection->expects(self::exactly(2))
+            ->method('write')
+            ->willReturnCallback(function (string $payloadJson) {
+                static $calls = 0;
+                $calls++;
+
+                if ($calls === 1) {
+                    throw new RuntimeException('fail');
+                }
+
+                return null;
+            });
+
+        $connection->expects(self::once())
+            ->method('read')
+            ->willReturn('received');
+
+        $client = new SocketClient('token-1', $connection);
+
+        $client->sendTraces($this->makeTraces());
+    }
+
+    /**
+     * @throws JsonException
+     */
+    public function testSendTracesThrowsOnUnexpectedResponse(): void
+    {
+        $connection = $this->createMock(Connection::class);
+
+        $connection->method('isConnected')->willReturn(true);
+        $connection->method('write');
+        $connection->method('read')->willReturn('nope');
+
+        $client = new SocketClient('token-1', $connection);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Unexpected response from socket server');
+
+        $client->sendTraces($this->makeTraces());
+    }
+
+    private function makeTraces(): TracesObject
+    {
+        return (new TracesObject())
+            ->addCreating(
+                new TraceCreateObject(
+                    traceId: 'trace-1',
+                    parentTraceId: null,
+                    type: 'request',
+                    status: 'started',
+                    tags: ['tag'],
+                    data: ['foo' => 'bar'],
+                    duration: 1.25,
+                    memory: 12.0,
+                    cpu: 2.0,
+                    isParent: true,
+                    loggedAt: Carbon::create(2024, 1, 1, 0, 0, 0, 'UTC')
+                        ?: throw new RuntimeException('Failed to create Carbon instance')
+                )
+            )
+            ->addUpdating(
+                new TraceUpdateObject(
+                    traceId: 'trace-1',
+                    status: 'success',
+                    profiling: null,
+                    tags: ['t2'],
+                    data: ['updated' => true],
+                    duration: 0.25,
+                    memory: 1.5,
+                    cpu: 0.5,
+                    parentLoggedAt: Carbon::create(2024, 1, 1, 0, 0, 1, 'UTC')
+                        ?: throw new RuntimeException('Failed to create Carbon instance')
+                )
+            );
+    }
+}
