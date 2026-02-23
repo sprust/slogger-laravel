@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace SLoggerLaravel\Tests\Feature;
 
 use App\Providers\WorkbenchServiceProvider;
+use Illuminate\Foundation\Application;
 use Orchestra\Testbench\Concerns\WithWorkbench;
 use Orchestra\Testbench\TestCase;
 use SLoggerLaravel\ServiceProvider;
@@ -26,5 +27,12 @@ abstract class BaseTestCase extends TestCase
             WorkbenchServiceProvider::class,
             ...parent::getPackageProviders($app),
         ];
+    }
+
+    protected function getApp(): Application
+    {
+        assert($this->app !== null);
+
+        return $this->app;
     }
 }

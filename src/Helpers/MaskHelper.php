@@ -8,10 +8,10 @@ use Illuminate\Support\Str;
 class MaskHelper
 {
     /**
-     * @param array<string, mixed> $data
-     * @param array<string, mixed> $patterns
+     * @param array<int|string, mixed> $data
+     * @param array<int, string>       $patterns
      *
-     * @return array<string, mixed>
+     * @return array<int|string, mixed>
      */
     public static function maskArrayByList(array $data, array $patterns): array
     {
@@ -29,10 +29,10 @@ class MaskHelper
     }
 
     /**
-     * @param array<string, mixed> $data
-     * @param array<string, mixed> $patterns
+     * @param array<int|string, mixed> $data
+     * @param array<int|string, mixed> $patterns
      *
-     * @return array<string, mixed>
+     * @return array<int|string, mixed>
      */
     public static function maskArrayByPatterns(array $data, array $patterns): array
     {

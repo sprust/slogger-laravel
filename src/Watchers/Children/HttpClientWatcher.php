@@ -240,7 +240,7 @@ class HttpClientWatcher implements WatcherInterface
     }
 
     /**
-     * @return array<string, mixed>
+     * @return array<int|string, mixed>
      */
     protected function prepareRequestParameters(
         RequestInterface $request,
@@ -289,7 +289,7 @@ class HttpClientWatcher implements WatcherInterface
     }
 
     /**
-     * @return array<string, mixed>
+     * @return array<int|string, mixed>
      */
     protected function prepareResponseBody(
         RequestInterface $request,

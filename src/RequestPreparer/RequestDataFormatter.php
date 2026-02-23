@@ -90,9 +90,9 @@ class RequestDataFormatter
     }
 
     /**
-     * @param array<string, mixed> $headers
+     * @param array<int|string, mixed> $headers
      *
-     * @return array<string, mixed>
+     * @return array<int|string, mixed>
      */
     public function prepareRequestHeaders(string $url, array $headers): array
     {
@@ -107,9 +107,9 @@ class RequestDataFormatter
     }
 
     /**
-     * @param array<string, mixed> $parameters
+     * @param array<int|string, mixed> $parameters
      *
-     * @return array<string, mixed>
+     * @return array<int|string, mixed>
      */
     public function prepareRequestParameters(string $url, array $parameters): array
     {
@@ -130,9 +130,9 @@ class RequestDataFormatter
     }
 
     /**
-     * @param array<string, mixed> $headers
+     * @param array<int|string, mixed> $headers
      *
-     * @return array<string, mixed>
+     * @return array<int|string, mixed>
      */
     public function prepareResponseHeaders(string $url, array $headers): array
     {
@@ -186,9 +186,9 @@ class RequestDataFormatter
     }
 
     /**
-     * @param array<string, mixed> $headers
+     * @param array<int|string, mixed> $headers
      *
-     * @return array<string, mixed>
+     * @return array<int|string, mixed>
      */
     protected function prepareHeaders(array $headers): array
     {

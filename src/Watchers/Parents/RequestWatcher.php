@@ -269,7 +269,7 @@ class RequestWatcher implements WatcherInterface
     }
 
     /**
-     * @return array<string, mixed>
+     * @return array<int|string, mixed>
      */
     protected function prepareRequestHeaders(Request $request): array
     {
@@ -289,7 +289,7 @@ class RequestWatcher implements WatcherInterface
     }
 
     /**
-     * @return array<string, mixed>
+     * @return array<int|string, mixed>
      */
     protected function prepareRequestParameters(Request $request): array
     {
@@ -311,7 +311,7 @@ class RequestWatcher implements WatcherInterface
     }
 
     /**
-     * @return array<string, mixed>
+     * @return array<int|string, mixed>
      */
     protected function prepareResponseHeaders(Request $request, Response $response): array
     {
@@ -331,7 +331,7 @@ class RequestWatcher implements WatcherInterface
     }
 
     /**
-     * @return array<string, mixed>
+     * @return array<int|string, mixed>
      */
     protected function prepareResponseData(Request $request, Response $response): array
     {

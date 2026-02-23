@@ -84,7 +84,7 @@ class ModelWatcher implements WatcherInterface
     }
 
     /**
-     * @return array<string, mixed>|null
+     * @return array<int|string, mixed>|null
      */
     protected function prepareChanges(Model $modelInstance): ?array
     {
