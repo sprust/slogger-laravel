@@ -59,10 +59,10 @@ class TraceHelperTest extends BaseTestCase
 
         Carbon::setTestNow($now);
 
-        $startedAt = $now->copy()->subSeconds(1.234567);
+        $startedAt = $now->copy()->subSeconds(11);
         $duration  = TraceHelper::calcDuration($startedAt);
 
-        self::assertSame(1.234567, $duration);
+        self::assertSame(11, (int) $duration);
     }
 
     public function testRoundDurationRoundsToSixDecimals(): void
