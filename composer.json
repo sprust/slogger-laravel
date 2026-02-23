@@ -1,12 +1,21 @@
 {
     "name": "slogger/laravel",
-    "description": "SLogger for laravel",
+    "description": "Tracing and observability for Laravel with dispatchers, masking, and profiling.",
     "license": "MIT",
     "authors": [
         {
             "name": "Pavel",
             "email": "sppetrovich@mail.ru"
         }
+    ],
+    "keywords": [
+        "laravel",
+        "tracing",
+        "observability",
+        "logging",
+        "monitoring",
+        "profiling",
+        "debugging"
     ],
     "require": {
         "ext-pcntl": "*",
