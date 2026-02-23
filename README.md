@@ -6,7 +6,7 @@ This README documents installation, configuration, watchers, masking, dispatcher
 
 ## Requirements
 
-- PHP >= 8.1
+- PHP >= 8.2
 - Laravel 10+ (tested), should work on Laravel 12
 - Queue driver for `queue` dispatcher
 - Optional: XHProf extension for profiling
