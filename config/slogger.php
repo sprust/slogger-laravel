@@ -99,7 +99,7 @@ return [
 
                 'input' => [
                     /** url_patterns */
-                    'full_hiding' => [
+                    'hidden_paths' => [
                         //
                     ],
                     /** url_pattern => keys */
@@ -121,7 +121,7 @@ return [
 
                 'output' => [
                     /** url_patterns */
-                    'full_hiding' => [
+                    'hidden_paths' => [
                         //
                     ],
 

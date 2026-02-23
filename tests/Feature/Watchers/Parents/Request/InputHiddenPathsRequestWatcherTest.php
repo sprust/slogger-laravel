@@ -9,7 +9,7 @@ use SLoggerLaravel\Objects\TraceUpdateObject;
 use SLoggerLaravel\Tests\Feature\Watchers\BaseWatcherTestCase;
 use SLoggerLaravel\Watchers\Parents\RequestWatcher;
 
-class InputFullHidingRequestWatcherTest extends BaseWatcherTestCase
+class InputHiddenPathsRequestWatcherTest extends BaseWatcherTestCase
 {
     public function test(): void
     {
@@ -17,7 +17,7 @@ class InputFullHidingRequestWatcherTest extends BaseWatcherTestCase
             watcherClass: RequestWatcher::class,
             config: [
                 'input' => [
-                    'full_hiding' => [
+                    'hidden_paths' => [
                         'slogger/success',
                     ],
                 ],

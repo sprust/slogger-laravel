@@ -402,7 +402,7 @@ class RequestWatcher implements WatcherInterface
         /** @var array<string, RequestDataFormatter> $formatterMap */
         $formatterMap = [];
 
-        $inputFullHiding = $config['input']['full_hiding'] ?? [];
+        $inputFullHiding = $config['input']['hidden_paths'] ?? [];
 
         foreach ($inputFullHiding as $urlPattern) {
             $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
@@ -423,7 +423,7 @@ class RequestWatcher implements WatcherInterface
             $formatterMap[$urlPattern]->addRequestParameters($parameters);
         }
 
-        $outputFullHiding = $config['output']['full_hiding'] ?? [];
+        $outputFullHiding = $config['output']['hidden_paths'] ?? [];
 
         foreach ($outputFullHiding as $urlPattern) {
             $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
