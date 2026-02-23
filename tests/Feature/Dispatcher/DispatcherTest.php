@@ -42,7 +42,7 @@ class DispatcherTest extends BaseTestCase
         $dispatcher = new Dispatcher(
             output: new ConsoleOutput(OutputInterface::VERBOSITY_QUIET),
             processHelper: $processHelper,
-            dispatcherFactory: $this->createMock(DispatcherFactory::class),
+            dispatcherFactory: $this->getApp()->make(DispatcherFactory::class),
             generalConfig: new GeneralConfig(),
         );
 
@@ -73,7 +73,7 @@ class DispatcherTest extends BaseTestCase
         $dispatcher = new Dispatcher(
             output: new ConsoleOutput(OutputInterface::VERBOSITY_QUIET),
             processHelper: $processHelper,
-            dispatcherFactory: $this->createMock(DispatcherFactory::class),
+            dispatcherFactory: $this->getApp()->make(DispatcherFactory::class),
             generalConfig: new GeneralConfig(),
         );
 
