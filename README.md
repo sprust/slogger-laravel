@@ -47,6 +47,20 @@ Then start dispatcher workers:
 php artisan slogger:dispatcher:start
 ```
 
+## Trace Collection Backend
+
+SLogger Laravel sends traces to a separate backend service. The reference backend project is:
+
+```text
+https://github.com/sprust/slogger
+```
+
+Use its setup instructions to provision the server and configure the API client URL/token in this package.
+
+### Custom backend / client
+
+You can replace the backend by providing your own API client. Redefine `ApiClientFactory::create` and return a custom implementation of `SLoggerLaravel\\Dispatcher\\ApiClients\\ApiClientInterface` that sends traces to your backend.
+
 ## Configuration
 
 All configuration lives in `config/slogger.php` with environment overrides. Key sections:

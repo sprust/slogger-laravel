@@ -13,11 +13,11 @@ use SLoggerLaravel\Dispatcher\ApiClients\Socket\SocketClient;
 
 readonly class ApiClientFactory
 {
-    private string $apiToken;
+    protected string $apiToken;
 
     public function __construct(
-        private GeneralConfig $config,
-        private DispatcherQueueConfig $queueConfig,
+        protected GeneralConfig $config,
+        protected DispatcherQueueConfig $queueConfig,
     ) {
         $this->apiToken = $this->config->getToken();
     }
