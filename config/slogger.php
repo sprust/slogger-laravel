@@ -38,7 +38,7 @@ return [
         'queue' => [
             // queue worker connection and name.
             'connection' => env('SLOGGER_DISPATCHER_QUEUE_CONNECTION', $defaultQueueConnection),
-            'name' => env('SLOGGER_DISPATCHER_QUEUE_NAME', 'slogger'),
+            'name'       => env('SLOGGER_DISPATCHER_QUEUE_NAME', 'slogger'),
             // number of worker processes.
             'workers_num' => env('SLOGGER_DISPATCHER_QUEUE_WORKERS_COUNT', 3),
 
