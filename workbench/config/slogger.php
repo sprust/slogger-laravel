@@ -93,15 +93,26 @@ return [
             'enabled' => env('SLOGGER_LOG_REQUESTS_ENABLED', false),
             'config'  => [
                 /** url_patterns */
+                'only_paths' => [
+                    //
+                ],
+
+                /** url_patterns */
                 'excepted_paths' => [
                     //
                 ],
 
                 'input' => [
                     /** url_patterns */
-                    'full_hiding' => [
+                    'only_paths' => [
                         //
                     ],
+
+                    /** url_patterns */
+                    'hidden_paths' => [
+                        '*',
+                    ],
+
                     /** url_pattern => keys */
                     'headers_masking' => [
                         '*' => [
@@ -110,6 +121,7 @@ return [
                             'x-xsrf-token',
                         ],
                     ],
+
                     /** url_pattern => key_patterns */
                     'parameters_masking' => [
                         '*' => [
@@ -121,8 +133,13 @@ return [
 
                 'output' => [
                     /** url_patterns */
-                    'full_hiding' => [
+                    'only_paths' => [
                         //
+                    ],
+
+                    /** url_patterns */
+                    'hidden_paths' => [
+                        '*',
                     ],
 
                     /** url_pattern => keys */

@@ -39,7 +39,21 @@ class RequestWatcher implements WatcherInterface
     /**
      * @var string[]
      */
+    protected array $onlyPaths = [];
+    /**
+     * @var string[]
+     */
     protected array $exceptedPaths = [];
+
+    /**
+     * @var string[]
+     */
+    protected array $inputOnlyPaths = [];
+
+    /**
+     * @var string[]
+     */
+    protected array $outputOnlyPaths = [];
 
     protected RequestDataFormatters $formatters;
 
@@ -66,6 +80,10 @@ class RequestWatcher implements WatcherInterface
      */
     public function handleRequestHandling(RequestHandling $event): void
     {
+        if ($this->onlyPaths && !$this->isRequestByPatterns($event->request, $this->onlyPaths)) {
+            return;
+        }
+
         if ($this->isRequestByPatterns($event->request, $this->exceptedPaths)) {
             return;
         }
@@ -111,6 +129,10 @@ class RequestWatcher implements WatcherInterface
 
     public function handleRequestHandled(RequestHandled $event): void
     {
+        if ($this->onlyPaths && !$this->isRequestByPatterns($event->request, $this->onlyPaths)) {
+            return;
+        }
+
         if ($this->isRequestByPatterns($event->request, $this->exceptedPaths)) {
             return;
         }
@@ -251,6 +273,10 @@ class RequestWatcher implements WatcherInterface
      */
     protected function prepareRequestHeaders(Request $request): array
     {
+        if ($this->inputOnlyPaths && !$this->isRequestByPatterns($request, $this->inputOnlyPaths)) {
+            return [];
+        }
+
         $uri = $this->getRequestPath($request);
 
         $headers = $request->headers->all();
@@ -267,6 +293,12 @@ class RequestWatcher implements WatcherInterface
      */
     protected function prepareRequestParameters(Request $request): array
     {
+        if ($this->inputOnlyPaths && !$this->isRequestByPatterns($request, $this->inputOnlyPaths)) {
+            return [
+                '__cleaned' => null,
+            ];
+        }
+
         $uri = $this->getRequestPath($request);
 
         $parameters = $this->getRequestParameters($request);
@@ -283,6 +315,10 @@ class RequestWatcher implements WatcherInterface
      */
     protected function prepareResponseHeaders(Request $request, Response $response): array
     {
+        if ($this->outputOnlyPaths && !$this->isRequestByPatterns($request, $this->outputOnlyPaths)) {
+            return [];
+        }
+
         $uri = $this->getRequestPath($request);
 
         $headers = $response->headers->all();
@@ -299,6 +335,12 @@ class RequestWatcher implements WatcherInterface
      */
     protected function prepareResponseData(Request $request, Response $response): array
     {
+        if ($this->outputOnlyPaths && !$this->isRequestByPatterns($request, $this->outputOnlyPaths)) {
+            return [
+                '__cleaned' => null,
+            ];
+        }
+
         if ($response instanceof RedirectResponse) {
             return [
                 'redirect' => $response->getTargetUrl(),
@@ -397,7 +439,11 @@ class RequestWatcher implements WatcherInterface
             return;
         }
 
+        $this->onlyPaths     = $config['only_paths'] ?? [];
         $this->exceptedPaths = $config['excepted_paths'] ?? [];
+
+        $this->inputOnlyPaths  = $config['input']['only_paths'] ?? [];
+        $this->outputOnlyPaths = $config['output']['only_paths'] ?? [];
 
         /** @var array<string, RequestDataFormatter> $formatterMap */
         $formatterMap = [];
