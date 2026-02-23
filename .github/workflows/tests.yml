@@ -5,7 +5,7 @@ on:
     paths:
       - 'src/**'
       - 'workbench/**'
-      - 'test/**'
+      - 'tests/**'
     branches:
       - "**"
 
