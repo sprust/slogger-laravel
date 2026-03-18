@@ -71,11 +71,15 @@ class QueueDispatcher implements TraceDispatcherInterface
 
     protected function dispatchAndClear(int $maxBatchSize): void
     {
-        if ($maxBatchSize > 0 && $this->traces->count() < $maxBatchSize) {
+        $tracesCount = $this->traces->count();
+
+        if ($maxBatchSize > 0 && $tracesCount < $maxBatchSize) {
             return;
         }
 
-        dispatch(new SendTracesJob($this->traces));
+        if ($tracesCount > 0) {
+            dispatch(new SendTracesJob($this->traces));
+        }
 
         $this->traces = new TracesObject();
     }
