@@ -7,6 +7,8 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Support\Facades\Log;
+use JsonException;
+use RuntimeException;
 use SLoggerLaravel\Configs\DispatcherQueueConfig;
 use SLoggerLaravel\Configs\GeneralConfig;
 use SLoggerLaravel\Dispatcher\ApiClients\ApiClientInterface;
@@ -23,8 +25,19 @@ class SendTracesJob implements ShouldQueue
     public int $tries   = 120;
     public int $backoff = 1;
 
-    public function __construct(private readonly TracesObject $traces)
+    protected readonly string $tracesJson;
+
+    public function __construct(TracesObject $traces)
     {
+        try {
+            $this->tracesJson = $traces->toJson();
+        } catch (JsonException $exception) {
+            throw new RuntimeException(
+                message: 'Failed to serialize traces: ' . $exception->getMessage(),
+                previous: $exception
+            );
+        }
+
         $config = app(DispatcherQueueConfig::class);
 
         $this->onConnection($config->getConnection())
@@ -40,8 +53,10 @@ class SendTracesJob implements ShouldQueue
         GeneralConfig $config
     ): void {
         try {
+            $traces = TracesObject::fromJson($this->tracesJson);
+
             $processor->handleWithoutTracing(
-                fn() => $apiClient->sendTraces($this->traces)
+                fn() => $apiClient->sendTraces($traces)
             );
         } catch (Throwable $exception) {
             if (!$this->job) {

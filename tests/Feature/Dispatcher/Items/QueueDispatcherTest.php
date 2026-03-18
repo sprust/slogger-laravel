@@ -6,6 +6,7 @@ namespace SLoggerLaravel\Tests\Feature\Dispatcher\Items;
 
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Bus;
+use JsonException;
 use ReflectionClass;
 use RuntimeException;
 use SLoggerLaravel\Dispatcher\Items\Queue\Jobs\SendTracesJob;
@@ -125,12 +126,17 @@ class QueueDispatcherTest extends BaseTestCase
         $property->setValue($dispatcher, $size);
     }
 
+    /**
+     * @throws JsonException
+     */
     private function getJobTraces(SendTracesJob $job): TracesObject
     {
         $reflection = new ReflectionClass($job);
-        $property   = $reflection->getProperty('traces');
+        $property   = $reflection->getProperty('tracesJson');
         $property->setAccessible(true);
 
-        return $property->getValue($job);
+        $tracesJson = $property->getValue($job);
+
+        return TracesObject::fromJson($tracesJson);
     }
 }
