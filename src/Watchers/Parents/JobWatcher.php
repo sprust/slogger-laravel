@@ -114,7 +114,7 @@ class JobWatcher implements WatcherInterface
 
         $data = [
             'connection_name' => $event->connectionName,
-            'payload'         => $event->job->payload(),
+            'job'             => $this->formatJobData($payload),
             'status'          => 'processed',
         ];
 
@@ -153,7 +153,7 @@ class JobWatcher implements WatcherInterface
 
         $data = [
             'connection_name' => $event->connectionName,
-            'payload'         => $event->job->payload(),
+            'job'             => $this->formatJobData($payload),
             'status'          => 'failed',
             'exception'       => DataFormatter::exception($event->exception),
         ];
@@ -193,7 +193,7 @@ class JobWatcher implements WatcherInterface
 
         $data = [
             'connection_name' => $event->connectionName,
-            'payload'         => $event->job->payload(),
+            'job'             => $this->formatJobData($payload),
             'status'          => 'released_after_exception',
         ];
 
@@ -207,5 +207,45 @@ class JobWatcher implements WatcherInterface
         );
 
         unset($this->jobs[$uuid]);
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     *
+     * @return array<string, mixed>
+     */
+    protected function formatJobData(array $payload): array
+    {
+        return array_filter(
+            [
+                'name'            => $payload['displayName'] ?? null,
+                'job'             => $payload['job'] ?? null,
+                'max_tries'       => $payload['maxTries'] ?? null,
+                'timeout'         => $payload['timeout'] ?? null,
+                'max_exceptions'  => $payload['maxExceptions'] ?? null,
+                'fail_on_timeout' => $payload['failOnTimeout'] ?? null,
+                'backoff'         => $payload['backoff'] ?? null,
+                'data'            => $this->extractJobData($payload),
+            ],
+            static fn(mixed $value): bool => $value !== null
+        );
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     *
+     * @return array<string, mixed>
+     */
+    protected function extractJobData(array $payload): array
+    {
+        $data = $payload['data'] ?? [];
+
+        if (!is_array($data)) {
+            return [];
+        }
+
+        unset($data['command']);
+
+        return $data;
     }
 }

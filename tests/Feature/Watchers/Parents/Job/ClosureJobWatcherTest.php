@@ -6,12 +6,48 @@ namespace SLoggerLaravel\Tests\Feature\Watchers\Parents\Job;
 
 use App\Events\NestedEvent;
 use RuntimeException;
+use SLoggerLaravel\Dispatcher\Items\Queue\Jobs\SendTracesJob;
+use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Objects\TraceCreateObject;
+use SLoggerLaravel\Objects\TracesObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
 use Throwable;
 
 class ClosureJobWatcherTest extends BaseJobWatcherTestCase
 {
+    public function testUpdatedTraceDataCanBeSerializedIntoSendTracesJob(): void
+    {
+        $this->runSuccess();
+
+        $creating = $this->dispatcher->findCreating(
+            type: $this->getTraceType(),
+            status: TraceStatusEnum::Started,
+            isParent: true,
+        );
+
+        self::assertCount(1, $creating);
+
+        $updating = $this->dispatcher->findUpdating(
+            traceId: $creating[0]->traceId,
+            status: TraceStatusEnum::Success,
+        );
+
+        self::assertCount(1, $updating);
+
+        $job = new SendTracesJob(
+            (new TracesObject())->addUpdating($updating[0])
+        );
+
+        $exception = null;
+
+        try {
+            serialize($job);
+        } catch (Throwable $exception) {
+        }
+
+        self::assertNull($exception);
+    }
+
     protected function runSuccess(): void
     {
         dispatch(static fn() => null);
@@ -25,6 +61,7 @@ class ClosureJobWatcherTest extends BaseJobWatcherTestCase
             creatingTraceTags: $creatingTrace->tags,
             updatingTraceTags: $updatingTrace->tags
         );
+        $this->assertSavedJobData($updatingTrace);
     }
 
     protected function runFailed(): void
@@ -50,6 +87,7 @@ class ClosureJobWatcherTest extends BaseJobWatcherTestCase
             creatingTraceTags: $creatingTrace->tags,
             updatingTraceTags: $updatingTrace->tags
         );
+        $this->assertSavedJobData($updatingTrace);
     }
 
     protected function runWithNestedEvent(): void
@@ -66,6 +104,7 @@ class ClosureJobWatcherTest extends BaseJobWatcherTestCase
             creatingTraceTags: $creatingTrace->tags,
             updatingTraceTags: $updatingTrace->tags
         );
+        $this->assertSavedJobData($updatingTrace);
     }
 
     /**
@@ -91,5 +130,16 @@ class ClosureJobWatcherTest extends BaseJobWatcherTestCase
         self::assertTrue($hasClosureTag);
 
         self::assertNull($updatingTraceTags);
+    }
+
+    private function assertSavedJobData(TraceUpdateObject $updatingTrace): void
+    {
+        self::assertIsArray($updatingTrace->data);
+        self::assertArrayHasKey('job', $updatingTrace->data);
+        self::assertArrayNotHasKey('payload', $updatingTrace->data);
+        self::assertIsArray($updatingTrace->data['job']);
+        self::assertArrayHasKey('data', $updatingTrace->data['job']);
+        self::assertIsArray($updatingTrace->data['job']['data']);
+        self::assertArrayNotHasKey('command', $updatingTrace->data['job']['data']);
     }
 }
