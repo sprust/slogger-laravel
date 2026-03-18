@@ -43,7 +43,10 @@ class TraceCreateObject
                 'mem'  => $this->memory,
                 'cpu'  => $this->cpu,
                 'isP'  => $this->isParent,
-                'lat'  => $this->loggedAt->clone()->setTimezone('UTC'),
+                'lat'  => $this->loggedAt
+                    ->clone()
+                    ->setTimezone('UTC')
+                    ->format('Y-m-d\TH:i:s.v\Z'),
             ],
             JSON_THROW_ON_ERROR
         );

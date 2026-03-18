@@ -109,9 +109,45 @@ class TracesObjectTest extends BaseTestCase
     }
 
     /**
+     * @throws JsonException
+     */
+    public function testToJsonAndFromJsonKeepLoggedAtInUtc(): void
+    {
+        $createLoggedAt = Carbon::create(2024, 1, 1, 3, 0, 0, 'Europe/Moscow')
+            ?->setMicroseconds(123000)
+            ?: throw new RuntimeException('Failed to create Carbon instance');
+
+        $updateLoggedAt = Carbon::create(2024, 1, 1, 3, 0, 1, 'Europe/Moscow')
+            ?->setMicroseconds(654000)
+            ?: throw new RuntimeException('Failed to create Carbon instance');
+
+        $traces = (new TracesObject())
+            ->addCreating($this->makeCreateTrace(
+                data: ['create' => true],
+                loggedAt: $createLoggedAt
+            ))
+            ->addUpdating($this->makeUpdateTrace(
+                data: ['update' => true],
+                parentLoggedAt: $updateLoggedAt
+            ));
+
+        $restored = TracesObject::fromJson($traces->toJson());
+
+        $creating = iterator_to_array($restored->iterateCreating());
+        $updating = iterator_to_array($restored->iterateUpdating());
+
+        self::assertCount(1, $creating);
+        self::assertCount(1, $updating);
+        self::assertSame('UTC', $creating[0]->loggedAt->getTimezone()->getName());
+        self::assertSame('UTC', $updating[0]->parentLoggedAt->getTimezone()->getName());
+        self::assertSame('2024-01-01 00:00:00.123000', $creating[0]->loggedAt->format('Y-m-d H:i:s.u'));
+        self::assertSame('2024-01-01 00:00:01.654000', $updating[0]->parentLoggedAt->format('Y-m-d H:i:s.u'));
+    }
+
+    /**
      * @param array<string, mixed> $data
      */
-    private function makeCreateTrace(array $data): TraceCreateObject
+    private function makeCreateTrace(array $data, ?Carbon $loggedAt = null): TraceCreateObject
     {
         return new TraceCreateObject(
             traceId: 'trace-create',
@@ -124,7 +160,7 @@ class TracesObjectTest extends BaseTestCase
             memory: 12.2,
             cpu: 1.2,
             isParent: false,
-            loggedAt: Carbon::create(2024, 1, 1, 0, 0, 0, 'UTC')
+            loggedAt: $loggedAt ?? Carbon::create(2024, 1, 1, 0, 0, 0, 'UTC')
                 ?: throw new RuntimeException('Failed to create Carbon instance')
         );
     }
@@ -132,7 +168,7 @@ class TracesObjectTest extends BaseTestCase
     /**
      * @param array<string, mixed>|null $data
      */
-    private function makeUpdateTrace(?array $data): TraceUpdateObject
+    private function makeUpdateTrace(?array $data, ?Carbon $parentLoggedAt = null): TraceUpdateObject
     {
         return new TraceUpdateObject(
             traceId: 'trace-update',
@@ -143,7 +179,7 @@ class TracesObjectTest extends BaseTestCase
             duration: 1.2,
             memory: 12.2,
             cpu: 1.2,
-            parentLoggedAt: Carbon::create(2024, 1, 1, 0, 0, 0, 'UTC')
+            parentLoggedAt: $parentLoggedAt ?? Carbon::create(2024, 1, 1, 0, 0, 0, 'UTC')
                 ?: throw new RuntimeException('Failed to create Carbon instance')
         );
     }

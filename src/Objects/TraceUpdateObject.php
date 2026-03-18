@@ -40,7 +40,10 @@ class TraceUpdateObject
                 'du'    => $this->duration,
                 'mem'   => $this->memory,
                 'cpu'   => $this->cpu,
-                'lat'   => $this->parentLoggedAt->clone()->setTimezone('UTC'),
+                'lat'   => $this->parentLoggedAt
+                    ->clone()
+                    ->setTimezone('UTC')
+                    ->format('Y-m-d\TH:i:s.v\Z'),
             ],
             JSON_THROW_ON_ERROR
         );

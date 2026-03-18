@@ -46,6 +46,8 @@ class SocketClientTest extends BaseTestCase
 
                         self::assertSame('trace-1', $creating[0]['tid']);
                         self::assertSame('trace-1', $updating[0]['tid']);
+                        self::assertSame('2024-01-01T00:00:00.123Z', $creating[0]['lat']);
+                        self::assertSame('2024-01-01T00:00:01.654Z', $updating[0]['plat']);
 
                         return true;
                     }
@@ -132,7 +134,8 @@ class SocketClientTest extends BaseTestCase
                     memory: 12.0,
                     cpu: 2.0,
                     isParent: true,
-                    loggedAt: Carbon::create(2024, 1, 1, 0, 0, 0, 'UTC')
+                    loggedAt: Carbon::create(2024, 1, 1, 3, 0, 0, 'Europe/Moscow')
+                        ?->setMicroseconds(123000)
                         ?: throw new RuntimeException('Failed to create Carbon instance')
                 )
             )
@@ -146,7 +149,8 @@ class SocketClientTest extends BaseTestCase
                     duration: 0.25,
                     memory: 1.5,
                     cpu: 0.5,
-                    parentLoggedAt: Carbon::create(2024, 1, 1, 0, 0, 1, 'UTC')
+                    parentLoggedAt: Carbon::create(2024, 1, 1, 3, 0, 1, 'Europe/Moscow')
+                        ?->setMicroseconds(654000)
                         ?: throw new RuntimeException('Failed to create Carbon instance')
                 )
             );

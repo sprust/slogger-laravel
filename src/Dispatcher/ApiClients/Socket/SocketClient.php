@@ -103,6 +103,9 @@ class SocketClient implements ApiClientInterface
 
     protected function prepareLoggedAt(Carbon $loggedAt): string
     {
-        return $loggedAt->toDateTimeString('milliseconds');
+        return $loggedAt
+            ->clone()
+            ->setTimezone('UTC')
+            ->format('Y-m-d\TH:i:s.v\Z');
     }
 }
