@@ -69,7 +69,7 @@ class ModelWatcher implements WatcherInterface
     {
         preg_match('/\.(.*):/', $event, $matches);
 
-        return $matches[1];
+        return $matches[1] ?? 'unknown';
     }
 
     protected function shouldRecord(string $eventName): bool
