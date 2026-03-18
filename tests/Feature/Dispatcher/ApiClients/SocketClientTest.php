@@ -121,6 +121,20 @@ class SocketClientTest extends BaseTestCase
 
     private function makeTraces(): TracesObject
     {
+        /**
+         * for laravel 10 support
+         *
+         * @var Carbon $loggedAt
+         */
+        $loggedAt = Carbon::create(2024, 1, 1, 3, 0, 0, 'Europe/Moscow');
+
+        /**
+         * for laravel 10 support
+         *
+         * @var Carbon $parentLoggedAt
+         */
+        $parentLoggedAt = Carbon::create(2024, 1, 1, 3, 0, 1, 'Europe/Moscow');
+
         return (new TracesObject())
             ->addCreating(
                 new TraceCreateObject(
@@ -134,9 +148,7 @@ class SocketClientTest extends BaseTestCase
                     memory: 12.0,
                     cpu: 2.0,
                     isParent: true,
-                    loggedAt: Carbon::create(2024, 1, 1, 3, 0, 0, 'Europe/Moscow')
-                        ?->setMicroseconds(123000)
-                        ?: throw new RuntimeException('Failed to create Carbon instance')
+                    loggedAt: $loggedAt->setMicroseconds(123000)
                 )
             )
             ->addUpdating(
@@ -149,9 +161,7 @@ class SocketClientTest extends BaseTestCase
                     duration: 0.25,
                     memory: 1.5,
                     cpu: 0.5,
-                    parentLoggedAt: Carbon::create(2024, 1, 1, 3, 0, 1, 'Europe/Moscow')
-                        ?->setMicroseconds(654000)
-                        ?: throw new RuntimeException('Failed to create Carbon instance')
+                    parentLoggedAt: $parentLoggedAt->setMicroseconds(654000)
                 )
             );
     }

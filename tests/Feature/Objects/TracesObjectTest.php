@@ -113,13 +113,21 @@ class TracesObjectTest extends BaseTestCase
      */
     public function testToJsonAndFromJsonKeepLoggedAtInUtc(): void
     {
-        $createLoggedAt = Carbon::create(2024, 1, 1, 3, 0, 0, 'Europe/Moscow')
-            ?->setMicroseconds(123000)
-            ?: throw new RuntimeException('Failed to create Carbon instance');
+        /**
+         * for laravel 10 support
+         *
+         * @var Carbon $createLoggedAt
+         */
+        $createLoggedAt = Carbon::create(2024, 1, 1, 3, 0, 0, 'Europe/Moscow');
+        $createLoggedAt = $createLoggedAt->setMicroseconds(123000);
 
-        $updateLoggedAt = Carbon::create(2024, 1, 1, 3, 0, 1, 'Europe/Moscow')
-            ?->setMicroseconds(654000)
-            ?: throw new RuntimeException('Failed to create Carbon instance');
+        /**
+         * for laravel 10 support
+         *
+         * @var Carbon $updateLoggedAt
+         */
+        $updateLoggedAt = Carbon::create(2024, 1, 1, 3, 0, 1, 'Europe/Moscow');
+        $updateLoggedAt = $updateLoggedAt->setMicroseconds(654000);
 
         $traces = (new TracesObject())
             ->addCreating($this->makeCreateTrace(
