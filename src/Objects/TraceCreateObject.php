@@ -43,7 +43,7 @@ class TraceCreateObject
                 'mem'  => $this->memory,
                 'cpu'  => $this->cpu,
                 'isP'  => $this->isParent,
-                'lat'  => $this->loggedAt,
+                'lat'  => $this->loggedAt->format('Y-m-d\TH:i:s.vP'),
             ],
             JSON_THROW_ON_ERROR
         );

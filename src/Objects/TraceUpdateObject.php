@@ -40,7 +40,7 @@ class TraceUpdateObject
                 'du'    => $this->duration,
                 'mem'   => $this->memory,
                 'cpu'   => $this->cpu,
-                'lat'   => $this->parentLoggedAt,
+                'lat'   => $this->parentLoggedAt->format('Y-m-d\TH:i:s.vP'),
             ],
             JSON_THROW_ON_ERROR
         );
