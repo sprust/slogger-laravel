@@ -17,8 +17,7 @@ class TraceHelper
     public static function calcDuration(Carbon $startedAt): float
     {
         return self::roundDuration(
-            $startedAt->clone()->setTimezone('UTC')
-                ->diffInMicroseconds(Carbon::now('UTC')) * 0.000001
+            $startedAt->clone()->diffInMicroseconds(Carbon::now()) * 0.000001
         );
     }
 

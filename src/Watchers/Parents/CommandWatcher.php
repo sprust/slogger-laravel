@@ -60,7 +60,7 @@ class CommandWatcher implements WatcherInterface
             'options'   => $input?->getOptions(),
         ];
 
-        $loggedAt = Carbon::now('UTC');
+        $loggedAt = Carbon::now();
 
         $traceId = $this->processor->startAndGetTraceId(
             type: TraceTypeEnum::Command->value,

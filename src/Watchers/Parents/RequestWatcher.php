@@ -100,9 +100,9 @@ class RequestWatcher implements WatcherInterface
             $startedAt = $this->app->get(Kernel::class)->requestStartedAt();
         }
 
-        $startedAt = $startedAt?->clone()->setTimezone('UTC') ?? Carbon::now('UTC');
+        $startedAt = $startedAt?->clone() ?? Carbon::now();
 
-        $loggedAt = Carbon::now('UTC');
+        $loggedAt = Carbon::now();
 
         $traceId = $this->processor->startAndGetTraceId(
             type: TraceTypeEnum::Request->value,

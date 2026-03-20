@@ -97,7 +97,7 @@ class QueueDispatcherTest extends BaseTestCase
             memory: 12.0,
             cpu: 1.0,
             isParent: $isParent,
-            loggedAt: Carbon::create(2024, 1, 1, 0, 0, 0, 'UTC')
+            loggedAt: Carbon::create(2024, 1, 1, 0, 0, 0)
                 ?: throw new RuntimeException('Failed to create Carbon instance')
         );
     }
@@ -113,7 +113,7 @@ class QueueDispatcherTest extends BaseTestCase
             duration: 1.2,
             memory: 12.0,
             cpu: 1.0,
-            parentLoggedAt: Carbon::create(2024, 1, 1, 0, 0, 0, 'UTC')
+            parentLoggedAt: Carbon::create(2024, 1, 1, 0, 0, 0)
                 ?: throw new RuntimeException('Failed to create Carbon instance')
         );
     }

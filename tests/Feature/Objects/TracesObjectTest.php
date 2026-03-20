@@ -50,7 +50,7 @@ class TracesObjectTest extends BaseTestCase
         $stdObject       = new stdClass();
         $stdObject->name = 'payload';
 
-        $carbon = Carbon::create(2024, 1, 1, 0, 0, 0, 'UTC')
+        $carbon = Carbon::create(2024, 1, 1, 0, 0, 0)
             ?: throw new RuntimeException('Failed to create Carbon instance');
 
         $closure = static fn(): string => 'closure-value';
@@ -146,8 +146,8 @@ class TracesObjectTest extends BaseTestCase
 
         self::assertCount(1, $creating);
         self::assertCount(1, $updating);
-        self::assertSame('UTC', $creating[0]->loggedAt->getTimezone()->getName());
-        self::assertSame('UTC', $updating[0]->parentLoggedAt->getTimezone()->getName());
+        self::assertSame('Z', $creating[0]->loggedAt->getTimezone()->getName());
+        self::assertSame('Z', $updating[0]->parentLoggedAt->getTimezone()->getName());
         self::assertSame('2024-01-01 00:00:00.123000', $creating[0]->loggedAt->format('Y-m-d H:i:s.u'));
         self::assertSame('2024-01-01 00:00:01.654000', $updating[0]->parentLoggedAt->format('Y-m-d H:i:s.u'));
     }
@@ -168,7 +168,7 @@ class TracesObjectTest extends BaseTestCase
             memory: 12.2,
             cpu: 1.2,
             isParent: false,
-            loggedAt: $loggedAt ?? Carbon::create(2024, 1, 1, 0, 0, 0, 'UTC')
+            loggedAt: $loggedAt ?? Carbon::create(2024, 1, 1, 0, 0, 0)
                 ?: throw new RuntimeException('Failed to create Carbon instance')
         );
     }
@@ -187,7 +187,7 @@ class TracesObjectTest extends BaseTestCase
             duration: 1.2,
             memory: 12.2,
             cpu: 1.2,
-            parentLoggedAt: $parentLoggedAt ?? Carbon::create(2024, 1, 1, 0, 0, 0, 'UTC')
+            parentLoggedAt: $parentLoggedAt ?? Carbon::create(2024, 1, 1, 0, 0, 0)
                 ?: throw new RuntimeException('Failed to create Carbon instance')
         );
     }

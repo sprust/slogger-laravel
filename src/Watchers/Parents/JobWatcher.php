@@ -73,7 +73,7 @@ class JobWatcher implements WatcherInterface
 
         $parentTraceId = $payload['slogger_parent_trace_id'] ?? null;
 
-        $loggedAt = Carbon::now('UTC');
+        $loggedAt = Carbon::now();
 
         $traceId = $this->processor->startAndGetTraceId(
             type: TraceTypeEnum::Job->value,

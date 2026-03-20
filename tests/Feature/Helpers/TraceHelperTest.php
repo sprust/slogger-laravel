@@ -55,7 +55,7 @@ class TraceHelperTest extends BaseTestCase
     public function testCalcDurationUsesUtcAndRounds(): void
     {
         /** @var Carbon $now */
-        $now = Carbon::create(2020, 1, 1, 0, 0, 0, 'UTC');
+        $now = Carbon::create(2020, 1, 1, 0, 0, 0);
 
         Carbon::setTestNow($now);
 

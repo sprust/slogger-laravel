@@ -43,10 +43,7 @@ class TraceCreateObject
                 'mem'  => $this->memory,
                 'cpu'  => $this->cpu,
                 'isP'  => $this->isParent,
-                'lat'  => $this->loggedAt
-                    ->clone()
-                    ->setTimezone('UTC')
-                    ->format('Y-m-d\TH:i:s.v\Z'),
+                'lat'  => $this->loggedAt,
             ],
             JSON_THROW_ON_ERROR
         );
@@ -78,7 +75,7 @@ class TraceCreateObject
             memory: isset($jsonData['mem']) ? ((float) $jsonData['mem']) : null,
             cpu: isset($jsonData['cpu']) ? ((float) $jsonData['cpu']) : null,
             isParent: $jsonData['isP'],
-            loggedAt: Carbon::parse($jsonData['lat'])->setTimezone('UTC'),
+            loggedAt: Carbon::parse($jsonData['lat']),
         );
     }
 }

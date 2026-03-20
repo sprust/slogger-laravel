@@ -92,6 +92,9 @@ class SocketClient implements ApiClientInterface
         }
     }
 
+    /**
+     * @throws JsonException
+     */
     protected function connectIfNeed(): void
     {
         if (!$this->connection->isConnected()) {
@@ -105,7 +108,6 @@ class SocketClient implements ApiClientInterface
     {
         return $loggedAt
             ->clone()
-            ->setTimezone('UTC')
-            ->format('Y-m-d\TH:i:s.v\Z');
+            ->format('Y-m-d\TH:i:s.vP');
     }
 }

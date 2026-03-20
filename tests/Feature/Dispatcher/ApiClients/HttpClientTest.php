@@ -78,10 +78,10 @@ class HttpClientTest extends BaseTestCase
     private function makeTraces(): TracesObject
     {
         /** @var Carbon $loggedAt */
-        $loggedAt = Carbon::create(2024, 1, 1, 0, 0, 0, 'UTC');
+        $loggedAt = Carbon::create(2024, 1, 1, 0, 0, 0);
 
         /** @var Carbon $parentLoggedAt */
-        $parentLoggedAt = Carbon::create(2024, 1, 1, 0, 0, 1, 'UTC');
+        $parentLoggedAt = Carbon::create(2024, 1, 1, 0, 0, 1);
 
         $loggedAt       = $loggedAt->setMicroseconds(123456);
         $parentLoggedAt = $parentLoggedAt->setMicroseconds(654321);

@@ -153,7 +153,7 @@ class Processor
             customParentTraceId: $customParentTraceId,
         );
 
-        $startedAt = Carbon::now('UTC');
+        $startedAt = Carbon::now();
 
         $exception = null;
 
@@ -218,7 +218,7 @@ class Processor
                 memory: MetricsHelper::getMemoryUsagePercent(),
                 cpu: MetricsHelper::getCpuAvgPercent(),
                 isParent: true,
-                loggedAt: $loggedAt->clone()->setTimezone('UTC')
+                loggedAt: $loggedAt->clone()
             )
         );
 
@@ -272,7 +272,7 @@ class Processor
                 memory: MetricsHelper::getMemoryUsagePercent(),
                 cpu: MetricsHelper::getCpuAvgPercent(),
                 isParent: false,
-                loggedAt: ($loggedAt ?: Carbon::now())->clone()->setTimezone('UTC')
+                loggedAt: ($loggedAt ?: Carbon::now())->clone()
             )
         );
     }

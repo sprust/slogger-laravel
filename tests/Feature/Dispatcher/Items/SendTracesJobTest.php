@@ -188,7 +188,7 @@ class SendTracesJobTest extends BaseTestCase
                 memory: null,
                 cpu: null,
                 isParent: true,
-                loggedAt: Carbon::create(2024, 1, 1, 0, 0, 0, 'UTC')
+                loggedAt: Carbon::create(2024, 1, 1, 0, 0, 0)
                     ?: throw new RuntimeException('Failed to create Carbon instance')
             )
         );

@@ -46,8 +46,8 @@ class SocketClientTest extends BaseTestCase
 
                         self::assertSame('trace-1', $creating[0]['tid']);
                         self::assertSame('trace-1', $updating[0]['tid']);
-                        self::assertSame('2024-01-01T00:00:00.123Z', $creating[0]['lat']);
-                        self::assertSame('2024-01-01T00:00:01.654Z', $updating[0]['plat']);
+                        self::assertSame('2024-01-01T03:00:00.123+03:00', $creating[0]['lat']);
+                        self::assertSame('2024-01-01T03:00:01.654+03:00', $updating[0]['plat']);
 
                         return true;
                     }

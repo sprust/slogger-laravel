@@ -40,10 +40,7 @@ class TraceUpdateObject
                 'du'    => $this->duration,
                 'mem'   => $this->memory,
                 'cpu'   => $this->cpu,
-                'lat'   => $this->parentLoggedAt
-                    ->clone()
-                    ->setTimezone('UTC')
-                    ->format('Y-m-d\TH:i:s.v\Z'),
+                'lat'   => $this->parentLoggedAt,
             ],
             JSON_THROW_ON_ERROR
         );
@@ -73,7 +70,7 @@ class TraceUpdateObject
             duration: isset($jsonData['du']) ? ((float) $jsonData['du']) : null,
             memory: isset($jsonData['mem']) ? ((float) $jsonData['mem']) : null,
             cpu: isset($jsonData['cpu']) ? ((float) $jsonData['cpu']) : null,
-            parentLoggedAt: Carbon::parse($jsonData['lat'])->setTimezone('UTC'),
+            parentLoggedAt: Carbon::parse($jsonData['lat']),
         );
     }
 }

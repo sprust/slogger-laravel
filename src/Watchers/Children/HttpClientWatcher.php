@@ -96,7 +96,7 @@ class HttpClientWatcher implements WatcherInterface
             return $request;
         }
 
-        $loggedAt = Carbon::now('UTC');
+        $loggedAt = Carbon::now();
 
         $traceId = $this->processor->startAndGetTraceId(
             type: 'http-client',
