@@ -24,11 +24,6 @@ class DispatcherQueueConfig
         return (string) config('slogger.dispatchers.queue.api_clients.default');
     }
 
-    public function getHttpClientUrl(): string
-    {
-        return (string) config('slogger.dispatchers.queue.api_clients.http.url');
-    }
-
     public function getSocketClientUrl(): string
     {
         return (string) config('slogger.dispatchers.queue.api_clients.socket.url');

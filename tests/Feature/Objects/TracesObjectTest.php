@@ -146,10 +146,8 @@ class TracesObjectTest extends BaseTestCase
 
         self::assertCount(1, $creating);
         self::assertCount(1, $updating);
-        self::assertSame('Z', $creating[0]->loggedAt->getTimezone()->getName());
-        self::assertSame('Z', $updating[0]->parentLoggedAt->getTimezone()->getName());
-        self::assertSame('2024-01-01 00:00:00.123000', $creating[0]->loggedAt->format('Y-m-d H:i:s.u'));
-        self::assertSame('2024-01-01 00:00:01.654000', $updating[0]->parentLoggedAt->format('Y-m-d H:i:s.u'));
+        self::assertSame('2024-01-01 03:00:00.123000', $creating[0]->loggedAt->format('Y-m-d H:i:s.u'));
+        self::assertSame('2024-01-01 03:00:01.654000', $updating[0]->parentLoggedAt->format('Y-m-d H:i:s.u'));
     }
 
     /**

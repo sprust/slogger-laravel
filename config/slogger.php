@@ -43,13 +43,7 @@ return [
             'workers_num' => env('SLOGGER_DISPATCHER_QUEUE_WORKERS_COUNT', 3),
 
             'api_clients' => [
-                // default api client: http or socket.
-                'default' => env('SLOGGER_DISPATCHER_QUEUE_API_CLIENT', 'http'),
-
-                'http' => [
-                    // base url for http backend.
-                    'url' => env('SLOGGER_DISPATCHER_QUEUE_HTTP_CLIENT_URL'),
-                ],
+                'default' => env('SLOGGER_DISPATCHER_QUEUE_API_CLIENT', 'socket'),
 
                 'socket' => [
                     // socket address for socket backend (e.g. tcp://host:port).
@@ -59,7 +53,7 @@ return [
         ],
     ],
 
-    // profiling for http client traces (requires xhprof extension).
+    // not implemented at the moment
     'profiling' => [
         'enabled' => env('SLOGGER_PROFILING_ENABLED', false),
     ],
