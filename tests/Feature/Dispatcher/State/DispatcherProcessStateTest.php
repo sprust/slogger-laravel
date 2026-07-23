@@ -48,6 +48,44 @@ class DispatcherProcessStateTest extends BaseTestCase
     /**
      * @throws BindingResolutionException
      */
+    public function testPurgeIfOwnedByRemovesOwnStateOnly(): void
+    {
+        $state = new DispatcherProcessState('slogger:dispatcher:start');
+
+        $state->save($this->makeDto(masterPid: 111));
+
+        // a foreign master pid must not purge: this is the takeover scenario where
+        // the old master would otherwise delete the new master's state file
+        $state->purgeIfOwnedBy(999);
+
+        self::assertNotNull($state->getSaved());
+
+        $state->purgeIfOwnedBy(111);
+
+        self::assertNull($state->getSaved());
+
+        // no state at all: must be a no-op
+        $state->purgeIfOwnedBy(111);
+
+        self::assertNull($state->getSaved());
+
+        $this->cleanupStateFile();
+    }
+
+    private function makeDto(int $masterPid): DispatcherProcessStateDto
+    {
+        return new DispatcherProcessStateDto(
+            dispatcher: 'queue',
+            masterCommandName: 'slogger:dispatcher:start',
+            masterPid: $masterPid,
+            childCommandName: 'artisan queue:work',
+            childProcessPids: [222, 333],
+        );
+    }
+
+    /**
+     * @throws BindingResolutionException
+     */
     private function cleanupStateFile(): void
     {
         $file = $this->getApp()->make(LocalStorage::class)
