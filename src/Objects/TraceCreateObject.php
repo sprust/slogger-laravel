@@ -71,7 +71,7 @@ class TraceCreateObject
             status: $jsonData['st'],
             tags: $jsonData['tgs'],
             data: $data,
-            duration: isset($jsonData['du']) ? ((float) $jsonData['du']) : null,
+            duration: isset($jsonData['dur']) ? ((float) $jsonData['dur']) : null,
             memory: isset($jsonData['mem']) ? ((float) $jsonData['mem']) : null,
             cpu: isset($jsonData['cpu']) ? ((float) $jsonData['cpu']) : null,
             isParent: $jsonData['isP'],

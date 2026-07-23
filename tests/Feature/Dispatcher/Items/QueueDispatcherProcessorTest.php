@@ -30,5 +30,9 @@ class QueueDispatcherProcessorTest extends BaseTestCase
         self::assertStringContainsString('artisan', $commandLine);
         self::assertStringContainsString('queue:work', $commandLine);
         self::assertStringContainsString('--queue=slogger', $commandLine);
+
+        // tries/backoff are taken from the job payload, not hardcoded worker options
+        self::assertStringNotContainsString('--tries', $commandLine);
+        self::assertStringNotContainsString('--backoff', $commandLine);
     }
 }

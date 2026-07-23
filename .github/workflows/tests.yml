@@ -1,17 +1,16 @@
 name: tests
 
 on:
-  push:
-    paths:
-      - 'src/**'
-      - 'workbench/**'
-      - 'tests/**'
+  pull_request:
     branches:
-      - "**"
+      - master
+    types: [ opened, synchronize, reopened, ready_for_review ]
 
 jobs:
   phpunit:
     runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+
     strategy:
       fail-fast: false
       matrix:

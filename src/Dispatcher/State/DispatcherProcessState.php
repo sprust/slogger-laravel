@@ -61,6 +61,24 @@ readonly class DispatcherProcessState
         }
     }
 
+    /**
+     * Purges the state file only when it still belongs to the given master.
+     *
+     * During takeover the new master overwrites the state file while the old
+     * master is still shutting down: an unconditional purge from the old master
+     * would delete the new master's state and make it unmanageable.
+     */
+    public function purgeIfOwnedBy(int $masterPid): void
+    {
+        $saved = $this->getSaved();
+
+        if ($saved === null || $saved->masterPid !== $masterPid) {
+            return;
+        }
+
+        $this->purge();
+    }
+
     public function purge(): void
     {
         $pidFilePath = $this->makeFilePath();

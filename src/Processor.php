@@ -334,11 +334,35 @@ class Processor
 
     private function dispatchPushTrace(TraceCreateObject $trace): void
     {
-        $this->traceDispatcher->create($trace);
+        $this->withPausedTracing(
+            fn() => $this->traceDispatcher->create($trace)
+        );
     }
 
     private function dispatchUpdateTrace(TraceUpdateObject $trace): void
     {
-        $this->traceDispatcher->update($trace);
+        $this->withPausedTracing(
+            fn() => $this->traceDispatcher->update($trace)
+        );
+    }
+
+    /**
+     * Pauses tracing while the dispatcher pushes a trace: the push itself may
+     * fire watchable events (queue payload INSERT with the database driver,
+     * JobQueued with only_events, etc.) and must never be traced recursively.
+     *
+     * @param Closure(): void $callback
+     */
+    private function withPausedTracing(Closure $callback): void
+    {
+        $previousPaused = $this->paused;
+
+        $this->paused = true;
+
+        try {
+            $callback();
+        } finally {
+            $this->paused = $previousPaused;
+        }
     }
 }

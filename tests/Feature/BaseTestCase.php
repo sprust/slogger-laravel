@@ -18,6 +18,9 @@ abstract class BaseTestCase extends TestCase
     {
         $app['config']->set('database.default', 'sqlite');
         $app['config']->set('database.connections.sqlite.database', ':memory:');
+
+        // the connection is required (fail fast), so tests set it explicitly
+        $app['config']->set('slogger.dispatchers.queue.connection', 'sync');
     }
 
     protected function getPackageProviders($app): array

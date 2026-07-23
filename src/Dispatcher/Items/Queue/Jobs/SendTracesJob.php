@@ -22,13 +22,25 @@ class SendTracesJob implements ShouldQueue
     use InteractsWithQueue;
     use Queueable;
 
-    public int $tries   = 120;
-    public int $backoff = 1;
+    private const DROP_LOG_INTERVAL_SECONDS = 60;
+
+    private static int $lastDropLogAt  = 0;
+    private static int $droppedTraces  = 0;
+    private static int $droppedBatches = 0;
+
+    // tries = count(backoff) + 1: every backoff pause is used before the batch is dropped
+    public int $tries = 5;
+
+    /** @var list<int> */
+    public array $backoff = [1, 10, 30, 60];
 
     protected readonly string $tracesJson;
+    protected readonly int $tracesCount;
 
     public function __construct(TracesObject $traces)
     {
+        $this->tracesCount = $traces->count();
+
         try {
             $this->tracesJson = $traces->toJson();
         } catch (JsonException $exception) {
@@ -59,23 +71,65 @@ class SendTracesJob implements ShouldQueue
                 fn() => $apiClient->sendTraces($traces)
             );
         } catch (Throwable $exception) {
-            if (!$this->job) {
-                throw $exception;
-            }
-
-            if ($this->job->attempts() < $this->tries) {
-                $this->job->release($this->backoff);
-            } else {
+            if ($this->job && $this->job->attempts() >= $this->tries) {
+                // drop the batch: telemetry must not clutter the failed jobs storage
                 $this->job->delete();
 
-                Log::channel($config->getLogChannel())
-                    ->error($exception->getMessage(), [
-                        'code'  => $exception->getCode(),
-                        'file'  => $exception->getFile(),
-                        'line'  => $exception->getLine(),
-                        'trace' => $exception->getTraceAsString(),
-                    ]);
+                $this->logDrop($config, $exception);
+
+                return;
             }
+
+            // let Laravel release the job with the configured backoff
+            throw $exception;
+        }
+    }
+
+    public function failed(?Throwable $exception): void
+    {
+        // safety net for worker-side failures (timeouts, crashes between attempts)
+        $this->logDrop(app(GeneralConfig::class), $exception);
+    }
+
+    public static function resetDropStats(): void
+    {
+        self::$lastDropLogAt  = 0;
+        self::$droppedTraces  = 0;
+        self::$droppedBatches = 0;
+    }
+
+    private function logDrop(GeneralConfig $config, ?Throwable $exception): void
+    {
+        self::$droppedBatches++;
+        self::$droppedTraces += $this->tracesCount;
+
+        $now = time();
+
+        if (($now - self::$lastDropLogAt) < self::DROP_LOG_INTERVAL_SECONDS) {
+            return;
+        }
+
+        self::$lastDropLogAt = $now;
+
+        $droppedTraces  = self::$droppedTraces;
+        $droppedBatches = self::$droppedBatches;
+
+        self::$droppedTraces  = 0;
+        self::$droppedBatches = 0;
+
+        try {
+            Log::channel($config->getLogChannel())
+                ->warning(
+                    sprintf(
+                        'slogger: dropped %d traces in %d batches after %d tries: %s',
+                        $droppedTraces,
+                        $droppedBatches,
+                        $this->tries,
+                        $exception?->getMessage() ?? 'unknown error'
+                    )
+                );
+        } catch (Throwable) {
+            // no action
         }
     }
 }

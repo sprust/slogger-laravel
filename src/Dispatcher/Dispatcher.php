@@ -240,7 +240,7 @@ class Dispatcher
             throw new RuntimeException($message);
         }
 
-        $processState->purge();
+        $processState->purgeIfOwnedBy($masterPid);
     }
 
     public function stop(DispatcherProcessStateDto $state): void

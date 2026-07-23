@@ -41,9 +41,26 @@ class ProcessHelper
 
     public function sendStopSignal(int $pid): void
     {
+        if ($pid <= 0) {
+            return;
+        }
+
         $pgid = posix_getpgid($pid);
 
         posix_kill($pid, SIGINT);
+
+        if ($pgid === false || $pgid <= 0) {
+            // the target died in between: posix_kill(-$pgid) would become
+            // posix_kill(0, ...) and signal the caller's own process group
+            return;
+        }
+
+        if ($pgid === posix_getpgrp()) {
+            // children spawned without setsid share the caller's process group:
+            // a group-kill would SIGINT the caller itself and every sibling process
+            return;
+        }
+
         posix_kill(-$pgid, SIGINT);
     }
 }

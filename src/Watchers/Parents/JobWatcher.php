@@ -9,6 +9,7 @@ use Illuminate\Queue\Events\JobReleasedAfterException;
 use Illuminate\Queue\Queue;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
+use SLoggerLaravel\Dispatcher\Items\Queue\Jobs\SendTracesJob;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Helpers\DataFormatter;
@@ -20,13 +21,23 @@ use SLoggerLaravel\Watchers\WatcherInterface;
 class JobWatcher implements WatcherInterface
 {
     /**
+     * Jobs that must never be traced regardless of the published config:
+     * tracing the trace-sender job spawns new trace jobs recursively.
+     *
+     * @var class-string[]
+     */
+    private const ALWAYS_EXCEPTED_JOBS = [
+        SendTracesJob::class,
+    ];
+
+    /**
      * @var array<array{trace_id: string, started_at: Carbon}>
      */
     protected array $jobs = [];
     /**
      * @var class-string[]
      */
-    protected array $exceptedJobs = [];
+    protected array $exceptedJobs = self::ALWAYS_EXCEPTED_JOBS;
 
     public function __construct(
         protected readonly Processor $processor,
@@ -36,9 +47,14 @@ class JobWatcher implements WatcherInterface
 
     public function register(?array $config): void
     {
-        if ($config !== null) {
-            $this->exceptedJobs = $config['excepted'] ?? [];
-        }
+        $this->exceptedJobs = array_values(
+            array_unique(
+                array_merge(
+                    self::ALWAYS_EXCEPTED_JOBS,
+                    $config['excepted'] ?? []
+                )
+            )
+        );
 
         Queue::createPayloadUsing(
             function () {
