@@ -6,19 +6,26 @@
 
 ## 🔴 Критические
 
-### K1. `duration` теряется у всех create-трейсов: несовпадение ключей сериализации
+> **Статус 2026-07-23: K1–K5 исправлены** отдельными коммитами в `bugfix/horizon-jobs-leaking` (без пуша). Проверка: полный suite 138 тестов OK, phpstan level 8 — 0 ошибок, cs-fixer чист (контейнер `sll-php`, PHP 8.2).
+
+### K1. ✅ `duration` теряется у всех create-трейсов: несовпадение ключей сериализации
+**Исправлено** в `15012e2`: `fromJson` читает `'dur'`; регрессионный тест `testToJsonAndFromJsonKeepScalarFields` (round-trip всех скалярных полей).
 `src/Objects/TraceCreateObject.php:42` пишет `'dur' => $this->duration`, а `fromJson` (строка 74) читает `isset($jsonData['du'])` — ключ, который никогда не пишется. После каждого прохода через очередь `duration === null`. `TraceUpdateObject` использует `'du'` с обеих сторон — потому update-путь работает, а create — нет. **Все метрики длительности create-трейсов молча теряются в проде.**
 
-### K2. `Connection::write()`: `fwrite() === 0` не обрабатывается → вечный цикл на 100% CPU
+### K2. ✅ `Connection::write()`: `fwrite() === 0` не обрабатывается → вечный цикл на 100% CPU
+**Исправлено** в `b0e3607`: `0` трактуется как «нет прогресса» и попадает в ветку таймаута/usleep; тест с заполненным send-буфером и нечитающим пиром ждёт `RuntimeException` по таймауту.
 `src/Dispatcher/ApiClients/Socket/Connection.php:146-166`. Сокет неблокирующий (строка 78). При заполненном send-буфере `fwrite` возвращает `0`, а не `false`. Ветка таймаута/usleep срабатывает только на `=== false`; при `0` цикл делает `$timeout = null; $sentBytes += 0;` и крутится без сна и без таймаута. Воркер выходит только по 60s-таймауту `queue:work` — 60 секунд 100% CPU на попытку × 5 попыток на батч. **Прямой остаточный след инцидента: зависшие отправки при деградации приёмника.**
 
-### K3. `ProcessHelper::sendStopSignal()`: `posix_kill(0, SIGINT)` — сигнал собственной группе процессов
+### K3. ✅ `ProcessHelper::sendStopSignal()`: `posix_kill(0, SIGINT)` — сигнал собственной группе процессов
+**Исправлено** в `fe04fb0`: при `posix_getpgid() === false` group-kill пропускается; group-kill также пропускается, когда pgid цели совпадает с группой вызывающего. Тесты со счётчиком SIGINT (мёртвый PID, ребёнок в той же группе).
 `src/Dispatcher/ProcessHelper.php:44-47`. `posix_getpgid($pid)` может вернуть `false` (процесс умер между проверкой и сигналом) → `-false === 0` → `posix_kill(0, SIGINT)` шлёт SIGINT **всей группе процессов вызывающего** — например, деплой-скрипту, запустившему `slogger:dispatcher:stop`. Плюс `-$pgid` group-kill в принципе бьёт шире цели: дети, порождённые без `setsid`, разделяют pgid мастера.
 
-### K4. Гонка при takeover: старый мастер удаляет state-файл нового
+### K4. ✅ Гонка при takeover: старый мастер удаляет state-файл нового
+**Исправлено** в `cdedc8a`: добавлен `DispatcherProcessState::purgeIfOwnedBy(int $masterPid)`, финальный purge мастера выполняется только над собственным state; тесты на чужой pid / свой pid / отсутствие файла.
 `src/Dispatcher/Dispatcher.php:41-43` vs `:243`. Новый `start` шлёт SIGINT старому мастеру, делает `purge()` и сохраняет свой state. Старый мастер 1–10 сек гасит детей и в конце **безусловно** вызывает `$processState->purge()` — удаляя файл нового мастера. Итог: работающий диспатчер больше неуправляем (`stop` говорит «not started»), повторный `start` порождает второй флот воркеров на той же очереди.
 
-### K5. Защита от самотрейсинга — только строчка в конфиге пользователя
+### K5. ✅ Защита от самотрейсинга — только строчка в конфиге пользователя
+**Исправлено** в `9ff0890`: `SendTracesJob::class` захардкожен в `JobWatcher::ALWAYS_EXCEPTED_JOBS` (мёржится с конфигом); `dispatchPushTrace`/`dispatchUpdateTrace` обёрнуты в `withPausedTracing()` с восстановлением предыдущего состояния паузы. Тесты: e2e-диспатч `SendTracesJob` без `excepted`-конфига → 0 job-трейсов; фейковый диспатчер фиксирует паузу в момент create/update.
 `src/Watchers/Parents/JobWatcher.php:64` — исключение `SendTracesJob` живёт только в `excepted` публикуемого конфига. У приложения со старым опубликованным конфигом (до добавления этой строки) каждый `SendTracesJob` порождает 2 новых трейс-джоба — **экспоненциальный шторм, сигнатура инцидента**. Плюс `Processor::dispatchPushTrace/dispatchUpdateTrace` (`src/Processor.php:335-343`) не обёрнуты в `handleWithoutTracing`: с database-драйвером очереди INSERT от диспатча трейса сам трейсится DatabaseWatcher'ом; с `only_events` у EventWatcher (обходит встроенный ignore-список `Illuminate\*`) возможна безлимитная рекурсия через `JobQueued`. Захардкодить исключение в коде вотчера + обернуть диспатч.
 
 ---
@@ -98,7 +105,7 @@
 
 | Приоритет | Что | Пункты |
 |---|---|---|
-| P0 — блокеры релиза | ключ `dur`/`du`; спин `write()` при `fwrite=0`; `posix_kill(0)`; purge-гонка takeover; хард-исключение SendTracesJob + обёртка dispatchPushTrace | K1–K5 |
+| ~~P0 — блокеры релиза~~ ✅ сделано | ключ `dur`/`du`; спин `write()` при `fwrite=0`; `posix_kill(0)`; purge-гонка takeover; хард-исключение SendTracesJob + обёртка dispatchPushTrace | K1–K5 |
 | P1 | утечка `$requests`; Guzzle `wait()`; маскирование (треть/регистр/биндинги); файрвол+паузa Processor; сброс состояния воркера; e2e-тест queue-пайплайна | В1–В5, дыры 1–3 |
 | P2 | cmdline/state-файл/стоп-сигналы диспатчера; terminate-заголовок; LogWatcher; boot→register; MetricsHelper | В6–В10, средние |
 | P3 | остальные средние + вакуальные тесты + CI | — |
