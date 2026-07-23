@@ -82,7 +82,7 @@ SLOGGER_LOG_CHANNEL=daily
 
 ```dotenv
 SLOGGER_DISPATCHER=queue
-SLOGGER_DISPATCHER_QUEUE_CONNECTION="${QUEUE_CONNECTION}"
+SLOGGER_DISPATCHER_QUEUE_CONNECTION=slogger-rabbitmq
 SLOGGER_DISPATCHER_QUEUE_NAME=slogger
 SLOGGER_DISPATCHER_QUEUE_WORKERS_COUNT=3
 SLOGGER_DISPATCHER_QUEUE_API_CLIENT=socket
@@ -92,6 +92,14 @@ SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL=tcp://0.0.0.0:0002
 - `SLOGGER_DISPATCHER`: `queue` or `memory`.
 - `queue` dispatcher runs worker processes (similar to Horizon) and sends traces via HTTP or socket client.
 - `memory` dispatcher stores traces in memory (useful for tests/dev).
+
+`SLOGGER_DISPATCHER_QUEUE_CONNECTION` is **required** for the `queue` dispatcher — there is
+no fallback to `QUEUE_CONNECTION` on purpose: telemetry must not silently share the
+application queue connection. Use a dedicated connection.
+
+Send retries are fixed by design: 5 attempts with backoff of 1/10/30/60 seconds between them.
+After the attempts are exhausted the batch is **dropped** with a rate-limited warning in the
+SLogger log channel — telemetry never fills the `failed_jobs` storage.
 
 ### Profiling
 

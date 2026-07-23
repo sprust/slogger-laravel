@@ -2,11 +2,23 @@
 
 namespace SLoggerLaravel\Configs;
 
+use RuntimeException;
+
 class DispatcherQueueConfig
 {
     public function getConnection(): string
     {
-        return (string) config('slogger.dispatchers.queue.connection');
+        $connection = config('slogger.dispatchers.queue.connection');
+
+        if (!is_string($connection) || $connection === '') {
+            throw new RuntimeException(
+                'SLogger: queue dispatcher connection is not configured.'
+                . ' Set the SLOGGER_DISPATCHER_QUEUE_CONNECTION env explicitly:'
+                . ' telemetry must not silently share the application queue connection.'
+            );
+        }
+
+        return $connection;
     }
 
     public function getName(): string

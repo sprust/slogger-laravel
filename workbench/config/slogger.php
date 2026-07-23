@@ -18,8 +18,6 @@ use SLoggerLaravel\Watchers\Parents\CommandWatcher;
 use SLoggerLaravel\Watchers\Parents\JobWatcher;
 use SLoggerLaravel\Watchers\Parents\RequestWatcher;
 
-$defaultQueueConnection = env('QUEUE_CONNECTION');
-
 return [
     // global enable/disable.
     'enabled' => env('SLOGGER_ENABLED', false),
@@ -37,7 +35,8 @@ return [
 
         'queue' => [
             // queue worker connection and name.
-            'connection' => env('SLOGGER_DISPATCHER_QUEUE_CONNECTION', $defaultQueueConnection),
+            // required, no fallback: telemetry must not silently share the application queue connection.
+            'connection' => env('SLOGGER_DISPATCHER_QUEUE_CONNECTION'),
             'name'       => env('SLOGGER_DISPATCHER_QUEUE_NAME', 'slogger'),
             // number of worker processes.
             'workers_num' => env('SLOGGER_DISPATCHER_QUEUE_WORKERS_COUNT', 3),
@@ -254,7 +253,7 @@ return [
         ],
         [
             'class'   => ScheduleWatcher::class,
-            'enabled' => env('SLOGGER_LOG_LOG_ENABLED', false),
+            'enabled' => env('SLOGGER_LOG_SCHEDULE_ENABLED', false),
         ],
     ],
 ];

@@ -17,15 +17,16 @@ readonly class QueueDispatcherProcessor implements DispatcherProcessorInterface
     {
         $this->workersNum = $config->getWorkersNum();
 
+        // tries/backoff are not passed here on purpose:
+        // the values set on SendTracesJob (from config) are serialized
+        // into the job payload and take precedence over worker options.
         $this->workerCommand = sprintf(
-            '%s %s/artisan %s %s --queue=%s --tries=%d --backoff=%d',
+            '%s %s/artisan %s %s --queue=%s',
             (new PhpExecutableFinder)->find(),
             base_path(),
             app(WorkCommand::class)->getName(),
             $config->getConnection(),
-            $config->getName(),
-            120,
-            2
+            $config->getName()
         );
     }
 
