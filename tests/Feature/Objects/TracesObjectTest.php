@@ -111,6 +111,43 @@ class TracesObjectTest extends BaseTestCase
     /**
      * @throws JsonException
      */
+    public function testToJsonAndFromJsonKeepScalarFields(): void
+    {
+        $traces = (new TracesObject())
+            ->addCreating($this->makeCreateTrace(['create' => true]))
+            ->addUpdating($this->makeUpdateTrace(['update' => true]));
+
+        $restored = TracesObject::fromJson($traces->toJson());
+
+        /** @var TraceCreateObject[] $creating */
+        $creating = iterator_to_array($restored->iterateCreating());
+        /** @var TraceUpdateObject[] $updating */
+        $updating = iterator_to_array($restored->iterateUpdating());
+
+        self::assertCount(1, $creating);
+        self::assertCount(1, $updating);
+
+        self::assertSame('trace-create', $creating[0]->traceId);
+        self::assertSame('parent-trace', $creating[0]->parentTraceId);
+        self::assertSame('request', $creating[0]->type);
+        self::assertSame('started', $creating[0]->status);
+        self::assertSame(['tag'], $creating[0]->tags);
+        self::assertSame(1.2, $creating[0]->duration);
+        self::assertSame(12.2, $creating[0]->memory);
+        self::assertSame(1.2, $creating[0]->cpu);
+        self::assertFalse($creating[0]->isParent);
+
+        self::assertSame('trace-update', $updating[0]->traceId);
+        self::assertSame('success', $updating[0]->status);
+        self::assertSame(['tag'], $updating[0]->tags);
+        self::assertSame(1.2, $updating[0]->duration);
+        self::assertSame(12.2, $updating[0]->memory);
+        self::assertSame(1.2, $updating[0]->cpu);
+    }
+
+    /**
+     * @throws JsonException
+     */
     public function testToJsonAndFromJsonKeepLoggedAtInUtc(): void
     {
         /**
