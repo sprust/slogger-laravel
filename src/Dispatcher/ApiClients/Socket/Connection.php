@@ -143,7 +143,10 @@ class Connection
                 );
             }
 
-            if ($bytes === false) {
+            // a non-blocking stream returns 0 (not false) when the send buffer is full:
+            // both cases mean "no progress" and must hit the timeout branch,
+            // otherwise the loop spins forever at 100% CPU
+            if ($bytes === false || $bytes === 0) {
                 if ($timeout === null) {
                     $timeout = time();
 
