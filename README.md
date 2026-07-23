@@ -1,5 +1,7 @@
 # SLogger Laravel
 
+**English** | [Русский](README.ru.md)
+
 SLogger Laravel is a tracing/observability package for Laravel apps. It records request/command/job/event/etc. traces and delivers them to a remote backend via configurable dispatchers.
 
 This README documents installation, configuration, watchers, masking, dispatchers, profiling, and usage patterns.
