@@ -36,7 +36,7 @@ class SendTracesJob implements ShouldQueue
      * int back to $backoff when releasing a job (e.g. laravel-queue-rabbitmq). A
      * plain `array` type makes that assignment throw a TypeError and breaks the
      * retry/drop machinery. Laravel serializes the array into the job payload via
-     * getJobBackoff(), so the [1,10,30,60] schedule is still honored on standard drivers.
+     * getJobBackoff(), so the [5,10,30,60] schedule is still honored on standard drivers.
      *
      * @var int|list<int>
      */
