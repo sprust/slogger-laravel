@@ -84,6 +84,36 @@ class QueueDispatcherTest extends BaseTestCase
         Bus::assertDispatched(SendTracesJob::class);
     }
 
+    public function testCreateSwallowsDispatchFailures(): void
+    {
+        // telemetry must never break the app: a dispatch/construction failure
+        // (here the missing connection triggers fail-fast inside SendTracesJob)
+        // is swallowed and dropped, never thrown into the caller.
+        config()->set('slogger.dispatchers.queue.connection', '');
+
+        $dispatcher = new QueueDispatcher($this->getApp());
+
+        $dispatcher->create(
+            $this->makeCreateTrace(isParent: true, parentTraceId: null)
+        );
+
+        // reaching this line means no exception escaped create()
+        $this->addToAssertionCount(1);
+    }
+
+    public function testUpdateSwallowsDispatchFailures(): void
+    {
+        config()->set('slogger.dispatchers.queue.connection', '');
+
+        $dispatcher = new QueueDispatcher($this->getApp());
+
+        $dispatcher->update(
+            $this->makeUpdateTrace()
+        );
+
+        $this->addToAssertionCount(1);
+    }
+
     private function makeCreateTrace(bool $isParent, ?string $parentTraceId): TraceCreateObject
     {
         return new TraceCreateObject(
