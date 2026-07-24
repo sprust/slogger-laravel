@@ -37,6 +37,18 @@ class SendTracesJobTest extends BaseTestCase
         self::assertSame(count($job->backoff) + 1, $job->tries);
     }
 
+    public function testBackoffAcceptsIntAssignedByQueueDriver(): void
+    {
+        // some queue drivers (e.g. laravel-queue-rabbitmq) assign a computed int
+        // back to $backoff when releasing a job; a typed array property would throw
+        // a TypeError here and break the retry/drop machinery.
+        $job = new SendTracesJob($this->makeTraces());
+
+        $job->backoff = 10;
+
+        self::assertSame(10, $job->backoff);
+    }
+
     /**
      * @throws Throwable
      */
