@@ -33,7 +33,7 @@ class SendTracesJobTest extends BaseTestCase
 
         // tries = count(backoff) + 1: every backoff pause is used before the drop
         self::assertSame(5, $job->tries);
-        self::assertSame([1, 10, 30, 60], $job->backoff);
+        self::assertSame([5, 10, 30, 60], $job->backoff);
         self::assertSame(count($job->backoff) + 1, $job->tries);
     }
 
