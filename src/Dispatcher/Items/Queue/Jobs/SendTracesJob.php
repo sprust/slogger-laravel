@@ -32,16 +32,15 @@ class SendTracesJob implements ShouldQueue
     public int $tries = 5;
 
     /**
-     * Untyped on purpose (Laravel keeps queue meta-properties untyped): some queue
-     * drivers assign a computed int back to $backoff when releasing a job
-     * (e.g. laravel-queue-rabbitmq). A typed `array` property makes that assignment
-     * throw a TypeError and breaks the retry/drop machinery. Laravel serializes the
-     * array into the job payload via getJobBackoff(), so the [1,10,30,60] schedule is
-     * still honored on standard drivers.
+     * The int arm is required, not decorative: some queue drivers assign a computed
+     * int back to $backoff when releasing a job (e.g. laravel-queue-rabbitmq). A
+     * plain `array` type makes that assignment throw a TypeError and breaks the
+     * retry/drop machinery. Laravel serializes the array into the job payload via
+     * getJobBackoff(), so the [1,10,30,60] schedule is still honored on standard drivers.
      *
-     * @var list<int>|int
+     * @var int|list<int>
      */
-    public $backoff = [1, 10, 30, 60];
+    public int|array $backoff = [1, 10, 30, 60];
 
     protected readonly string $tracesJson;
     protected readonly int $tracesCount;
