@@ -40,7 +40,7 @@ class SendTracesJob implements ShouldQueue
      *
      * @var int|list<int>
      */
-    public int|array $backoff = [1, 10, 30, 60];
+    public int|array $backoff = [5, 10, 30, 60];
 
     protected readonly string $tracesJson;
     protected readonly int $tracesCount;
