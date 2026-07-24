@@ -33,8 +33,20 @@ class SendTracesJobTest extends BaseTestCase
 
         // tries = count(backoff) + 1: every backoff pause is used before the drop
         self::assertSame(5, $job->tries);
-        self::assertSame([1, 10, 30, 60], $job->backoff);
+        self::assertSame([5, 10, 30, 60], $job->backoff);
         self::assertSame(count($job->backoff) + 1, $job->tries);
+    }
+
+    public function testBackoffAcceptsIntAssignedByQueueDriver(): void
+    {
+        // some queue drivers (e.g. laravel-queue-rabbitmq) assign a computed int
+        // back to $backoff when releasing a job; a typed array property would throw
+        // a TypeError here and break the retry/drop machinery.
+        $job = new SendTracesJob($this->makeTraces());
+
+        $job->backoff = 10;
+
+        self::assertSame(10, $job->backoff);
     }
 
     /**

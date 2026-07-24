@@ -23,7 +23,7 @@ class Connection
 
     protected int $lengthPrefixLength = 4;
 
-    protected int $timeoutSeconds = 5;
+    protected int $timeoutSeconds = 10;
 
     public function __construct(
         protected string $socketAddress,

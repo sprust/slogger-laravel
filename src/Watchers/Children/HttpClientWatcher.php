@@ -138,13 +138,22 @@ class HttpClientWatcher implements WatcherInterface
             return;
         }
 
-        $traceId = $request->getHeader($this->headerTraceIdKey)[0];
+        $traceId = $request->getHeader($this->headerTraceIdKey)[0] ?? null;
+
+        if ($traceId === null) {
+            return;
+        }
 
         $requestData = $this->requests[$traceId] ?? null;
 
         if (!$requestData) {
             return;
         }
+
+        // drop the tracked request before stopping the trace so the entry is
+        // always cleared, even if stop() throws: otherwise long-running processes
+        // (queue workers, Octane) leak one entry per outbound request.
+        unset($this->requests[$traceId]);
 
         /** @var Carbon $startedAt */
         $startedAt = $requestData['started_at'];
@@ -185,13 +194,22 @@ class HttpClientWatcher implements WatcherInterface
             return;
         }
 
-        $traceId = $request->getHeader($this->headerTraceIdKey)[0];
+        $traceId = $request->getHeader($this->headerTraceIdKey)[0] ?? null;
+
+        if ($traceId === null) {
+            return;
+        }
 
         $requestData = $this->requests[$traceId] ?? null;
 
         if (!$requestData) {
             return;
         }
+
+        // drop the tracked request before stopping the trace so the entry is
+        // always cleared, even if stop() throws: otherwise long-running processes
+        // (queue workers, Octane) leak one entry per outbound request.
+        unset($this->requests[$traceId]);
 
         /** @var Carbon $startedAt */
         $startedAt = $requestData['started_at'];

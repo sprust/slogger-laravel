@@ -31,8 +31,16 @@ class SendTracesJob implements ShouldQueue
     // tries = count(backoff) + 1: every backoff pause is used before the batch is dropped
     public int $tries = 5;
 
-    /** @var list<int> */
-    public array $backoff = [1, 10, 30, 60];
+    /**
+     * The int arm is required, not decorative: some queue drivers assign a computed
+     * int back to $backoff when releasing a job (e.g. laravel-queue-rabbitmq). A
+     * plain `array` type makes that assignment throw a TypeError and breaks the
+     * retry/drop machinery. Laravel serializes the array into the job payload via
+     * getJobBackoff(), so the [5,10,30,60] schedule is still honored on standard drivers.
+     *
+     * @var int|list<int>
+     */
+    public int|array $backoff = [5, 10, 30, 60];
 
     protected readonly string $tracesJson;
     protected readonly int $tracesCount;

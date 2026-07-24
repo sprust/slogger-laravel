@@ -6,9 +6,12 @@ namespace SLoggerLaravel\Tests\Feature\Watchers\Children\HttpClient;
 
 use Closure;
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
+use ReflectionClass;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Guzzle\GuzzleHandlerFactory;
 use SLoggerLaravel\Objects\TraceCreateObject;
@@ -17,9 +20,54 @@ use SLoggerLaravel\RequestPreparer\RequestDataFormatters;
 use SLoggerLaravel\Tests\Feature\Watchers\Children\BaseChildWatcherTestCase;
 use SLoggerLaravel\Watchers\Children\HttpClientWatcher;
 use SLoggerLaravel\Watchers\Parents\JobWatcher;
+use Throwable;
 
 class HttpClientWatcherTest extends BaseChildWatcherTestCase
 {
+    public function testDoesNotLeakTrackedRequestsOnSuccess(): void
+    {
+        $this->registerWatcher(JobWatcher::class, null);
+
+        $watcher = $this->bindSharedWatcher();
+
+        dispatch($this->getSuccessCallback());
+
+        // every tracked request must be released once its trace is stopped,
+        // otherwise long-running workers leak one entry per outbound request.
+        self::assertSame([], $this->getTrackedRequests($watcher));
+    }
+
+    public function testDoesNotLeakTrackedRequestsOnFailure(): void
+    {
+        $this->registerWatcher(JobWatcher::class, null);
+
+        $watcher = $this->bindSharedWatcher();
+
+        dispatch(static function (): void {
+            $handlerStack = app(GuzzleHandlerFactory::class)->prepareHandler(
+                formatters: new RequestDataFormatters(),
+                handlerStack: HandlerStack::create(
+                    new MockHandler([
+                        new ConnectException('boom', new Request('POST', 'https://example.test/alpha')),
+                    ])
+                )
+            );
+
+            $client = new Client([
+                'handler'     => $handlerStack,
+                'http_errors' => false,
+            ]);
+
+            try {
+                $client->request('post', 'https://example.test/alpha');
+            } catch (Throwable) {
+                // the request fails on purpose; the watcher must still release its entry
+            }
+        });
+
+        self::assertSame([], $this->getTrackedRequests($watcher));
+    }
+
     public function testParentIsJob(): void
     {
         $this->registerWatcher(JobWatcher::class, null);
@@ -106,5 +154,33 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
     protected function assertSuccess(TraceCreateObject $creatingTrace, TraceUpdateObject $updatingTrace): void
     {
         // no action
+    }
+
+    /**
+     * Bind a single HttpClientWatcher instance so the Guzzle handler (resolved
+     * inside the dispatched job) and the test inspect the same object, without
+     * making the watcher a singleton in production.
+     */
+    private function bindSharedWatcher(): HttpClientWatcher
+    {
+        $watcher = app(HttpClientWatcher::class);
+
+        $this->getApp()->instance(HttpClientWatcher::class, $watcher);
+
+        return $watcher;
+    }
+
+    /**
+     * @return array<string, array{trace_id: string, started_at: mixed}>
+     */
+    private function getTrackedRequests(HttpClientWatcher $watcher): array
+    {
+        $property = (new ReflectionClass($watcher))->getProperty('requests');
+        $property->setAccessible(true);
+
+        /** @var array<string, array{trace_id: string, started_at: mixed}> $requests */
+        $requests = $property->getValue($watcher);
+
+        return $requests;
     }
 }
