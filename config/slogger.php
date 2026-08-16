@@ -47,6 +47,8 @@ return [
                 'socket' => [
                     // socket address for socket backend (e.g. tcp://host:port).
                     'url' => env('SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL'),
+                    // read/write timeout in seconds (connect timeout is separate).
+                    'timeout_seconds' => env('SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TIMEOUT', 10),
                 ],
             ],
         ],

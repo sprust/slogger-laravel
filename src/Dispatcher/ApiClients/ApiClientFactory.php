@@ -36,7 +36,8 @@ readonly class ApiClientFactory
                 socketAddress: $this->queueConfig->getSocketClientUrl(),
                 logger: Log::channel(
                     $this->config->getLogChannel()
-                )
+                ),
+                timeoutSeconds: $this->queueConfig->getSocketClientTimeoutSeconds()
             ),
         );
     }

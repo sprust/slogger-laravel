@@ -6,6 +6,8 @@ use RuntimeException;
 
 class DispatcherQueueConfig
 {
+    public const DEFAULT_SOCKET_CLIENT_TIMEOUT_SECONDS = 10;
+
     public function getConnection(): string
     {
         $connection = config('slogger.dispatchers.queue.connection');
@@ -39,5 +41,18 @@ class DispatcherQueueConfig
     public function getSocketClientUrl(): string
     {
         return (string) config('slogger.dispatchers.queue.api_clients.socket.url');
+    }
+
+    public function getSocketClientTimeoutSeconds(): int
+    {
+        // applications with a config published before this key existed get the default
+        // instead of 0 — a zero timeout would fail every read on the first empty chunk
+        $timeoutSeconds = (int) config(
+            'slogger.dispatchers.queue.api_clients.socket.timeout_seconds'
+        );
+
+        return $timeoutSeconds > 0
+            ? $timeoutSeconds
+            : self::DEFAULT_SOCKET_CLIENT_TIMEOUT_SECONDS;
     }
 }
