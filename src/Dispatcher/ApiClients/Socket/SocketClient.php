@@ -74,21 +74,38 @@ class SocketClient implements ApiClientInterface
         $payloadJson = json_encode($payload, JSON_THROW_ON_ERROR);
 
         try {
-            $this->connection->write($payloadJson);
-        } catch (Throwable) {
+            $response = $this->exchange($payloadJson);
+        } catch (ConnectionClosedException) {
+            // exactly one retry, and only for a peer-closed connection:
+            // retrying timeouts would turn a saturated receiver into a reconnect storm
             $this->connection->connect(
                 apiToken: $this->apiToken
             );
 
-            $this->connection->write($payloadJson);
+            $response = $this->exchange($payloadJson);
         }
 
-        $response = $this->connection->read();
-
         if ($response !== 'received') {
+            $this->connection->disconnect();
+
             throw new RuntimeException(
                 'Unexpected response from socket server: ' . $response
             );
+        }
+    }
+
+    protected function exchange(string $payloadJson): string
+    {
+        try {
+            $this->connection->write($payloadJson);
+
+            return $this->connection->read();
+        } catch (Throwable $exception) {
+            // a half-written frame or an unread response leaves the stream desynchronized:
+            // drop the connection so the next attempt starts from a clean one
+            $this->connection->disconnect();
+
+            throw $exception;
         }
     }
 

@@ -8,6 +8,7 @@ use Illuminate\Support\Carbon;
 use JsonException;
 use RuntimeException;
 use SLoggerLaravel\Dispatcher\ApiClients\Socket\Connection;
+use SLoggerLaravel\Dispatcher\ApiClients\Socket\ConnectionClosedException;
 use SLoggerLaravel\Dispatcher\ApiClients\Socket\SocketClient;
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TracesObject;
@@ -66,7 +67,7 @@ class SocketClientTest extends BaseTestCase
     /**
      * @throws JsonException
      */
-    public function testSendTracesReconnectsOnWriteFailure(): void
+    public function testSendTracesReconnectsWhenPeerClosedConnectionOnWrite(): void
     {
         $connection = $this->createMock(Connection::class);
 
@@ -85,7 +86,7 @@ class SocketClientTest extends BaseTestCase
                 $calls++;
 
                 if ($calls === 1) {
-                    throw new RuntimeException('fail');
+                    throw new ConnectionClosedException('Connection closed by peer');
                 }
 
                 return null;
@@ -96,6 +97,95 @@ class SocketClientTest extends BaseTestCase
             ->willReturn('received');
 
         $client = new SocketClient('token-1', $connection);
+
+        $client->sendTraces($this->makeTraces());
+    }
+
+    /**
+     * @throws JsonException
+     */
+    public function testSendTracesReconnectsWhenPeerClosedConnectionOnRead(): void
+    {
+        $connection = $this->createMock(Connection::class);
+
+        $connection->expects(self::once())
+            ->method('isConnected')
+            ->willReturn(true);
+
+        $connection->expects(self::once())
+            ->method('connect')
+            ->with('token-1');
+
+        $connection->expects(self::exactly(2))
+            ->method('write');
+
+        $connection->expects(self::exactly(2))
+            ->method('read')
+            ->willReturnCallback(function () {
+                static $calls = 0;
+                $calls++;
+
+                if ($calls === 1) {
+                    throw new ConnectionClosedException('Connection closed by peer');
+                }
+
+                return 'received';
+            });
+
+        $client = new SocketClient('token-1', $connection);
+
+        $client->sendTraces($this->makeTraces());
+    }
+
+    /**
+     * @throws JsonException
+     */
+    public function testSendTracesRetriesOnceOnly(): void
+    {
+        $connection = $this->createMock(Connection::class);
+
+        $connection->method('isConnected')->willReturn(true);
+
+        $connection->expects(self::once())
+            ->method('connect');
+
+        $connection->expects(self::exactly(2))
+            ->method('write')
+            ->willThrowException(new ConnectionClosedException('Connection closed by peer'));
+
+        $client = new SocketClient('token-1', $connection);
+
+        $this->expectException(ConnectionClosedException::class);
+
+        $client->sendTraces($this->makeTraces());
+    }
+
+    /**
+     * @throws JsonException
+     */
+    public function testSendTracesDoesNotRetryOnTimeout(): void
+    {
+        $connection = $this->createMock(Connection::class);
+
+        $connection->method('isConnected')->willReturn(true);
+
+        // retrying a timeout would turn a saturated receiver into a reconnect storm:
+        // the job retry policy handles it with a backoff instead
+        $connection->expects(self::never())
+            ->method('connect');
+
+        $connection->expects(self::once())
+            ->method('write')
+            ->willThrowException(new RuntimeException('Failed to write to socket by timeout'));
+
+        // a failed exchange leaves the stream desynchronized
+        $connection->expects(self::once())
+            ->method('disconnect');
+
+        $client = new SocketClient('token-1', $connection);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Failed to write to socket by timeout');
 
         $client->sendTraces($this->makeTraces());
     }
