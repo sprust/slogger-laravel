@@ -23,11 +23,10 @@ class Connection
 
     protected int $lengthPrefixLength = 4;
 
-    protected int $timeoutSeconds = 10;
-
     public function __construct(
         protected string $socketAddress,
         protected LoggerInterface $logger,
+        protected int $timeoutSeconds = 10,
     ) {
     }
 
@@ -129,6 +128,11 @@ class Connection
         $socket = $this->socket;
 
         while ($sentBytes < $bufferLength) {
+            // fwrite() into a socket the peer has closed reports success once:
+            // the chunk simply lands in the local send buffer. Without this check
+            // the break would surface much later — as a read timeout on a dead connection
+            $this->checkPeerIsAlive($socket);
+
             $chunk = substr($buffer, $sentBytes, $bufferSize);
 
             try {
@@ -193,7 +197,11 @@ class Connection
                 );
             }
 
-            if (!$chunk) {
+            if ($chunk === false || $chunk === '') {
+                // a closed connection is indistinguishable from "no data yet":
+                // without this check it spins until the read timeout and reports it as one
+                $this->checkPeerIsAlive($socket);
+
                 if ($timeout === null) {
                     $timeout = time();
 
@@ -233,7 +241,9 @@ class Connection
                 length: min($bufferSize, $dataLength - strlen($response))
             );
 
-            if (!$chunk) {
+            if ($chunk === false || $chunk === '') {
+                $this->checkPeerIsAlive($socket);
+
                 if ($timeout === null) {
                     $timeout = time();
 
@@ -257,6 +267,25 @@ class Connection
         }
 
         return $response;
+    }
+
+    /**
+     * Dropping the connection is the load-bearing part: while `connected` stays true,
+     * `SocketClient::connectIfNeed()` keeps reusing the dead connection.
+     *
+     * @param resource $socket
+     */
+    protected function checkPeerIsAlive(mixed $socket): void
+    {
+        if (!feof($socket)) {
+            return;
+        }
+
+        $this->disconnect();
+
+        throw new ConnectionClosedException(
+            "Connection to [$this->socketAddress] closed by peer"
+        );
     }
 
     protected function checkConnection(): void

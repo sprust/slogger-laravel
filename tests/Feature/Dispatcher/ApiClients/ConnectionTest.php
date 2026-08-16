@@ -9,6 +9,7 @@ use Psr\Log\NullLogger;
 use ReflectionClass;
 use RuntimeException;
 use SLoggerLaravel\Dispatcher\ApiClients\Socket\Connection;
+use SLoggerLaravel\Dispatcher\ApiClients\Socket\ConnectionClosedException;
 use SLoggerLaravel\Tests\Feature\BaseTestCase;
 
 class ConnectionTest extends BaseTestCase
@@ -49,9 +50,8 @@ class ConnectionTest extends BaseTestCase
 
         stream_set_blocking($left, false);
 
-        $connection = new Connection('local', new NullLogger());
+        $connection = new Connection('local', new NullLogger(), timeoutSeconds: 1);
         $this->setConnectedSocket($connection, $left);
-        $this->setTimeoutSeconds($connection, 1);
 
         // the peer never reads: the kernel send buffer fills up and
         // fwrite starts returning 0 — write() must throw by timeout instead of spinning forever
@@ -116,6 +116,151 @@ class ConnectionTest extends BaseTestCase
         $connection->read();
     }
 
+    public function testReadThrowsConnectionClosedWhenPeerClosedConnection(): void
+    {
+        $socketPair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+
+        self::assertNotFalse($socketPair);
+
+        [$left, $right] = $socketPair;
+
+        stream_set_blocking($left, false);
+
+        // a big timeout: the closed connection must be reported immediately,
+        // not as "Failed to read from socket by timeout" after the whole wait
+        $connection = new Connection('local', new NullLogger(), timeoutSeconds: 30);
+        $this->setConnectedSocket($connection, $left);
+
+        fclose($right);
+
+        $startedAt = microtime(true);
+
+        try {
+            $connection->read();
+
+            self::fail('read() must throw when the peer closed the connection');
+        } catch (ConnectionClosedException $exception) {
+            self::assertStringContainsString('closed by peer', $exception->getMessage());
+        }
+
+        self::assertLessThan(5, microtime(true) - $startedAt);
+        // the load-bearing part: connectIfNeed() must not reuse the dead connection
+        self::assertFalse($connection->isConnected());
+    }
+
+    public function testReadThrowsConnectionClosedWhenPeerClosedConnectionAfterLengthPrefix(): void
+    {
+        $socketPair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+
+        self::assertNotFalse($socketPair);
+
+        [$left, $right] = $socketPair;
+
+        stream_set_blocking($left, false);
+
+        $connection = new Connection('local', new NullLogger(), timeoutSeconds: 30);
+        $this->setConnectedSocket($connection, $left);
+
+        // the prefix promises 8 bytes, the peer disappears before sending them
+        fwrite($right, pack('N', 8));
+        fclose($right);
+
+        $this->expectException(ConnectionClosedException::class);
+
+        $connection->read();
+    }
+
+    public function testWriteThrowsConnectionClosedWhenPeerClosedConnection(): void
+    {
+        $server = stream_socket_server('tcp://127.0.0.1:0', $errno, $errorString);
+
+        self::assertNotFalse($server, "failed to start a test server: $errorString");
+
+        $address = stream_socket_get_name($server, false);
+
+        self::assertNotFalse($address);
+
+        $client = stream_socket_client("tcp://$address", $errno, $errorString, 2.0);
+
+        self::assertNotFalse($client, "failed to connect to the test server: $errorString");
+
+        $accepted = stream_socket_accept($server, 2.0);
+
+        self::assertNotFalse($accepted);
+
+        stream_set_blocking($client, false);
+
+        // the receiver goes away: restart, deploy, network fault
+        fclose($accepted);
+        fclose($server);
+
+        $this->waitForEof($client);
+
+        $connection = new Connection('local', new NullLogger(), timeoutSeconds: 30);
+        $this->setConnectedSocket($connection, $client);
+
+        try {
+            // fwrite() into a closed socket reports success once (the chunk lands
+            // in the send buffer) — write() must not treat that as delivered
+            $connection->write('payload');
+
+            self::fail('write() must throw when the peer closed the connection');
+        } catch (ConnectionClosedException $exception) {
+            self::assertStringContainsString('closed by peer', $exception->getMessage());
+        }
+
+        self::assertFalse($connection->isConnected());
+    }
+
+    public function testConnectionClosedExceptionIsRuntimeException(): void
+    {
+        // existing catch (RuntimeException) call sites must keep working
+        self::assertInstanceOf(RuntimeException::class, new ConnectionClosedException('closed'));
+    }
+
+    public function testReadUsesTimeoutFromConstructor(): void
+    {
+        $socketPair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+
+        self::assertNotFalse($socketPair);
+
+        [$left, $right] = $socketPair;
+
+        stream_set_blocking($left, false);
+
+        $connection = new Connection('local', new NullLogger(), timeoutSeconds: 1);
+        $this->setConnectedSocket($connection, $left);
+
+        $startedAt = microtime(true);
+
+        try {
+            $connection->read();
+
+            self::fail('read() must throw by timeout');
+        } catch (RuntimeException $exception) {
+            self::assertSame('Failed to read from socket by timeout', $exception->getMessage());
+        } finally {
+            $connection->disconnect();
+            fclose($right);
+        }
+
+        self::assertLessThan(5, microtime(true) - $startedAt);
+    }
+
+    /**
+     * @param resource $socket
+     */
+    private function waitForEof(mixed $socket): void
+    {
+        $deadline = microtime(true) + 2;
+
+        while (!feof($socket) && microtime(true) < $deadline) {
+            usleep(5000);
+        }
+
+        self::assertTrue(feof($socket), 'the peer close was not delivered to the client socket');
+    }
+
     /**
      * @param resource $socket
      */
@@ -130,14 +275,5 @@ class ConnectionTest extends BaseTestCase
         $connectedProperty = $reflection->getProperty('connected');
         $connectedProperty->setAccessible(true);
         $connectedProperty->setValue($connection, true);
-    }
-
-    private function setTimeoutSeconds(Connection $connection, int $timeoutSeconds): void
-    {
-        $reflection = new ReflectionClass($connection);
-
-        $property = $reflection->getProperty('timeoutSeconds');
-        $property->setAccessible(true);
-        $property->setValue($connection, $timeoutSeconds);
     }
 }
