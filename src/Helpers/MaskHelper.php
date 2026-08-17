@@ -73,23 +73,19 @@ class MaskHelper
             $value = (string) $value;
         }
 
-        if (!is_string($value) && !is_numeric($value)) {
+        if (!is_string($value)) {
             $value = '********';
+        } elseif (strlen($value) === 1) {
+            $value = '*';
         } else {
-            $value = (string) $value;
+            $batchLength = (int) ceil(Str::length($value) / 3);
 
-            if (strlen($value) === 1) {
-                $value = '*';
-            } else {
-                $batchLength = (int) ceil(Str::length($value) / 3);
-
-                $value = Str::mask(
-                    string: $value,
-                    character: '*',
-                    index: $batchLength,
-                    length: $batchLength
-                );
-            }
+            $value = Str::mask(
+                string: $value,
+                character: '*',
+                index: $batchLength,
+                length: $batchLength
+            );
         }
 
         return $value;
