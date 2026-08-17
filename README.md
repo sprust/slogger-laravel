@@ -89,6 +89,7 @@ SLOGGER_DISPATCHER_QUEUE_NAME=slogger
 SLOGGER_DISPATCHER_QUEUE_WORKERS_COUNT=3
 SLOGGER_DISPATCHER_QUEUE_API_CLIENT=socket
 SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL=tcp://0.0.0.0:0002
+SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TIMEOUT=10
 ```
 
 - `SLOGGER_DISPATCHER`: `queue` or `memory`.
@@ -99,7 +100,16 @@ SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL=tcp://0.0.0.0:0002
 no fallback to `QUEUE_CONNECTION` on purpose: telemetry must not silently share the
 application queue connection. Use a dedicated connection.
 
-Send retries are fixed by design: 5 attempts with backoff of 1/10/30/60 seconds between them.
+`SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TIMEOUT` is the read/write timeout of the socket
+client in seconds (default `10`). It gives headroom when the receiver is saturated and its
+acknowledgement is genuinely late; the connect timeout is separate and stays at 2 seconds.
+
+If the receiver closes the connection (restart, deploy, network fault), the client detects it
+and reconnects transparently — exactly one retry per batch. Timeouts are **not** retried this
+way: that would turn a saturated receiver into a reconnect storm; they are handled by the job
+retry policy below.
+
+Send retries are fixed by design: 5 attempts with backoff of 5/10/30/60 seconds between them.
 After the attempts are exhausted the batch is **dropped** with a rate-limited warning in the
 SLogger log channel — telemetry never fills the `failed_jobs` storage.
 
