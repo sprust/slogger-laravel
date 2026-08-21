@@ -71,7 +71,9 @@ return [
     // is sent - never in the traced application, which must not pay for masking a
     // payload. an empty list turns masking off.
     'masking' => [
-        // case-insensitive substrings of a trace data key.
+        // case-insensitive substrings of a trace data key. the top level of a trace's
+        // data is the watcher's own structure and is never masked; matching starts
+        // one level in, where the traced data actually is.
         'keys' => [
             'token',
             'pass',
@@ -90,12 +92,6 @@ return [
             'credential',
             'sign',
             'cookie',
-        ],
-
-        // keys written by the package itself, matched against the whole dotted path
-        // (supports wildcard masks). they describe the trace, not the traced data.
-        'excepted_keys' => [
-            'connection_name',
         ],
     ],
 

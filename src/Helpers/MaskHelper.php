@@ -7,15 +7,19 @@ use Illuminate\Support\Str;
 class MaskHelper
 {
     /**
-     * Masks every value whose dotted key contains one of the keys, case-insensitively.
+     * Masks every value whose key contains one of the keys, case-insensitively.
+     *
+     * The top level is left alone: watchers put their own fixed structure there
+     * (`connection_name`, `request`, `changes`, ...) and the traced data starts one
+     * level in. Matching therefore begins inside that structure, so a top-level key is
+     * neither masked itself nor able to drag its whole subtree in by name.
      *
      * @param array<int|string, mixed> $data
      * @param string[]                 $keys
-     * @param string[]                 $exceptedKeyPatterns wildcard masks of whole dotted keys
      *
      * @return array<int|string, mixed>
      */
-    public static function maskArrayByKeys(array $data, array $keys, array $exceptedKeyPatterns = []): array
+    public static function maskArrayByKeys(array $data, array $keys): array
     {
         $needles = array_values(
             array_filter(
@@ -34,8 +38,8 @@ class MaskHelper
             data: $data,
             prefix: '',
             needles: $needles,
-            exceptedKeyPatterns: $exceptedKeyPatterns,
-            masked: false
+            masked: false,
+            depth: 1
         );
     }
 
@@ -86,8 +90,7 @@ class MaskHelper
      *
      * @param array<int|string, mixed> $data
      * @param string[]                 $needles
-     * @param string[]                 $exceptedKeyPatterns
-     * @param bool                     $masked              whether an ancestor key already matched
+     * @param bool                     $masked  whether an ancestor key already matched
      *
      * @return array<int|string, mixed>
      */
@@ -95,15 +98,19 @@ class MaskHelper
         array $data,
         string $prefix,
         array $needles,
-        array $exceptedKeyPatterns,
-        bool $masked
+        bool $masked,
+        int $depth
     ): array {
         $result = [];
 
         foreach ($data as $key => $value) {
-            $path = $prefix === '' ? (string) $key : $prefix . '.' . $key;
-
-            $maskThis = $masked || self::keyContainsAny($path, $needles, $exceptedKeyPatterns);
+            if ($depth === 1) {
+                $path     = '';
+                $maskThis = false;
+            } else {
+                $path     = $prefix === '' ? (string) $key : $prefix . '.' . $key;
+                $maskThis = $masked || self::keyContainsAny($path, $needles);
+            }
 
             if (is_array($value)) {
                 $result[$key] = $value === []
@@ -112,8 +119,8 @@ class MaskHelper
                         data: $value,
                         prefix: $path,
                         needles: $needles,
-                        exceptedKeyPatterns: $exceptedKeyPatterns,
-                        masked: $maskThis
+                        masked: $maskThis,
+                        depth: $depth + 1
                     );
 
                 continue;
@@ -127,14 +134,9 @@ class MaskHelper
 
     /**
      * @param string[] $needles
-     * @param string[] $exceptedKeyPatterns
      */
-    private static function keyContainsAny(string $key, array $needles, array $exceptedKeyPatterns): bool
+    private static function keyContainsAny(string $key, array $needles): bool
     {
-        if ($exceptedKeyPatterns && Str::is($exceptedKeyPatterns, $key)) {
-            return false;
-        }
-
         $lowerKey = Str::lower($key);
 
         foreach ($needles as $needle) {

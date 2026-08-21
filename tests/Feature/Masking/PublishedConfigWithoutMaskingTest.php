@@ -24,7 +24,6 @@ class PublishedConfigWithoutMaskingTest extends BaseTestCase
         $config = new MaskingConfig();
 
         self::assertSame(MaskingConfig::DEFAULT_KEYS, $config->getKeys());
-        self::assertSame(MaskingConfig::DEFAULT_EXCEPTED_KEYS, $config->getExceptedKeys());
     }
 
     public function testRegisterMergesTheSectionBack(): void
@@ -43,11 +42,6 @@ class PublishedConfigWithoutMaskingTest extends BaseTestCase
         // the published file is what a user edits, the constants are the fallback;
         // they must not drift apart
         self::assertSame(MaskingConfig::DEFAULT_KEYS, config('slogger.masking.keys'));
-
-        self::assertSame(
-            MaskingConfig::DEFAULT_EXCEPTED_KEYS,
-            config('slogger.masking.excepted_keys')
-        );
     }
 
     public function testAnExplicitEmptyListStillTurnsMaskingOff(): void

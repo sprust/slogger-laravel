@@ -311,21 +311,19 @@ can reach them, and it masks them where they are recorded.
         'firstname', 'surname', 'secret', 'private', 'apikey', 'api_key',
         'api-key', 'credential', 'sign', 'cookie',
     ],
-
-    // keys written by the package itself, matched against the whole dotted path
-    'excepted_keys' => [
-        'connection_name',
-    ],
 ],
 ```
 
 A key matches when it *contains* one of the substrings, so `customer_email`, `API_KEY`
-and `lastName` are all masked. Matching runs over the whole dotted path, so a match on
-a parent key masks its subtree: `auth` masks `auth.method` too.
+and `lastName` are all masked. A match on a parent key masks its subtree, so `auth`
+masks `auth.method` too.
 
-`excepted_keys` are wildcard masks of the whole dotted path. They exist because the
-package writes keys of its own into trace data - `connection_name` contains `_name` but
-describes the trace, not the traced data.
+**The top level of a trace's `data` is never masked.** That level belongs to the
+watcher, not to the application: `connection_name`, `request`, `changes`, `context`,
+`bindings` and so on are a fixed structure, and the traced data starts one level in.
+Matching therefore begins inside it - `context.customer_email` and
+`job.data.customer_email` are masked, while `connection_name` is left readable even
+though it contains `_name`.
 
 The list is deliberately blunt: it masks `sign` inside `assignee` and `auth` inside
 `author`. Over-masking is the safe direction for telemetry; trim the list if a field you

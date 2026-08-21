@@ -48,80 +48,75 @@ class MaskHelperTest extends BaseTestCase
         self::assertSame('ab**ef', MaskHelper::maskValue('abcdef'));
     }
 
-    public function testMaskArrayByKeysMatchesKeySubstringsCaseInsensitively(): void
+    public function testMaskValueMasksASingleMultibyteCharacter(): void
     {
-        $data = [
-            'API_KEY'  => 'key-1',
-            'user'     => [
-                'lastName'  => 'Ivanov',
-                'phone'     => '+70000000000',
-                'is_active' => true,
-            ],
-            'file_size' => 100,
-        ];
-
-        $masked = MaskHelper::maskArrayByKeys($data, ['api_key', 'lastname', 'phone']);
-
-        self::assertNotSame('key-1', $masked['API_KEY']);
-        self::assertNotSame('Ivanov', $masked['user']['lastName']);
-        self::assertNotSame('+70000000000', $masked['user']['phone']);
-
-        // untouched: nothing in their keys matches
-        self::assertTrue($masked['user']['is_active']);
-        self::assertSame(100, $masked['file_size']);
+        // strlen() counts bytes, so a two-byte character used to slip through unmasked
+        self::assertSame('*', MaskHelper::maskValue('é'));
     }
 
-    public function testMaskArrayByKeysMatchesAnySegmentOfTheDottedKey(): void
+    public function testMaskArrayByKeysLeavesTheTopLevelAlone(): void
     {
         $data = [
-            'job' => [
+            // the watcher's own structure: `connection_name` contains `_name` and
+            // `token_count` contains `token`, but neither is traced data
+            'connection_name' => 'redis',
+            'token_count'     => 3,
+            'job'             => [
                 'data' => [
                     'customer_email' => 'a@b.test',
                 ],
             ],
-            'auth' => [
-                'method'  => 'oauth',
-                'expires' => 100,
-            ],
         ];
 
-        $masked = MaskHelper::maskArrayByKeys($data, ['email', 'auth']);
+        $masked = MaskHelper::maskArrayByKeys($data, ['_name', 'token', 'email']);
+
+        self::assertSame('redis', $masked['connection_name']);
+        self::assertSame(3, $masked['token_count']);
 
         self::assertNotSame('a@b.test', $masked['job']['data']['customer_email']);
-
-        // the whole subtree of a matching key is masked
-        self::assertNotSame('oauth', $masked['auth']['method']);
-        self::assertNotSame(100, $masked['auth']['expires']);
     }
 
-    public function testMaskArrayByKeysSkipsExceptedKeys(): void
+    public function testMaskArrayByKeysMatchesKeySubstringsCaseInsensitively(): void
     {
         $data = [
-            'connection_name' => 'redis',
-            'job'             => [
-                'data' => [
-                    'file_name' => 'document.pdf',
+            'context' => [
+                'API_KEY'   => 'key-1',
+                'user'      => [
+                    'lastName' => 'Ivanov',
+                    'phone'    => '+70000000000',
                 ],
+                'is_active' => true,
+                'file_size' => 100,
             ],
         ];
 
-        $masked = MaskHelper::maskArrayByKeys(
-            data: $data,
-            keys: ['_name'],
-            exceptedKeyPatterns: ['connection_name']
-        );
+        $masked = MaskHelper::maskArrayByKeys($data, ['api_key', 'lastname', 'phone']);
 
-        // the package's own key describes the trace, not the traced data
-        self::assertSame('redis', $masked['connection_name']);
+        self::assertNotSame('key-1', $masked['context']['API_KEY']);
+        self::assertNotSame('Ivanov', $masked['context']['user']['lastName']);
+        self::assertNotSame('+70000000000', $masked['context']['user']['phone']);
 
-        self::assertNotSame('document.pdf', $masked['job']['data']['file_name']);
+        // untouched: nothing in their keys matches
+        self::assertTrue($masked['context']['is_active']);
+        self::assertSame(100, $masked['context']['file_size']);
     }
 
-    public function testMaskArrayByKeysWithoutKeysKeepsDataIntact(): void
+    public function testMaskArrayByKeysMasksTheSubtreeOfAMatchingKey(): void
     {
-        $data = ['token' => 'keep-me'];
+        $masked = MaskHelper::maskArrayByKeys(
+            [
+                'context' => [
+                    'auth' => [
+                        'method'  => 'oauth',
+                        'expires' => 100,
+                    ],
+                ],
+            ],
+            ['auth']
+        );
 
-        self::assertSame($data, MaskHelper::maskArrayByKeys($data, []));
+        self::assertNotSame('oauth', $masked['context']['auth']['method']);
+        self::assertNotSame(100, $masked['context']['auth']['expires']);
     }
 
     public function testMaskArrayByKeysKeepsKeysThatContainDots(): void
@@ -147,8 +142,10 @@ class MaskHelperTest extends BaseTestCase
     public function testMaskArrayByKeysKeepsASiblingCollidingWithADottedKey(): void
     {
         $data = [
-            'a'   => 'scalar',
-            'a.b' => 'other',
+            'context' => [
+                'a'   => 'scalar',
+                'a.b' => 'other',
+            ],
         ];
 
         // neither key may swallow the other
@@ -158,21 +155,22 @@ class MaskHelperTest extends BaseTestCase
     public function testMaskArrayByKeysMasksListsElementWise(): void
     {
         $masked = MaskHelper::maskArrayByKeys(
-            ['phones' => ['+70000000001', '+70000000002']],
+            ['context' => ['phones' => ['+70000000001', '+70000000002']]],
             ['phone']
         );
 
-        self::assertCount(2, $masked['phones']);
+        self::assertCount(2, $masked['context']['phones']);
 
-        foreach ($masked['phones'] as $phone) {
+        foreach ($masked['context']['phones'] as $phone) {
             self::assertIsString($phone);
             self::assertStringContainsString('*', $phone);
         }
     }
 
-    public function testMaskValueMasksASingleMultibyteCharacter(): void
+    public function testMaskArrayByKeysWithoutKeysKeepsDataIntact(): void
     {
-        // strlen() counts bytes, so a two-byte character used to slip through unmasked
-        self::assertSame('*', MaskHelper::maskValue('é'));
+        $data = ['context' => ['token' => 'keep-me']];
+
+        self::assertSame($data, MaskHelper::maskArrayByKeys($data, []));
     }
 }

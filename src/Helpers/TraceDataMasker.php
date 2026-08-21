@@ -20,15 +20,9 @@ class TraceDataMasker
      */
     private readonly array $keys;
 
-    /**
-     * @var string[]
-     */
-    private readonly array $exceptedKeys;
-
     public function __construct(MaskingConfig $config)
     {
-        $this->keys         = $config->getKeys();
-        $this->exceptedKeys = $config->getExceptedKeys();
+        $this->keys = $config->getKeys();
     }
 
     public function isEnabled(): bool
@@ -75,8 +69,7 @@ class TraceDataMasker
         /** @var array<string, mixed> $masked */
         $masked = MaskHelper::maskArrayByKeys(
             data: $data,
-            keys: $this->keys,
-            exceptedKeyPatterns: $this->exceptedKeys
+            keys: $this->keys
         );
 
         return $masked;
