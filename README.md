@@ -318,6 +318,12 @@ A key matches when it *contains* one of the substrings, so `customer_email`, `AP
 and `lastName` are all masked. A match on a parent key masks its subtree, so `auth`
 masks `auth.method` too.
 
+A value that is a **string containing a JSON document** is decoded, masked and encoded
+back: applications hand whole documents over as strings - an Eloquent `array` cast puts
+one straight into a model's changes - and the key carrying such a string says nothing
+about what is inside it. Only strings that start with `{` or `[` are parsed, and a
+document in which nothing matched is kept byte for byte rather than re-encoded.
+
 **The top level of a trace's `data` is never masked.** That level belongs to the
 watcher, not to the application: `connection_name`, `request`, `changes`, `context`,
 `bindings` and so on are a fixed structure, and the traced data starts one level in.

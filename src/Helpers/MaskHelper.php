@@ -7,6 +7,11 @@ use Illuminate\Support\Str;
 class MaskHelper
 {
     /**
+     * Above this, a string that looks like JSON is left alone rather than decoded.
+     */
+    private const MAX_JSON_LENGTH = 1000000;
+
+    /**
      * Masks every value whose key contains one of the keys, case-insensitively.
      *
      * The top level is left alone: watchers put their own fixed structure there
@@ -126,10 +131,58 @@ class MaskHelper
                 continue;
             }
 
-            $result[$key] = $maskThis ? self::maskValue($value) : $value;
+            $result[$key] = $maskThis
+                ? self::maskValue($value)
+                : self::maskJsonString($value, $needles);
         }
 
         return $result;
+    }
+
+    /**
+     * Applications hand whole JSON documents over as strings - an Eloquent `array` cast
+     * puts one straight into a model's changes - and the key carrying such a string
+     * says nothing about what is inside it.
+     *
+     * @param string[] $needles
+     */
+    private static function maskJsonString(mixed $value, array $needles): mixed
+    {
+        if (!is_string($value) || strlen($value) > self::MAX_JSON_LENGTH) {
+            return $value;
+        }
+
+        $trimmed = ltrim($value);
+
+        if ($trimmed === '' || ($trimmed[0] !== '{' && $trimmed[0] !== '[')) {
+            return $value;
+        }
+
+        $decoded = json_decode($value, true);
+
+        if (!is_array($decoded)) {
+            return $value;
+        }
+
+        // depth 2: the document is the application's own data all the way up, unlike
+        // the trace data it sits in, whose top level belongs to the watcher
+        $masked = self::maskNode(
+            data: $decoded,
+            prefix: '',
+            needles: $needles,
+            masked: false,
+            depth: 2
+        );
+
+        if ($masked === $decoded) {
+            // nothing matched: keep the original bytes rather than a re-encoded
+            // approximation of them
+            return $value;
+        }
+
+        $encoded = json_encode($masked, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        return $encoded === false ? $value : $encoded;
     }
 
     /**

@@ -173,4 +173,73 @@ class MaskHelperTest extends BaseTestCase
 
         self::assertSame($data, MaskHelper::maskArrayByKeys($data, []));
     }
+
+    public function testMaskArrayByKeysLooksInsideJsonStrings(): void
+    {
+        // an Eloquent `array` cast hands the whole document over as a string, and
+        // `meta` says nothing about what is inside it
+        $masked = MaskHelper::maskArrayByKeys(
+            [
+                'changes' => [
+                    'meta' => '{"customer_email":"c@d.test","order_id":43}',
+                ],
+            ],
+            ['email']
+        );
+
+        $decoded = json_decode($masked['changes']['meta'], true);
+
+        self::assertIsArray($decoded);
+        self::assertNotSame('c@d.test', $decoded['customer_email']);
+        self::assertSame(43, $decoded['order_id']);
+    }
+
+    public function testMaskArrayByKeysMasksInsideNestedJsonStrings(): void
+    {
+        $masked = MaskHelper::maskArrayByKeys(
+            [
+                'context' => [
+                    'outer' => '{"inner":"{\"token\":\"t-1\"}"}',
+                ],
+            ],
+            ['token']
+        );
+
+        self::assertStringNotContainsString('t-1', $masked['context']['outer']);
+    }
+
+    public function testMaskArrayByKeysKeepsAJsonStringByteForByteWhenNothingMatches(): void
+    {
+        $json = '{ "order_id" : 43, "url": "a\/b", "ru": "\u0410" }';
+
+        $masked = MaskHelper::maskArrayByKeys(['changes' => ['meta' => $json]], ['email']);
+
+        // re-encoding would drop the spacing, the escaped slash and the escaped
+        // character, so an untouched document is left exactly as it came in
+        self::assertSame($json, $masked['changes']['meta']);
+    }
+
+    public function testMaskArrayByKeysLeavesStringsThatOnlyLookLikeJson(): void
+    {
+        $data = [
+            'context' => [
+                'note'  => '{not json at all',
+                'plain' => 'nothing to see',
+            ],
+        ];
+
+        self::assertSame($data, MaskHelper::maskArrayByKeys($data, ['email', 'token']));
+    }
+
+    public function testMaskArrayByKeysMasksAJsonStringWholeWhenItsOwnKeyMatches(): void
+    {
+        $masked = MaskHelper::maskArrayByKeys(
+            ['context' => ['auth_payload' => '{"a":1}']],
+            ['auth']
+        );
+
+        // the key itself is flagged, so the value is masked as a value, not parsed
+        self::assertNotSame('{"a":1}', $masked['context']['auth_payload']);
+        self::assertNull(json_decode($masked['context']['auth_payload'], true));
+    }
 }
