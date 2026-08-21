@@ -37,6 +37,14 @@ class Processor
      */
     private array $tracesStack = [];
 
+    /**
+     * Open detached traces, by trace id. They are kept off the stack, so this is the
+     * only way the parent that started them can still close them.
+     *
+     * @var array<string, array{owner_trace_id: string|null, tags: string[], logged_at: Carbon}>
+     */
+    private array $detachedTraces = [];
+
     private bool $paused = false;
 
     public function __construct(
@@ -149,8 +157,6 @@ class Processor
         ?string $customParentTraceId,
         Carbon $loggedAt,
     ): mixed {
-        $this->profiler->start();
-
         $traceId = $this->startAndGetTraceId(
             type: $type,
             tags: $tags,
@@ -208,12 +214,12 @@ class Processor
 
         $parentTraceId = $this->traceIdContainer->getParentTraceId();
 
-        $traceId = $this->startAndGetDetachedTraceId(
+        $traceId = $this->dispatchStartTrace(
             type: $type,
             tags: $tags,
             data: $data,
             loggedAt: $loggedAt,
-            customParentTraceId: $customParentTraceId ?? $parentTraceId,
+            parentTraceId: $customParentTraceId ?? $parentTraceId,
         );
 
         $this->tracesStack[] = [
@@ -244,25 +250,21 @@ class Processor
         Carbon $loggedAt,
         ?string $customParentTraceId = null
     ): string {
-        $traceId = TraceHelper::makeTraceId();
+        $ownerTraceId = $customParentTraceId ?? $this->traceIdContainer->getParentTraceId();
 
-        $this->traceDataComplementer->inject($data);
-
-        $this->dispatchPushTrace(
-            new TraceCreateObject(
-                traceId: $traceId,
-                parentTraceId: $customParentTraceId ?? $this->traceIdContainer->getParentTraceId(),
-                type: $type,
-                status: TraceStatusEnum::Started->value,
-                tags: $tags,
-                data: $data,
-                duration: null,
-                memory: MetricsHelper::getMemoryUsagePercent(),
-                cpu: MetricsHelper::getCpuAvgPercent(),
-                isParent: true,
-                loggedAt: $loggedAt->clone()
-            )
+        $traceId = $this->dispatchStartTrace(
+            type: $type,
+            tags: $tags,
+            data: $data,
+            loggedAt: $loggedAt,
+            parentTraceId: $ownerTraceId,
         );
+
+        $this->detachedTraces[$traceId] = [
+            'owner_trace_id' => $ownerTraceId,
+            'tags'           => $tags,
+            'logged_at'      => $loggedAt->clone(),
+        ];
 
         return $traceId;
     }
@@ -325,6 +327,20 @@ class Processor
         ?float $duration,
         Carbon $parentLoggedAt,
     ): void {
+        if (isset($this->detachedTraces[$traceId])) {
+            // the caller mixed up the two APIs; close it the way it was started
+            $this->stopDetached(
+                traceId: $traceId,
+                status: $status,
+                tags: $tags,
+                data: $data,
+                duration: $duration,
+                parentLoggedAt: $parentLoggedAt,
+            );
+
+            return;
+        }
+
         $index = $this->findStackIndex($traceId);
 
         if (is_null($index)) {
@@ -339,6 +355,8 @@ class Processor
         // was doing. Close the interrupted children, otherwise they would hang
         // in the "started" status forever
         $this->stopInterruptedNested(parentIndex: $index, parentTraceId: $traceId);
+
+        $this->stopInterruptedDetached(ownerTraceId: $traceId);
 
         $stackItem = $this->tracesStack[$index];
 
@@ -378,6 +396,27 @@ class Processor
         ?float $duration,
         Carbon $parentLoggedAt,
     ): void {
+        if (!isset($this->detachedTraces[$traceId])) {
+            if (is_null($this->findStackIndex($traceId))) {
+                // already closed
+                return;
+            }
+
+            // the caller mixed up the two APIs; close it the way it was started
+            $this->stop(
+                traceId: $traceId,
+                status: $status,
+                tags: $tags,
+                data: $data,
+                duration: $duration,
+                parentLoggedAt: $parentLoggedAt,
+            );
+
+            return;
+        }
+
+        unset($this->detachedTraces[$traceId]);
+
         $this->dispatchStopTrace(
             traceId: $traceId,
             status: $status,
@@ -387,6 +426,40 @@ class Processor
             duration: $duration,
             parentLoggedAt: $parentLoggedAt,
         );
+    }
+
+    /**
+     * @param string[]             $tags
+     * @param array<string, mixed> $data
+     */
+    private function dispatchStartTrace(
+        string $type,
+        array $tags,
+        array $data,
+        Carbon $loggedAt,
+        ?string $parentTraceId
+    ): string {
+        $traceId = TraceHelper::makeTraceId();
+
+        $this->traceDataComplementer->inject($data);
+
+        $this->dispatchPushTrace(
+            new TraceCreateObject(
+                traceId: $traceId,
+                parentTraceId: $parentTraceId,
+                type: $type,
+                status: TraceStatusEnum::Started->value,
+                tags: $tags,
+                data: $data,
+                duration: null,
+                memory: MetricsHelper::getMemoryUsagePercent(),
+                cpu: MetricsHelper::getCpuAvgPercent(),
+                isParent: true,
+                loggedAt: $loggedAt->clone()
+            )
+        );
+
+        return $traceId;
     }
 
     /**
@@ -444,6 +517,8 @@ class Processor
         $this->tracesStack = array_slice($this->tracesStack, 0, $parentIndex + 1);
 
         foreach (array_reverse($interrupted) as $stackItem) {
+            $this->stopInterruptedDetached(ownerTraceId: $stackItem['trace_id']);
+
             $loggedAt = $stackItem['logged_at'];
 
             $this->dispatchUpdateTrace(
@@ -461,6 +536,33 @@ class Processor
                     cpu: MetricsHelper::getCpuAvgPercent(),
                     parentLoggedAt: $loggedAt,
                 )
+            );
+        }
+    }
+
+    /**
+     * Closes the detached traces the stopping one had started and never closed.
+     */
+    private function stopInterruptedDetached(string $ownerTraceId): void
+    {
+        foreach ($this->detachedTraces as $traceId => $detachedTrace) {
+            if ($detachedTrace['owner_trace_id'] !== $ownerTraceId) {
+                continue;
+            }
+
+            unset($this->detachedTraces[$traceId]);
+
+            $this->dispatchStopTrace(
+                traceId: $traceId,
+                status: TraceStatusEnum::Failed->value,
+                profiling: null,
+                tags: [
+                    ...$detachedTrace['tags'],
+                    self::INTERRUPTED_TAG,
+                ],
+                data: null,
+                duration: TraceHelper::calcDuration($detachedTrace['logged_at']),
+                parentLoggedAt: $detachedTrace['logged_at'],
             );
         }
     }

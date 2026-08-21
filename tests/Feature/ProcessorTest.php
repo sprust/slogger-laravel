@@ -246,4 +246,121 @@ class ProcessorTest extends BaseTestCase
 
         self::assertFalse($processor->isActive());
     }
+
+    public function testStopClosesDetachedTracesTheParentLeftOpen(): void
+    {
+        $processor  = $this->getApp()->make(Processor::class);
+        $dispatcher = $this->getApp()->make(MemoryDispatcher::class);
+
+        $dispatcher->flush();
+
+        $parentTraceId = $processor->startAndGetTraceId(
+            type: 'job',
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now(),
+            customParentTraceId: null
+        );
+
+        // an outbound request that never gets a response: the Guzzle handler throws
+        // synchronously, so the watcher is never told how it ended
+        $detachedTraceId = $processor->startAndGetDetachedTraceId(
+            type: 'http-client',
+            tags: ['https://example.test/alpha'],
+            data: ['kept' => true],
+            loggedAt: Carbon::now()
+        );
+
+        $processor->stop(
+            traceId: $parentTraceId,
+            status: TraceStatusEnum::Success->value,
+            tags: null,
+            data: null,
+            duration: null,
+            parentLoggedAt: Carbon::now()
+        );
+
+        $updatedDetached = $dispatcher->findUpdating(
+            traceId: $detachedTraceId,
+            status: TraceStatusEnum::Failed
+        );
+
+        self::assertCount(1, $updatedDetached);
+
+        self::assertNull($updatedDetached[0]->data);
+
+        self::assertSame(
+            ['https://example.test/alpha', Processor::INTERRUPTED_TAG],
+            $updatedDetached[0]->tags
+        );
+
+        self::assertFalse($processor->isActive());
+    }
+
+    public function testTheTwoStopMethodsAreInterchangeable(): void
+    {
+        $processor  = $this->getApp()->make(Processor::class);
+        $dispatcher = $this->getApp()->make(MemoryDispatcher::class);
+
+        $dispatcher->flush();
+
+        $stackedTraceId = $processor->startAndGetTraceId(
+            type: 'job',
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now(),
+            customParentTraceId: null
+        );
+
+        $detachedTraceId = $processor->startAndGetDetachedTraceId(
+            type: 'http-client',
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now()
+        );
+
+        // both are closed through the wrong method on purpose: a mismatch must not
+        // corrupt the stack or leave a trace open
+        $processor->stop(
+            traceId: $detachedTraceId,
+            status: TraceStatusEnum::Success->value,
+            tags: null,
+            data: null,
+            duration: null,
+            parentLoggedAt: Carbon::now()
+        );
+
+        $processor->stopDetached(
+            traceId: $stackedTraceId,
+            status: TraceStatusEnum::Success->value,
+            tags: null,
+            data: null,
+            duration: null,
+            parentLoggedAt: Carbon::now()
+        );
+
+        self::assertCount(
+            1,
+            $dispatcher->findUpdating(
+                traceId: $detachedTraceId,
+                status: TraceStatusEnum::Success
+            )
+        );
+
+        self::assertCount(
+            1,
+            $dispatcher->findUpdating(
+                traceId: $stackedTraceId,
+                status: TraceStatusEnum::Success
+            )
+        );
+
+        // the detached one was closed on its own, so it must not be marked interrupted
+        self::assertNotContains(
+            Processor::INTERRUPTED_TAG,
+            $dispatcher->findUpdating(traceId: $detachedTraceId)[0]->tags ?? []
+        );
+
+        self::assertFalse($processor->isActive());
+    }
 }

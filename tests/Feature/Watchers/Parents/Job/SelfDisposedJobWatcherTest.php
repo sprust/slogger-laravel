@@ -68,7 +68,8 @@ class SelfDisposedJobWatcherTest extends BaseWatcherTestCase
 
         $job->release(0);
 
-        event(new JobReleasedAfterException('sync', $job, 0));
+        // no backoff argument: JobReleasedAfterException only takes one from 12.52
+        event(new JobReleasedAfterException('sync', $job));
 
         $creating = $this->dispatcher->findCreating(
             type: 'job',
