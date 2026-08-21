@@ -18,6 +18,7 @@ use SLoggerLaravel\Helpers\TraceHelper;
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
 use SLoggerLaravel\Profiling\AbstractProfiling;
+use SLoggerLaravel\Profiling\Dto\ProfilingObjects;
 use SLoggerLaravel\Traces\TraceIdContainer;
 use SLoggerLaravel\Watchers\WatcherInterface;
 use Throwable;
@@ -205,16 +206,52 @@ class Processor
     ): string {
         $this->profiler->start();
 
-        $traceId = TraceHelper::makeTraceId();
-
         $parentTraceId = $this->traceIdContainer->getParentTraceId();
+
+        $traceId = $this->startAndGetDetachedTraceId(
+            type: $type,
+            tags: $tags,
+            data: $data,
+            loggedAt: $loggedAt,
+            customParentTraceId: $customParentTraceId ?? $parentTraceId,
+        );
+
+        $this->tracesStack[] = [
+            'trace_id'            => $traceId,
+            'pre_parent_trace_id' => $parentTraceId,
+            'tags'                => $tags,
+            'logged_at'           => $loggedAt->clone(),
+        ];
+
+        $this->traceIdContainer->setParentTraceId($traceId);
+
+        return $traceId;
+    }
+
+    /**
+     * Starts a parent trace that is kept off the trace stack and is closed by
+     * stopDetached(), in any order relative to the other traces. Outbound HTTP
+     * requests need this: `Http::pool()` keeps several of them in flight at once,
+     * so they neither nest into each other nor finish in the order they started.
+     *
+     * @param string[]             $tags
+     * @param array<string, mixed> $data
+     */
+    public function startAndGetDetachedTraceId(
+        string $type,
+        array $tags,
+        array $data,
+        Carbon $loggedAt,
+        ?string $customParentTraceId = null
+    ): string {
+        $traceId = TraceHelper::makeTraceId();
 
         $this->traceDataComplementer->inject($data);
 
         $this->dispatchPushTrace(
             new TraceCreateObject(
                 traceId: $traceId,
-                parentTraceId: $customParentTraceId ?? $parentTraceId,
+                parentTraceId: $customParentTraceId ?? $this->traceIdContainer->getParentTraceId(),
                 type: $type,
                 status: TraceStatusEnum::Started->value,
                 tags: $tags,
@@ -226,15 +263,6 @@ class Processor
                 loggedAt: $loggedAt->clone()
             )
         );
-
-        $this->tracesStack[] = [
-            'trace_id'            => $traceId,
-            'pre_parent_trace_id' => $parentTraceId,
-            'tags'                => $tags,
-            'logged_at'           => $loggedAt->clone(),
-        ];
-
-        $this->traceIdContainer->setParentTraceId($traceId);
 
         return $traceId;
     }
@@ -324,6 +352,56 @@ class Processor
             $this->traceIdContainer->setParentTraceId(null);
         }
 
+        $this->dispatchStopTrace(
+            traceId: $traceId,
+            status: $status,
+            profiling: $this->profiler->stop(),
+            tags: $tags,
+            data: $data,
+            duration: $duration,
+            parentLoggedAt: $parentLoggedAt,
+        );
+    }
+
+    /**
+     * Closes a trace started by startAndGetDetachedTraceId(). The profiler is left
+     * alone: it profiles the enclosing parent trace, which is still running.
+     *
+     * @param string[]|null             $tags
+     * @param array<string, mixed>|null $data
+     */
+    public function stopDetached(
+        string $traceId,
+        string $status,
+        ?array $tags,
+        ?array $data,
+        ?float $duration,
+        Carbon $parentLoggedAt,
+    ): void {
+        $this->dispatchStopTrace(
+            traceId: $traceId,
+            status: $status,
+            profiling: null,
+            tags: $tags,
+            data: $data,
+            duration: $duration,
+            parentLoggedAt: $parentLoggedAt,
+        );
+    }
+
+    /**
+     * @param string[]|null             $tags
+     * @param array<string, mixed>|null $data
+     */
+    private function dispatchStopTrace(
+        string $traceId,
+        string $status,
+        ?ProfilingObjects $profiling,
+        ?array $tags,
+        ?array $data,
+        ?float $duration,
+        Carbon $parentLoggedAt,
+    ): void {
         if (!is_null($data)) {
             $this->traceDataComplementer->inject($data);
         }
@@ -332,7 +410,7 @@ class Processor
             new TraceUpdateObject(
                 traceId: $traceId,
                 status: $status,
-                profiling: $this->profiler->stop(),
+                profiling: $profiling,
                 tags: $tags,
                 data: $data,
                 duration: $duration,

@@ -157,14 +157,14 @@ SLOGGER_LOG_SCHEDULE_ENABLED=true
 
 Основные данные вотчеров:
 - `request`: url, метод, action, заголовки/параметры, ответ (для JSON-ответов)
-- `job`: коннекшен, payload, статус (`processed`, `failed`, `released_after_exception`, `timed_out`), исключение
+- `job`: коннекшен, payload, статус (`processed`, `failed`, `released_after_exception`, `timed_out`, `exception_occurred`), исключение
 - `event`: слушатели, broadcast, опционально сериализованный payload
 - `model`: действие, класс модели, ключ, изменения
 - `mail`: from/to/cc/bcc, тема, queued, mailable/notification
 - `notification`: notifiable, канал, queued, ответ
 - `cache`: тип, ключ, теги, значение
 - `db`: запрос, биндинги, время
-- `http-client`: метод, url, запрос/ответ
+- `http-client`: метод, url, запрос/ответ (параллельные запросы трейсятся независимо, так что `Http::pool()` работает)
 - `schedule`: команда, описание, cron, вывод
 - `dump`, `log`, `gate`: информация о dump/сообщении/ability
 

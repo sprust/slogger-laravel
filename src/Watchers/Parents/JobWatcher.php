@@ -3,6 +3,7 @@
 namespace SLoggerLaravel\Watchers\Parents;
 
 use Illuminate\Contracts\Queue\Job;
+use Illuminate\Queue\Events\JobExceptionOccurred;
 use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Queue\Events\JobProcessing;
@@ -73,6 +74,7 @@ class JobWatcher implements WatcherInterface
         $this->processor->registerEvent(JobFailed::class, [$this, 'handleJobFailed']);
         $this->processor->registerEvent(JobReleasedAfterException::class, [$this, 'handleJobReleasedAfterException']);
         $this->processor->registerEvent(JobTimedOut::class, [$this, 'handleJobTimedOut']);
+        $this->processor->registerEvent(JobExceptionOccurred::class, [$this, 'handleJobExceptionOccurred']);
     }
 
     public function handleJobProcessing(JobProcessing $event): void
@@ -153,6 +155,28 @@ class JobWatcher implements WatcherInterface
             connectionName: $event->connectionName,
             jobStatus: 'timed_out',
             traceStatus: TraceStatusEnum::Failed->value,
+        );
+    }
+
+    /**
+     * A job that disposes of itself and then throws - `$this->release(60); throw ...`
+     * - gets neither JobProcessed nor JobFailed nor JobReleasedAfterException, so this
+     * is the last the worker says about it.
+     */
+    public function handleJobExceptionOccurred(JobExceptionOccurred $event): void
+    {
+        // the worker releases the job and emits JobReleasedAfterException right after
+        // this event unless the job has already disposed of itself
+        if (!$event->job->isDeletedOrReleased() && !$event->job->hasFailed()) {
+            return;
+        }
+
+        $this->stopJobTrace(
+            job: $event->job,
+            connectionName: $event->connectionName,
+            jobStatus: 'exception_occurred',
+            traceStatus: TraceStatusEnum::Failed->value,
+            exception: $event->exception,
         );
     }
 

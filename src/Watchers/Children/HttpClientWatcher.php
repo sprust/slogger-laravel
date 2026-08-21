@@ -98,12 +98,14 @@ class HttpClientWatcher implements WatcherInterface
 
         $loggedAt = Carbon::now();
 
-        $traceId = $this->processor->startAndGetTraceId(
+        // detached: `Http::pool()` keeps several requests in flight at once, so an
+        // outbound request neither nests into another one nor finishes in the order
+        // it started
+        $traceId = $this->processor->startAndGetDetachedTraceId(
             type: 'http-client',
             tags: [],
             data: $this->getCommonRequestData($request),
             loggedAt: $loggedAt,
-            customParentTraceId: null,
         );
 
         $this->requests[$traceId] = [
@@ -114,12 +116,11 @@ class HttpClientWatcher implements WatcherInterface
         $request = $request->withHeader($this->headerTraceIdKey, $traceId);
 
         if ($this->headerParentTraceIdKey) {
-            if ($parentTraceId = $this->traceIdContainer->getParentTraceId()) {
-                $request = $request->withHeader(
-                    $this->headerParentTraceIdKey,
-                    $parentTraceId
-                );
-            }
+            // the called service traces the call as a child of this request
+            $request = $request->withHeader(
+                $this->headerParentTraceIdKey,
+                $traceId
+            );
         }
 
         return $request;
@@ -162,7 +163,7 @@ class HttpClientWatcher implements WatcherInterface
 
         $statusCode = $response->getStatusCode();
 
-        $this->processor->stop(
+        $this->processor->stopDetached(
             traceId: $traceId,
             status: ($statusCode >= 200 && $statusCode < 300)
                 ? TraceStatusEnum::Success->value
@@ -216,7 +217,7 @@ class HttpClientWatcher implements WatcherInterface
 
         $uri = (string) $request->getUri();
 
-        $this->processor->stop(
+        $this->processor->stopDetached(
             traceId: $traceId,
             status: TraceStatusEnum::Failed->value,
             tags: $uri ? [$uri] : [],

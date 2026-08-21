@@ -19,6 +19,7 @@ use SLoggerLaravel\Objects\TraceUpdateObject;
 use SLoggerLaravel\RequestPreparer\RequestDataFormatters;
 use SLoggerLaravel\Tests\Feature\Watchers\Children\BaseChildWatcherTestCase;
 use SLoggerLaravel\Watchers\Children\HttpClientWatcher;
+use SLoggerLaravel\Processor;
 use SLoggerLaravel\Watchers\Parents\JobWatcher;
 use Throwable;
 
@@ -100,6 +101,59 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
         self::assertCount(
             1,
             $creating
+        );
+    }
+
+    public function testConcurrentRequestsDoNotInterruptEachOther(): void
+    {
+        $this->registerWatcher(JobWatcher::class, null);
+
+        $this->bindSharedWatcher();
+
+        dispatch(static function (): void {
+            /** @var HttpClientWatcher $watcher */
+            $watcher = app(HttpClientWatcher::class);
+
+            $formatters = new RequestDataFormatters();
+
+            // `Http::pool()` starts several requests before any of them answers, and
+            // they answer in whatever order the remote services happen to reply
+            $alpha = $watcher->handleRequest(new Request('POST', 'https://example.test/alpha'));
+            $beta  = $watcher->handleRequest(new Request('POST', 'https://example.test/beta'));
+
+            $watcher->handleResponse($alpha, [], new Response(200), $formatters);
+            $watcher->handleResponse($beta, [], new Response(200), $formatters);
+        });
+
+        $creating = $this->dispatcher->findCreating(type: 'http-client');
+
+        self::assertCount(2, $creating);
+
+        foreach ($creating as $trace) {
+            $updating = $this->dispatcher->findUpdating(traceId: $trace->traceId);
+
+            self::assertCount(1, $updating);
+
+            // neither request may be closed as a casualty of the other one finishing
+            self::assertSame(TraceStatusEnum::Success->value, $updating[0]->status);
+
+            self::assertNotContains(
+                Processor::INTERRUPTED_TAG,
+                $updating[0]->tags ?? []
+            );
+        }
+
+        // both are children of the job, not of each other
+        $jobTrace = $this->dispatcher->findCreating(type: 'job', isParent: true);
+
+        self::assertCount(1, $jobTrace);
+
+        self::assertCount(
+            2,
+            $this->dispatcher->findCreating(
+                parentTraceId: $jobTrace[0]->traceId,
+                type: 'http-client',
+            )
         );
     }
 

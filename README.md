@@ -157,14 +157,14 @@ Each trace contains:
 
 Watcher data highlights:
 - `request`: url, method, action, headers/params, response (for JSON responses)
-- `job`: connection, payload, status (`processed`, `failed`, `released_after_exception`, `timed_out`), exception
+- `job`: connection, payload, status (`processed`, `failed`, `released_after_exception`, `timed_out`, `exception_occurred`), exception
 - `event`: listeners, broadcast, optional serialized payload
 - `model`: action, model class, key, changes
 - `mail`: from/to/cc/bcc, subject, queued, mailable/notification
 - `notification`: notifiable, channel, queued, response
 - `cache`: type, key, tags, value
 - `db`: query, bindings, time
-- `http-client`: method, url, request/response
+- `http-client`: method, url, request/response (concurrent requests are traced independently, so `Http::pool()` works)
 - `schedule`: command, description, cron, output
 - `dump`, `log`, `gate`: dump/message/ability info
 
