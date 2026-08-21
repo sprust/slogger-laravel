@@ -6,10 +6,29 @@ SLogger Laravel is a tracing/observability package for Laravel apps. It records 
 
 This README documents installation, configuration, watchers, masking, dispatchers, profiling, and usage patterns.
 
+## Upgrading to 1.3
+
+Masking moved out of the traced application and into the dispatcher job.
+
+- **Per-watcher masking is gone.** `input.headers_masking`, `input.parameters_masking`,
+  `output.headers_masking`, `output.fields_masking` and the model watcher's `masks` are
+  no longer read. Leftovers in a published config are ignored, not an error.
+- **One global list instead**, under `masking.keys`. A published config is merged with
+  the package's own now, so the defaults apply without republishing; add the section to
+  your config only to change it.
+- **`APP_KEY` is required.** Traces reach the queue unmasked, so `SendTracesJob` is
+  encrypted. Without a key the job cannot be dispatched: the application keeps working,
+  but telemetry stops and says so in the slogger log channel.
+- **Laravel 10.12** is the new floor (`JobTimedOut` landed there).
+- API changes if you build formatters yourself: `RequestDataFormatter` lost its
+  `requestHeaders`, `requestParameters`, `responseHeaders` and `responseFields`
+  arguments along with the matching `add*()` methods, and
+  `MaskHelper::maskArrayByList()`/`maskArrayByPatterns()` are gone.
+
 ## Requirements
 
 - PHP >= 8.2
-- Laravel 10+ (tested), should work on Laravel 12
+- Laravel 10.12+ (tested on 10, 11 and 12)
 - Queue driver for `queue` dispatcher
 - Optional: XHProf extension for profiling
 

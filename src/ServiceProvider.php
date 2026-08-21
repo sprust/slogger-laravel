@@ -34,6 +34,10 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
      */
     public function register(): void
     {
+        // a published config replaces this package's own, so without the merge an
+        // application that published one before a key existed silently runs without it
+        $this->mergeConfigFrom(__DIR__ . '/../config/slogger.php', 'slogger');
+
         $this->app->singleton(GeneralConfig::class);
 
         if (!$this->app->make(GeneralConfig::class)->isEnabled()) {

@@ -10,6 +10,7 @@ use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Psr7\Request;
+use GuzzleHttp\Promise\Utils;
 use GuzzleHttp\Psr7\Response;
 use ReflectionClass;
 use SLoggerLaravel\Enums\TraceStatusEnum;
@@ -155,6 +156,40 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
                 type: 'http-client',
             )
         );
+    }
+
+    public function testRequestsAreNotSerializedByTracing(): void
+    {
+        $watcher = $this->bindSharedWatcher();
+
+        $handlerStack = app(GuzzleHandlerFactory::class)->prepareHandler(
+            formatters: new RequestDataFormatters(),
+            handlerStack: HandlerStack::create(
+                new MockHandler([new Response(200), new Response(200)])
+            )
+        );
+
+        $client = new Client([
+            'handler'     => $handlerStack,
+            'http_errors' => false,
+        ]);
+
+        $promises = [
+            $client->requestAsync('GET', 'https://example.test/alpha'),
+            $client->requestAsync('GET', 'https://example.test/beta'),
+        ];
+
+        // both requests are in flight. tracing must not have finished either of them
+        // yet - waiting inside the middleware used to complete each request before the
+        // next one was even started, turning Http::pool() into a serial loop
+        self::assertCount(2, $this->dispatcher->findCreating(type: 'http-client'));
+        self::assertCount(0, $this->dispatcher->findUpdating());
+
+        Utils::settle($promises)->wait();
+
+        self::assertCount(2, $this->dispatcher->findUpdating());
+
+        self::assertSame([], $this->getTrackedRequests($watcher));
     }
 
     protected function getTraceType(): string
