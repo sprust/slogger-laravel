@@ -92,8 +92,8 @@ class ProcessorTest extends BaseTestCase
 
         $nestedTraceId = $processor->startAndGetTraceId(
             type: 'command',
-            tags: [],
-            data: [],
+            tags: ['nested'],
+            data: ['kept' => true],
             loggedAt: Carbon::now(),
             customParentTraceId: null
         );
@@ -109,12 +109,20 @@ class ProcessorTest extends BaseTestCase
             parentLoggedAt: Carbon::now()
         );
 
-        self::assertCount(
-            1,
-            $dispatcher->findUpdating(
-                traceId: $nestedTraceId,
-                status: TraceStatusEnum::Failed
-            )
+        $updatedNested = $dispatcher->findUpdating(
+            traceId: $nestedTraceId,
+            status: TraceStatusEnum::Failed
+        );
+
+        self::assertCount(1, $updatedNested);
+
+        // an update replaces the data, so the interrupted trace keeps what it had
+        // collected on start and is marked by a tag instead
+        self::assertNull($updatedNested[0]->data);
+
+        self::assertSame(
+            ['nested', Processor::INTERRUPTED_TAG],
+            $updatedNested[0]->tags
         );
 
         self::assertCount(
@@ -167,5 +175,75 @@ class ProcessorTest extends BaseTestCase
                 status: TraceStatusEnum::Success
             )
         );
+    }
+
+    public function testStopOfAMiddleTraceKeepsTheOuterOneRunning(): void
+    {
+        $processor  = $this->getApp()->make(Processor::class);
+        $dispatcher = $this->getApp()->make(MemoryDispatcher::class);
+
+        $dispatcher->flush();
+
+        $outerTraceId = $processor->startAndGetTraceId(
+            type: 'command',
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now(),
+            customParentTraceId: null
+        );
+
+        $middleTraceId = $processor->startAndGetTraceId(
+            type: 'job',
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now(),
+            customParentTraceId: null
+        );
+
+        $innerTraceId = $processor->startAndGetTraceId(
+            type: 'command',
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now(),
+            customParentTraceId: null
+        );
+
+        $processor->stop(
+            traceId: $middleTraceId,
+            status: TraceStatusEnum::Failed->value,
+            tags: null,
+            data: null,
+            duration: null,
+            parentLoggedAt: Carbon::now()
+        );
+
+        // only the traces above the stopped one are interrupted
+        self::assertCount(1, $dispatcher->findUpdating(traceId: $innerTraceId));
+        self::assertCount(1, $dispatcher->findUpdating(traceId: $middleTraceId));
+        self::assertCount(0, $dispatcher->findUpdating(traceId: $outerTraceId));
+
+        self::assertTrue($processor->isActive());
+
+        // the outer trace becomes the parent again, so it still collects children
+        $processor->push(type: 'log', status: TraceStatusEnum::Success->value);
+
+        $children = $dispatcher->findCreating(
+            parentTraceId: $outerTraceId,
+            type: 'log',
+            isParent: false,
+        );
+
+        self::assertCount(1, $children);
+
+        $processor->stop(
+            traceId: $outerTraceId,
+            status: TraceStatusEnum::Success->value,
+            tags: null,
+            data: null,
+            duration: null,
+            parentLoggedAt: Carbon::now()
+        );
+
+        self::assertFalse($processor->isActive());
     }
 }

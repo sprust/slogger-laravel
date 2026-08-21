@@ -24,21 +24,27 @@ class TimedOutJob implements ShouldQueue
     /**
      * @param bool $failing whether the timed out job exceeds its attempts and is
      *                      failed by the worker instead of being retried
+     * @param bool $nesting whether the job has a parent trace of its own open when
+     *                      the timeout fires
      */
-    public function __construct(private readonly bool $failing = true)
-    {
+    public function __construct(
+        private readonly bool $failing = true,
+        private readonly bool $nesting = true
+    ) {
     }
 
     public function handle(Processor $processor): void
     {
-        // the job opens a nested parent trace: an artisan call, a sync sub-job, etc.
-        $processor->startAndGetTraceId(
-            type: TraceTypeEnum::Command->value,
-            tags: ['nested'],
-            data: [],
-            loggedAt: Carbon::now(),
-            customParentTraceId: null,
-        );
+        if ($this->nesting) {
+            // the job opens a nested parent trace: an artisan call, a sync sub-job, etc.
+            $processor->startAndGetTraceId(
+                type: TraceTypeEnum::Command->value,
+                tags: ['nested'],
+                data: ['nested_data' => 'kept'],
+                loggedAt: Carbon::now(),
+                customParentTraceId: null,
+            );
+        }
 
         $job = $this->job;
 

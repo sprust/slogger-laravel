@@ -88,6 +88,12 @@ class CommandWatcher implements WatcherInterface
 
     protected function onHandleCommandFinished(?CommandFinished $event): void
     {
+        // the start of an excepted command is not traced, so its finish must not pop
+        // the entry of the command that is running it
+        if (in_array($event?->command, $this->exceptedCommands)) {
+            return;
+        }
+
         $commandData = array_pop($this->commands);
 
         if (!$commandData) {

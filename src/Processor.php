@@ -24,12 +24,15 @@ use Throwable;
 
 class Processor
 {
-    private bool $started = false;
+    /**
+     * Marks a trace that was still running when its parent had been stopped.
+     */
+    public const INTERRUPTED_TAG = '__interrupted';
 
     /**
      * Currently started parent traces, from the outermost to the innermost one.
      *
-     * @var list<array{trace_id: string, pre_parent_trace_id: string|null, logged_at: Carbon}>
+     * @var list<array{trace_id: string, pre_parent_trace_id: string|null, tags: string[], logged_at: Carbon}>
      */
     private array $tracesStack = [];
 
@@ -48,7 +51,7 @@ class Processor
 
     public function isActive(): bool
     {
-        return $this->started;
+        return $this->tracesStack !== [];
     }
 
     public function isPaused(): bool
@@ -227,12 +230,11 @@ class Processor
         $this->tracesStack[] = [
             'trace_id'            => $traceId,
             'pre_parent_trace_id' => $parentTraceId,
+            'tags'                => $tags,
             'logged_at'           => $loggedAt->clone(),
         ];
 
         $this->traceIdContainer->setParentTraceId($traceId);
-
-        $this->started = true;
 
         return $traceId;
     }
@@ -319,8 +321,6 @@ class Processor
         );
 
         if (count($this->tracesStack) == 0) {
-            $this->started = false;
-
             $this->traceIdContainer->setParentTraceId(null);
         }
 
@@ -355,7 +355,9 @@ class Processor
     }
 
     /**
-     * Closes the traces started above the stopping one as failed.
+     * Closes the traces started above the stopping one as failed. Their data is left
+     * untouched - an update replaces it, and what they collected on start is the only
+     * thing left to tell what they were doing when they got interrupted.
      */
     private function stopInterruptedNested(int $parentIndex, string $parentTraceId): void
     {
@@ -371,11 +373,11 @@ class Processor
                     traceId: $stackItem['trace_id'],
                     status: TraceStatusEnum::Failed->value,
                     profiling: null,
-                    tags: null,
-                    data: [
-                        '__interrupted' => "Parent trace [$parentTraceId] has been stopped"
-                            . ' while this trace was still active.',
+                    tags: [
+                        ...$stackItem['tags'],
+                        self::INTERRUPTED_TAG,
                     ],
+                    data: null,
                     duration: TraceHelper::calcDuration($loggedAt),
                     memory: MetricsHelper::getMemoryUsagePercent(),
                     cpu: MetricsHelper::getCpuAvgPercent(),

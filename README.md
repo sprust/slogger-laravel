@@ -170,9 +170,11 @@ Watcher data highlights:
 
 A queue worker fails a timed out job from its `SIGALRM` handler, i.e. in the middle of
 whatever the job was doing, and kills itself right after. Traces started by the job and
-still open at that moment are closed as `failed` with an `__interrupted` note in `data`,
-and a job that is retried instead of failed is closed by the `JobTimedOut` event — so a
-worker timeout never leaves traces hanging in the `started` status.
+still open at that moment are closed as `failed` and tagged `__interrupted`, keeping the
+data they had collected; a job that is retried instead of failed is closed by the
+`JobTimedOut` event. A trace can still be left in the `started` status when the signal
+arrives while a trace is being pushed to the dispatcher — tracing is paused there, so the
+timeout events are dropped — or when the worker is killed by a signal it does not handle.
 
 ## Requests
 
