@@ -8,40 +8,33 @@ use Illuminate\Support\Str;
 class MaskHelper
 {
     /**
+     * Masks every value whose dotted key contains one of the keys, case-insensitively.
+     *
      * @param array<int|string, mixed> $data
-     * @param array<int, string>       $patterns
+     * @param string[]                 $keys
+     * @param string[]                 $exceptedKeyPatterns wildcard masks of whole dotted keys
      *
      * @return array<int|string, mixed>
      */
-    public static function maskArrayByList(array $data, array $patterns): array
+    public static function maskArrayByKeys(array $data, array $keys, array $exceptedKeyPatterns = []): array
     {
-        foreach ($patterns as $key) {
-            $realKey = ArrayHelper::findKeyInsensitive($data, $key);
+        $needles = array_values(
+            array_filter(
+                array_map(
+                    static fn(string $key): string => Str::lower($key),
+                    $keys
+                )
+            )
+        );
 
-            if (!$realKey) {
-                continue;
-            }
-
-            $data[$realKey] = self::maskValue($data[$realKey]);
+        if (!$needles) {
+            return $data;
         }
 
-        return $data;
-    }
-
-    /**
-     * @param array<int|string, mixed> $data
-     * @param array<int|string, mixed> $patterns
-     *
-     * @return array<int|string, mixed>
-     */
-    public static function maskArrayByPatterns(array $data, array $patterns): array
-    {
         $result = [];
 
-        $data = Arr::dot($data);
-
-        foreach ($data as $key => $value) {
-            if (Str::is($patterns, $key)) {
+        foreach (Arr::dot($data) as $key => $value) {
+            if (self::keyContainsAny((string) $key, $needles, $exceptedKeyPatterns)) {
                 $value = self::maskValue($value);
             }
 
@@ -89,5 +82,26 @@ class MaskHelper
         }
 
         return $value;
+    }
+
+    /**
+     * @param string[] $needles
+     * @param string[] $exceptedKeyPatterns
+     */
+    private static function keyContainsAny(string $key, array $needles, array $exceptedKeyPatterns): bool
+    {
+        if ($exceptedKeyPatterns && Str::is($exceptedKeyPatterns, $key)) {
+            return false;
+        }
+
+        $lowerKey = Str::lower($key);
+
+        foreach ($needles as $needle) {
+            if (str_contains($lowerKey, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

@@ -3,6 +3,7 @@
 namespace SLoggerLaravel\Dispatcher\Items\Queue\Jobs;
 
 use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldBeEncrypted;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
@@ -12,11 +13,16 @@ use RuntimeException;
 use SLoggerLaravel\Configs\DispatcherQueueConfig;
 use SLoggerLaravel\Configs\GeneralConfig;
 use SLoggerLaravel\Dispatcher\ApiClients\ApiClientInterface;
+use SLoggerLaravel\Helpers\TraceDataMasker;
 use SLoggerLaravel\Objects\TracesObject;
 use SLoggerLaravel\Processor;
 use Throwable;
 
-class SendTracesJob implements ShouldQueue
+/**
+ * Encrypted on purpose: traces are masked by this job, right before they are sent,
+ * so the payload sits in the queue with whatever the watchers collected.
+ */
+class SendTracesJob implements ShouldQueue, ShouldBeEncrypted
 {
     use Dispatchable;
     use InteractsWithQueue;
@@ -70,10 +76,13 @@ class SendTracesJob implements ShouldQueue
     public function handle(
         Processor $processor,
         ApiClientInterface $apiClient,
-        GeneralConfig $config
+        GeneralConfig $config,
+        TraceDataMasker $masker
     ): void {
         try {
-            $traces = TracesObject::fromJson($this->tracesJson);
+            $traces = $masker->maskTraces(
+                TracesObject::fromJson($this->tracesJson)
+            );
 
             $processor->handleWithoutTracing(
                 fn() => $apiClient->sendTraces($traces)

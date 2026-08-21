@@ -67,6 +67,38 @@ return [
         ],
     ],
 
+    // global data masking. it is applied by the dispatcher job, right before a batch
+    // is sent - never in the traced application, which must not pay for masking a
+    // payload. an empty list turns masking off.
+    'masking' => [
+        // case-insensitive substrings of a trace data key.
+        'keys' => [
+            'token',
+            'pass',
+            'auth',
+            'email',
+            'phone',
+            '_name',
+            'lastname',
+            'firstname',
+            'surname',
+            'secret',
+            'private',
+            'apikey',
+            'api_key',
+            'api-key',
+            'credential',
+            'sign',
+            'cookie',
+        ],
+
+        // keys written by the package itself, matched against the whole dotted path
+        // (supports wildcard masks). they describe the trace, not the traced data.
+        'excepted_keys' => [
+            'connection_name',
+        ],
+    ],
+
     // exclude files from trace backtraces (supports wildcard masks).
     'data_completer' => [
         'excluded_file_masks' => [
@@ -122,23 +154,6 @@ return [
                     'hidden_paths' => [
                         '*',
                     ],
-
-                    // mask specific request headers by url pattern.
-                    'headers_masking' => [
-                        '*' => [
-                            'authorization',
-                            'cookie',
-                            'x-xsrf-token',
-                        ],
-                    ],
-
-                    // mask request parameters by url pattern.
-                    'parameters_masking' => [
-                        '*' => [
-                            '*token*',
-                            '*password*',
-                        ],
-                    ],
                 ],
 
                 'output' => [
@@ -150,21 +165,6 @@ return [
                     // hide all response data for these url patterns.
                     'hidden_paths' => [
                         '*',
-                    ],
-
-                    // mask specific response headers by url pattern.
-                    'headers_masking' => [
-                        '*' => [
-                            'set-cookie',
-                        ],
-                    ],
-
-                    // mask response fields by url pattern.
-                    'fields_masking' => [
-                        '*' => [
-                            '*token*',
-                            '*password*',
-                        ],
                     ],
                 ],
             ],
@@ -237,15 +237,6 @@ return [
         [
             'class'   => ModelWatcher::class,
             'enabled' => env('SLOGGER_LOG_MODEL_ENABLED', false),
-            'config'  => [
-                // model field masks by model class.
-                'masks' => [
-                    '*' => [
-                        '*token*',
-                        '*password*',
-                    ],
-                ],
-            ],
         ],
         [
             'class'   => NotificationWatcher::class,

@@ -9,6 +9,7 @@ use Illuminate\Events\Dispatcher;
 use SLoggerLaravel\Configs\DispatcherConfig;
 use SLoggerLaravel\Configs\DispatcherQueueConfig;
 use SLoggerLaravel\Configs\GeneralConfig;
+use SLoggerLaravel\Configs\MaskingConfig;
 use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\Dispatcher\ApiClients\ApiClientFactory;
 use SLoggerLaravel\Dispatcher\ApiClients\ApiClientInterface;
@@ -19,6 +20,7 @@ use SLoggerLaravel\Dispatcher\Items\TraceDispatcherInterface;
 use SLoggerLaravel\Dispatcher\StartDispatcherCommand;
 use SLoggerLaravel\Dispatcher\StopDispatcherCommand;
 use SLoggerLaravel\Helpers\TraceDataComplementer;
+use SLoggerLaravel\Helpers\TraceDataMasker;
 use SLoggerLaravel\Middleware\HttpMiddleware;
 use SLoggerLaravel\Profiling\AbstractProfiling;
 use SLoggerLaravel\Profiling\XHProfProfiler;
@@ -39,6 +41,8 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         }
 
         $this->app->singleton(TraceDataComplementer::class);
+        $this->app->singleton(MaskingConfig::class);
+        $this->app->singleton(TraceDataMasker::class);
     }
 
     /**

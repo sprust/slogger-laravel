@@ -217,15 +217,6 @@ For HTTP request tracing, add the middleware to the routes you want traced:
                     // 'auth/*',
                 ],
 
-                // header masking by url_pattern
-                'headers_masking' => [
-                    '*' => ['authorization', 'cookie', 'x-xsrf-token'],
-                ],
-
-                // param masking by url_pattern
-                'parameters_masking' => [
-                    '*' => ['*token*', '*password*'],
-                ],
             ],
 
             'output' => [
@@ -239,16 +230,6 @@ For HTTP request tracing, add the middleware to the routes you want traced:
                     // 'auth/*',
                 ],
 
-                // response header masking by url_pattern
-                'headers_masking' => [
-                    '*' => ['set-cookie'],
-                ],
-
-                // response field masking by url_pattern
-                'fields_masking' => [
-                    '*' => ['*token*', '*password*'],
-                ],
-
                 // limit json response size (bytes)
                 'max_content_length' => 1048576,
             ],
@@ -259,8 +240,8 @@ For HTTP request tracing, add the middleware to the routes you want traced:
 
 #### `only_paths`
 - `only_paths` (top-level): log only matched request paths.
-- `input.only_paths`: apply input masking only to matched paths (others are scrubbed).
-- `output.only_paths`: apply output masking only to matched paths (others are scrubbed).
+- `input.only_paths`: apply input formatting only to matched paths (others are scrubbed).
+- `output.only_paths`: apply output formatting only to matched paths (others are scrubbed).
 
 Patterns use Laravel `Str::is` matching.
 
@@ -274,7 +255,53 @@ Large JSON responses are skipped and marked with:
 
 ## Masking Rules
 
-Masking is pattern-based and configurable.
+Masking runs **in the dispatcher job**, right before a batch is sent, and never in the
+traced application. Building a trace costs the application only what it takes to
+collect and hand off the data; walking a payload key by key is paid for by the
+dispatcher workers instead. Two consequences follow:
+
+- `SendTracesJob` is **encrypted** (`ShouldBeEncrypted`), because the traces sit in the
+  queue with whatever the watchers collected. This needs `APP_KEY`, which a Laravel
+  application always has.
+- The `memory` dispatcher never masks - it has no job. It is a development and testing
+  aid and sends nothing anywhere.
+
+Watchers do not mask. What they do at runtime is hide and truncate: `only_paths`,
+`excepted_paths`, `hidden_paths`, `max_content_length`, per-watcher `excepted` lists.
+The one exception is the database watcher: query bindings are positional, so no key list
+can reach them, and it masks them where they are recorded.
+
+### The key list
+
+```php
+'masking' => [
+    // case-insensitive substrings of a key. an empty list turns masking off
+    'keys' => [
+        'token', 'pass', 'auth', 'email', 'phone', '_name', 'lastname',
+        'firstname', 'surname', 'secret', 'private', 'apikey', 'api_key',
+        'api-key', 'credential', 'sign', 'cookie',
+    ],
+
+    // keys written by the package itself, matched against the whole dotted path
+    'excepted_keys' => [
+        'connection_name',
+    ],
+],
+```
+
+A key matches when it *contains* one of the substrings, so `customer_email`, `API_KEY`
+and `lastName` are all masked. Matching runs over the whole dotted path, so a match on
+a parent key masks its subtree: `auth` masks `auth.method` too.
+
+`excepted_keys` are wildcard masks of the whole dotted path. They exist because the
+package writes keys of its own into trace data - `connection_name` contains `_name` but
+describes the trace, not the traced data.
+
+The list is deliberately blunt: it masks `sign` inside `assignee` and `auth` inside
+`author`. Over-masking is the safe direction for telemetry; trim the list if a field you
+need is caught by it.
+
+### Masked values
 
 Masked values keep basic types:
 - `bool` -> `false`
@@ -294,19 +321,17 @@ new \GuzzleHttp\Client([
         (new \SLoggerLaravel\RequestPreparer\RequestDataFormatters())
             ->add(
                 new \SLoggerLaravel\RequestPreparer\RequestDataFormatter(
-                    urlPatterns: ['*'],
-                    requestHeaders: ['authorization']
-                )
-            )
-            ->add(
-                new \SLoggerLaravel\RequestPreparer\RequestDataFormatter(
                     urlPatterns: ['/api/auth/*', '*sensitive/some/*'],
+                    hideAllRequestParameters: true,
                     hideAllResponseData: true
                 )
             )
     ),
 ])
 ```
+
+Formatters hide and truncate; sensitive values are masked later, by the
+dispatcher job.
 
 ## Dispatchers
 

@@ -455,39 +455,11 @@ class RequestWatcher implements WatcherInterface
             $formatterMap[$urlPattern]->setHideAllRequestParameters(true);
         }
 
-        $inputMaskHeadersMasking = $config['input']['headers_masking'] ?? [];
-
-        foreach ($inputMaskHeadersMasking as $urlPattern => $headers) {
-            $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
-            $formatterMap[$urlPattern]->addRequestHeaders($headers);
-        }
-
-        $inputParametersMasking = $config['input']['parameters_masking'] ?? [];
-
-        foreach ($inputParametersMasking as $urlPattern => $parameters) {
-            $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
-            $formatterMap[$urlPattern]->addRequestParameters($parameters);
-        }
-
         $outputFullHiding = $config['output']['hidden_paths'] ?? [];
 
         foreach ($outputFullHiding as $urlPattern) {
             $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
             $formatterMap[$urlPattern]->setHideAllResponseData(true);
-        }
-
-        $outputHeadersMasking = $config['output']['headers_masking'] ?? [];
-
-        foreach ($outputHeadersMasking as $urlPattern => $headers) {
-            $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
-            $formatterMap[$urlPattern]->addResponseHeaders($headers);
-        }
-
-        $outputFieldsMasking = $config['output']['fields_masking'] ?? [];
-
-        foreach ($outputFieldsMasking as $urlPattern => $fields) {
-            $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
-            $formatterMap[$urlPattern]->addResponseFields($fields);
         }
 
         $this->maxResponseBytes = (int) ($config['output']['max_content_length'] ?? $this->maxResponseBytes);

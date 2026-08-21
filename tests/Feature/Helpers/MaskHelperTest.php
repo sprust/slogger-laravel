@@ -9,38 +9,6 @@ use SLoggerLaravel\Tests\Feature\BaseTestCase;
 
 class MaskHelperTest extends BaseTestCase
 {
-    public function testMaskArrayByListIsCaseInsensitive(): void
-    {
-        $data = [
-            'Authorization' => 'Bearer token',
-            'X-Request-Id'  => 'id-123',
-        ];
-
-        $masked = MaskHelper::maskArrayByList($data, ['authorization']);
-
-        self::assertNotSame('Bearer token', $masked['Authorization']);
-        self::assertSame('id-123', $masked['X-Request-Id']);
-    }
-
-    public function testMaskArrayByPatternsMasksNestedKeys(): void
-    {
-        $data = [
-            'user' => [
-                'token'   => 'secret-token',
-                'profile' => [
-                    'password' => 'secret-pass',
-                ],
-            ],
-            'safe' => 'ok',
-        ];
-
-        $masked = MaskHelper::maskArrayByPatterns($data, ['*.token', '*.password']);
-
-        self::assertNotSame('secret-token', $masked['user']['token']);
-        self::assertNotSame('secret-pass', $masked['user']['profile']['password']);
-        self::assertSame('ok', $masked['safe']);
-    }
-
     public function testMaskValueKeepsFalsyValues(): void
     {
         self::assertNull(MaskHelper::maskValue(null));
@@ -78,5 +46,81 @@ class MaskHelperTest extends BaseTestCase
         self::assertSame('a*', MaskHelper::maskValue('ab'));
         self::assertSame('a*c', MaskHelper::maskValue('abc'));
         self::assertSame('ab**ef', MaskHelper::maskValue('abcdef'));
+    }
+
+    public function testMaskArrayByKeysMatchesKeySubstringsCaseInsensitively(): void
+    {
+        $data = [
+            'API_KEY'  => 'key-1',
+            'user'     => [
+                'lastName'  => 'Ivanov',
+                'phone'     => '+70000000000',
+                'is_active' => true,
+            ],
+            'file_size' => 100,
+        ];
+
+        $masked = MaskHelper::maskArrayByKeys($data, ['api_key', 'lastname', 'phone']);
+
+        self::assertNotSame('key-1', $masked['API_KEY']);
+        self::assertNotSame('Ivanov', $masked['user']['lastName']);
+        self::assertNotSame('+70000000000', $masked['user']['phone']);
+
+        // untouched: nothing in their keys matches
+        self::assertTrue($masked['user']['is_active']);
+        self::assertSame(100, $masked['file_size']);
+    }
+
+    public function testMaskArrayByKeysMatchesAnySegmentOfTheDottedKey(): void
+    {
+        $data = [
+            'job' => [
+                'data' => [
+                    'customer_email' => 'a@b.test',
+                ],
+            ],
+            'auth' => [
+                'method'  => 'oauth',
+                'expires' => 100,
+            ],
+        ];
+
+        $masked = MaskHelper::maskArrayByKeys($data, ['email', 'auth']);
+
+        self::assertNotSame('a@b.test', $masked['job']['data']['customer_email']);
+
+        // the whole subtree of a matching key is masked
+        self::assertNotSame('oauth', $masked['auth']['method']);
+        self::assertNotSame(100, $masked['auth']['expires']);
+    }
+
+    public function testMaskArrayByKeysSkipsExceptedKeys(): void
+    {
+        $data = [
+            'connection_name' => 'redis',
+            'job'             => [
+                'data' => [
+                    'file_name' => 'document.pdf',
+                ],
+            ],
+        ];
+
+        $masked = MaskHelper::maskArrayByKeys(
+            data: $data,
+            keys: ['_name'],
+            exceptedKeyPatterns: ['connection_name']
+        );
+
+        // the package's own key describes the trace, not the traced data
+        self::assertSame('redis', $masked['connection_name']);
+
+        self::assertNotSame('document.pdf', $masked['job']['data']['file_name']);
+    }
+
+    public function testMaskArrayByKeysWithoutKeysKeepsDataIntact(): void
+    {
+        $data = ['token' => 'keep-me'];
+
+        self::assertSame($data, MaskHelper::maskArrayByKeys($data, []));
     }
 }

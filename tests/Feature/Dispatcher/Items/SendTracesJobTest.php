@@ -9,7 +9,10 @@ use Illuminate\Support\Facades\Log;
 use Psr\Log\NullLogger;
 use ReflectionClass;
 use RuntimeException;
+use Illuminate\Contracts\Queue\ShouldBeEncrypted;
 use SLoggerLaravel\Configs\GeneralConfig;
+use SLoggerLaravel\Configs\MaskingConfig;
+use SLoggerLaravel\Helpers\TraceDataMasker;
 use SLoggerLaravel\Dispatcher\ApiClients\ApiClientInterface;
 use SLoggerLaravel\Dispatcher\Items\Queue\Jobs\SendTracesJob;
 use SLoggerLaravel\Objects\TraceCreateObject;
@@ -37,6 +40,16 @@ class SendTracesJobTest extends BaseTestCase
         self::assertSame(count($job->backoff) + 1, $job->tries);
     }
 
+    public function testTheBatchIsEncryptedInTheQueue(): void
+    {
+        // traces reach the queue unmasked - masking happens in handle(), on the way
+        // out - so the payload must not sit there readable
+        self::assertInstanceOf(
+            ShouldBeEncrypted::class,
+            new SendTracesJob($this->makeTraces())
+        );
+    }
+
     public function testBackoffAcceptsIntAssignedByQueueDriver(): void
     {
         // some queue drivers (e.g. laravel-queue-rabbitmq) assign a computed int
@@ -62,7 +75,7 @@ class SendTracesJobTest extends BaseTestCase
         $apiClient->expects(self::once())
             ->method('sendTraces');
 
-        $job->handle($processor, $apiClient, new GeneralConfig());
+        $job->handle($processor, $apiClient, new GeneralConfig(), $this->makeMasker());
     }
 
     /**
@@ -79,7 +92,7 @@ class SendTracesJobTest extends BaseTestCase
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('fail');
 
-        $job->handle($processor, $apiClient, new GeneralConfig());
+        $job->handle($processor, $apiClient, new GeneralConfig(), $this->makeMasker());
     }
 
     /**
@@ -96,7 +109,7 @@ class SendTracesJobTest extends BaseTestCase
         $exception = null;
 
         try {
-            $job->handle($this->makeProcessor(), $this->makeFailingApiClient(), new GeneralConfig());
+            $job->handle($this->makeProcessor(), $this->makeFailingApiClient(), new GeneralConfig(), $this->makeMasker());
         } catch (Throwable $exception) {
             // keep for assertions below
         }
@@ -122,7 +135,7 @@ class SendTracesJobTest extends BaseTestCase
             ->once()
             ->andReturn(new NullLogger());
 
-        $job->handle($this->makeProcessor(), $this->makeFailingApiClient(), new GeneralConfig());
+        $job->handle($this->makeProcessor(), $this->makeFailingApiClient(), new GeneralConfig(), $this->makeMasker());
 
         self::assertSame(0, $queueJob->releaseCount);
         self::assertSame(1, $queueJob->deleteCount);
@@ -143,7 +156,7 @@ class SendTracesJobTest extends BaseTestCase
 
             $this->setQueueJob($job, $this->makeQueueJob(attempts: $job->tries));
 
-            $job->handle($this->makeProcessor(), $this->makeFailingApiClient(), new GeneralConfig());
+            $job->handle($this->makeProcessor(), $this->makeFailingApiClient(), new GeneralConfig(), $this->makeMasker());
         }
     }
 
@@ -213,5 +226,10 @@ class SendTracesJobTest extends BaseTestCase
         $property   = $reflection->getProperty('job');
         $property->setAccessible(true);
         $property->setValue($job, $queueJob);
+    }
+
+    private function makeMasker(): TraceDataMasker
+    {
+        return new TraceDataMasker(new MaskingConfig());
     }
 }
