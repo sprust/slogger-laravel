@@ -1,0 +1,150 @@
+name: Tests & Release
+
+on:
+  # Every non-draft PR into master runs the test matrix. No `paths` filter here: a PR is
+  # cheap to over-test and the matrix is the branch protection signal.
+  pull_request:
+    branches:
+      - master
+    types: [ opened, synchronize, reopened, ready_for_review ]
+
+  # Pushes and merges into master run the same matrix and then release if the version
+  # changed. Test & release only when something that affects the checks or the resolved
+  # version actually changes. A push touching none of these paths (e.g. docs-only) skips
+  # the whole workflow. Keep this list in sync with new inputs — an omitted path means no
+  # release on a real change.
+  push:
+    branches:
+      - master
+    paths:
+      - '**.php'                        # src, tests, config, workbench, php-cs-fixer.dist.php
+      - 'composer.json'                 # also the version source (see "Resolve release version")
+      - 'composer.lock'
+      - 'phpunit.xml'
+      - 'phpstan.neon'
+      - 'testbench.yaml'
+      - 'makefile'
+      - 'docker/**'
+      - 'docker-compose.yml'
+      - '.env.example'
+      - '.github/workflows/release.yml'
+
+concurrency:
+  # PR runs supersede each other (a new push to the branch makes the previous matrix
+  # pointless); master runs never cancel, so a release is never interrupted half-way.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Draft PRs are skipped; marking one ready fires `ready_for_review` and runs them.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+
+    strategy:
+      fail-fast: false
+      matrix:
+        laravel: [ "^10.0", "^11.0", "^12.0" ]
+        php: [ "8.2", "8.3", "8.4" ]
+
+    name: PHP ${{ matrix.php }} - Laravel ${{ matrix.laravel }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          tools: composer:v2
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.composer/cache
+            vendor
+          key: ${{ runner.os }}-php-${{ matrix.php }}-laravel-${{ matrix.laravel }}-${{ hashFiles('**/composer.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-php-${{ matrix.php }}-laravel-${{ matrix.laravel }}-
+
+      - run: composer require "laravel/framework:${{ matrix.laravel }}" --no-update
+      - run: composer update --with-all-dependencies --prefer-dist --no-interaction
+      - run: vendor/bin/phpstan analyse
+      - run: vendor/bin/phpunit
+
+  release:
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # Releases happen on master only — a PR run stops after the matrix.
+    if: github.event_name == 'push'
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Full history + all tags: needed to detect an already-released version and to
+          # resolve the previous version tag for strict version-to-version release notes.
+          fetch-depth: 0
+
+      - name: Resolve release version
+        id: version
+        run: |
+          version=$(jq -r '.version // empty' composer.json)
+
+          if [ -z "$version" ]; then
+            echo "::error::composer.json has no \"version\" field; it is the release version source."
+            exit 1
+          fi
+
+          echo "composer.json version: $version"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Create versioned release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ steps.version.outputs.tag }}"
+
+          # Published version tags are immutable: moving a tag that Packagist (and
+          # consumers) already resolved changes a released version's source reference,
+          # which Packagist blocks. If the tag already exists on origin, this version was
+          # already released — skip. This is also how "did the version change?" is
+          # answered: bumping "version" in composer.json produces an unreleased tag on the
+          # next push, and every other push resolves to a tag that already exists. Checking
+          # the tag rather than the composer.json diff keeps re-runs, merge commits and
+          # reverts from re-releasing or skipping a real bump.
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "::notice::$tag already released; skipping. Bump \"version\" in composer.json to release again."
+            exit 0
+          fi
+
+          # Previous version tag = the highest v* tag strictly below the current one, so
+          # the notes cover strictly the previous version → this version. Empty on the
+          # very first versioned release, where we let --generate-notes fall back to its
+          # automatic base. (bkp/latest and other non-v tags are ignored.)
+          previous_tag=$( { git tag -l 'v*'; echo "$tag"; } | sort -V -u \
+            | awk -v current="$tag" '$0 == current { print previous; exit } { previous = $0 }' )
+
+          notes_args=(--generate-notes)
+
+          if [ -n "$previous_tag" ]; then
+            echo "Generating notes from $previous_tag to $tag."
+            notes_args+=(--notes-start-tag "$previous_tag")
+          else
+            echo "No previous version tag found; using automatic notes base."
+          fi
+
+          # Create the release once, tagging the current commit. The tag is never moved
+          # afterwards (see the immutability guard above). --latest marks it as the GitHub
+          # "Latest" release (what /releases/latest resolves to). --generate-notes
+          # auto-builds the changelog from PRs/commits between previous_tag and this release.
+          gh release create "$tag" \
+            --target "$GITHUB_SHA" \
+            --title "$tag" \
+            "${notes_args[@]}" \
+            --latest
