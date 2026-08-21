@@ -363,4 +363,48 @@ class ProcessorTest extends BaseTestCase
 
         self::assertFalse($processor->isActive());
     }
+
+    public function testDetachedTracesWithoutAnOwnerAreClosedWhenWorkEnds(): void
+    {
+        $processor  = $this->getApp()->make(Processor::class);
+        $dispatcher = $this->getApp()->make(MemoryDispatcher::class);
+
+        $dispatcher->flush();
+
+        // started before anything else: there is no parent trace to own it, so nothing
+        // else can ever reach it
+        $orphanTraceId = $processor->startAndGetDetachedTraceId(
+            type: 'http-client',
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now()
+        );
+
+        $parentTraceId = $processor->startAndGetTraceId(
+            type: 'job',
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now(),
+            customParentTraceId: null
+        );
+
+        $processor->stop(
+            traceId: $parentTraceId,
+            status: TraceStatusEnum::Success->value,
+            tags: null,
+            data: null,
+            duration: null,
+            parentLoggedAt: Carbon::now()
+        );
+
+        self::assertCount(
+            1,
+            $dispatcher->findUpdating(
+                traceId: $orphanTraceId,
+                status: TraceStatusEnum::Failed
+            )
+        );
+
+        self::assertFalse($processor->isActive());
+    }
 }

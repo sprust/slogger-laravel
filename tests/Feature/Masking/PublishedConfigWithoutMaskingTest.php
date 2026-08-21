@@ -15,7 +15,49 @@ use SLoggerLaravel\Tests\Feature\BaseTestCase;
  */
 class PublishedConfigWithoutMaskingTest extends BaseTestCase
 {
-    public function test(): void
+    public function testTheDefaultsSurviveAMissingSection(): void
+    {
+        $this->forgetMaskingSection();
+
+        // the code-level fallback, which holds even while the config cache is stale:
+        // `mergeConfigFrom` is a no-op for a cached configuration
+        $config = new MaskingConfig();
+
+        self::assertSame(MaskingConfig::DEFAULT_KEYS, $config->getKeys());
+        self::assertSame(MaskingConfig::DEFAULT_EXCEPTED_KEYS, $config->getExceptedKeys());
+    }
+
+    public function testRegisterMergesTheSectionBack(): void
+    {
+        $this->forgetMaskingSection();
+
+        self::assertNull(config('slogger.masking'));
+
+        (new ServiceProvider($this->getApp()))->register();
+
+        self::assertSame(MaskingConfig::DEFAULT_KEYS, config('slogger.masking.keys'));
+    }
+
+    public function testTheShippedConfigMatchesTheDefaults(): void
+    {
+        // the published file is what a user edits, the constants are the fallback;
+        // they must not drift apart
+        self::assertSame(MaskingConfig::DEFAULT_KEYS, config('slogger.masking.keys'));
+
+        self::assertSame(
+            MaskingConfig::DEFAULT_EXCEPTED_KEYS,
+            config('slogger.masking.excepted_keys')
+        );
+    }
+
+    public function testAnExplicitEmptyListStillTurnsMaskingOff(): void
+    {
+        $this->getApp()['config']->set('slogger.masking.keys', []);
+
+        self::assertSame([], (new MaskingConfig())->getKeys());
+    }
+
+    private function forgetMaskingSection(): void
     {
         $app = $this->getApp();
 
@@ -23,14 +65,5 @@ class PublishedConfigWithoutMaskingTest extends BaseTestCase
             'slogger',
             Arr::except($app['config']->get('slogger'), ['masking'])
         );
-
-        self::assertSame([], (new MaskingConfig())->getKeys());
-
-        (new ServiceProvider($app))->register();
-
-        $config = new MaskingConfig();
-
-        self::assertContains('token', $config->getKeys());
-        self::assertContains('connection_name', $config->getExceptedKeys());
     }
 }

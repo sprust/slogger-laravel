@@ -123,4 +123,56 @@ class MaskHelperTest extends BaseTestCase
 
         self::assertSame($data, MaskHelper::maskArrayByKeys($data, []));
     }
+
+    public function testMaskArrayByKeysKeepsKeysThatContainDots(): void
+    {
+        $data = [
+            'response' => [
+                'body' => [
+                    'user.city'  => 'Berlin',
+                    'user.email' => 'a@b.test',
+                ],
+            ],
+        ];
+
+        $masked = MaskHelper::maskArrayByKeys($data, ['email']);
+
+        // flattening and rebuilding would turn `user.city` into a nested array
+        self::assertSame('Berlin', $masked['response']['body']['user.city'] ?? null);
+
+        self::assertArrayHasKey('user.email', $masked['response']['body']);
+        self::assertNotSame('a@b.test', $masked['response']['body']['user.email']);
+    }
+
+    public function testMaskArrayByKeysKeepsASiblingCollidingWithADottedKey(): void
+    {
+        $data = [
+            'a'   => 'scalar',
+            'a.b' => 'other',
+        ];
+
+        // neither key may swallow the other
+        self::assertSame($data, MaskHelper::maskArrayByKeys($data, ['token']));
+    }
+
+    public function testMaskArrayByKeysMasksListsElementWise(): void
+    {
+        $masked = MaskHelper::maskArrayByKeys(
+            ['phones' => ['+70000000001', '+70000000002']],
+            ['phone']
+        );
+
+        self::assertCount(2, $masked['phones']);
+
+        foreach ($masked['phones'] as $phone) {
+            self::assertIsString($phone);
+            self::assertStringContainsString('*', $phone);
+        }
+    }
+
+    public function testMaskValueMasksASingleMultibyteCharacter(): void
+    {
+        // strlen() counts bytes, so a two-byte character used to slip through unmasked
+        self::assertSame('*', MaskHelper::maskValue('é'));
+    }
 }

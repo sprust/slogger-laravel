@@ -2,7 +2,6 @@
 
 namespace SLoggerLaravel\Helpers;
 
-use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
 
 class MaskHelper
@@ -31,17 +30,13 @@ class MaskHelper
             return $data;
         }
 
-        $result = [];
-
-        foreach (Arr::dot($data) as $key => $value) {
-            if (self::keyContainsAny((string) $key, $needles, $exceptedKeyPatterns)) {
-                $value = self::maskValue($value);
-            }
-
-            Arr::set($result, $key, $value);
-        }
-
-        return $result;
+        return self::maskNode(
+            data: $data,
+            prefix: '',
+            needles: $needles,
+            exceptedKeyPatterns: $exceptedKeyPatterns,
+            masked: false
+        );
     }
 
     public static function maskValue(mixed $value): mixed
@@ -68,7 +63,7 @@ class MaskHelper
 
         if (!is_string($value)) {
             $value = '********';
-        } elseif (strlen($value) === 1) {
+        } elseif (Str::length($value) === 1) {
             $value = '*';
         } else {
             $batchLength = (int) ceil(Str::length($value) / 3);
@@ -82,6 +77,52 @@ class MaskHelper
         }
 
         return $value;
+    }
+
+    /**
+     * Walks the data instead of flattening it: a key that itself contains a dot would
+     * not survive an Arr::dot()/Arr::set() round trip, and third-party payloads do
+     * contain them.
+     *
+     * @param array<int|string, mixed> $data
+     * @param string[]                 $needles
+     * @param string[]                 $exceptedKeyPatterns
+     * @param bool                     $masked              whether an ancestor key already matched
+     *
+     * @return array<int|string, mixed>
+     */
+    private static function maskNode(
+        array $data,
+        string $prefix,
+        array $needles,
+        array $exceptedKeyPatterns,
+        bool $masked
+    ): array {
+        $result = [];
+
+        foreach ($data as $key => $value) {
+            $path = $prefix === '' ? (string) $key : $prefix . '.' . $key;
+
+            $maskThis = $masked || self::keyContainsAny($path, $needles, $exceptedKeyPatterns);
+
+            if (is_array($value)) {
+                $result[$key] = $value === []
+                    ? $value
+                    : self::maskNode(
+                        data: $value,
+                        prefix: $path,
+                        needles: $needles,
+                        exceptedKeyPatterns: $exceptedKeyPatterns,
+                        masked: $maskThis
+                    );
+
+                continue;
+            }
+
+            $result[$key] = $maskThis ? self::maskValue($value) : $value;
+        }
+
+        return $result;
     }
 
     /**

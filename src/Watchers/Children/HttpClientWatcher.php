@@ -325,6 +325,13 @@ class HttpClientWatcher implements WatcherInterface
             ];
         }
 
+        if (!$body->isSeekable()) {
+            // reading it would consume the body the application is about to read
+            return [
+                '__skipped' => 'non_seekable_body',
+            ];
+        }
+
         $body->rewind();
 
         $url = $this->getRequestPath($request);

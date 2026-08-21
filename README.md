@@ -12,10 +12,19 @@ Masking moved out of the traced application and into the dispatcher job.
 
 - **Per-watcher masking is gone.** `input.headers_masking`, `input.parameters_masking`,
   `output.headers_masking`, `output.fields_masking` and the model watcher's `masks` are
-  no longer read. Leftovers in a published config are ignored, not an error.
+  no longer read. Leftovers in a published config are ignored, not an error - which
+  means any key you added there stops being masked. **Port your own keys into
+  `masking.keys`**; the shipped defaults cover only what the shipped defaults covered
+  before (`authorization`, `cookie`, `x-xsrf-token`, `set-cookie`, `*token*`,
+  `*password*`), not `ssn`, `iban`, `card` or anything else you added yourself.
 - **One global list instead**, under `masking.keys`. A published config is merged with
   the package's own now, so the defaults apply without republishing; add the section to
-  your config only to change it.
+  your config only to change it. The defaults are also compiled into
+  `MaskingConfig::DEFAULT_KEYS`, so a stale config cache cannot leave you with no
+  masking at all.
+- **Restart the slogger workers together with the application.** Masking happens in the
+  worker now, so a worker still running 1.2.x drains a 1.3 queue and ships those batches
+  unmasked. Deploy the workers first, or drain the slogger queue across the switch.
 - **`APP_KEY` is required.** Traces reach the queue unmasked, so `SendTracesJob` is
   encrypted. Without a key the job cannot be dispatched: the application keeps working,
   but telemetry stops and says so in the slogger log channel.

@@ -367,6 +367,10 @@ class Processor
         );
 
         if (count($this->tracesStack) == 0) {
+            // detached traces started outside any parent have no owner to sweep them,
+            // so the end of a unit of work is the last chance to close them
+            $this->stopInterruptedDetached(ownerTraceId: null);
+
             $this->traceIdContainer->setParentTraceId(null);
         }
 
@@ -541,9 +545,10 @@ class Processor
     }
 
     /**
-     * Closes the detached traces the stopping one had started and never closed.
+     * Closes the detached traces the stopping one had started and never closed. A null
+     * owner closes the ownerless ones, which nothing else can reach.
      */
-    private function stopInterruptedDetached(string $ownerTraceId): void
+    private function stopInterruptedDetached(?string $ownerTraceId): void
     {
         foreach ($this->detachedTraces as $traceId => $detachedTrace) {
             if ($detachedTrace['owner_trace_id'] !== $ownerTraceId) {
