@@ -19,7 +19,9 @@ Masking moved out of the traced application and into the dispatcher job.
 - **`APP_KEY` is required.** Traces reach the queue unmasked, so `SendTracesJob` is
   encrypted. Without a key the job cannot be dispatched: the application keeps working,
   but telemetry stops and says so in the slogger log channel.
-- **Laravel 10.12** is the new floor (`JobTimedOut` landed there).
+- **Laravel 10.17** is the new floor. `src/` needs 10.12 (`JobTimedOut` landed there),
+  but 10.17 is the oldest release the test suite can actually be installed against, and
+  an untested floor is not a supported one.
 - API changes if you build formatters yourself: `RequestDataFormatter` lost its
   `requestHeaders`, `requestParameters`, `responseHeaders` and `responseFields`
   arguments along with the matching `add*()` methods, and
@@ -28,7 +30,7 @@ Masking moved out of the traced application and into the dispatcher job.
 ## Requirements
 
 - PHP >= 8.2
-- Laravel 10.12+ (tested on 10, 11 and 12)
+- Laravel 10.17+ (tested on 10, 11 and 12)
 - Queue driver for `queue` dispatcher
 - Optional: XHProf extension for profiling
 

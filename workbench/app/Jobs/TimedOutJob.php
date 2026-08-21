@@ -56,7 +56,8 @@ class TimedOutJob implements ShouldQueue
                 new JobFailed(
                     connectionName: $job->getConnectionName(),
                     job: $job,
-                    exception: TimeoutExceededException::forJob($job)
+                    // not TimeoutExceededException::forJob(): it only exists from 10.30
+                    exception: new TimeoutExceededException($job->resolveName() . ' has timed out.')
                 )
             );
         }
