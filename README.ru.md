@@ -157,7 +157,7 @@ SLOGGER_LOG_SCHEDULE_ENABLED=true
 
 Основные данные вотчеров:
 - `request`: url, метод, action, заголовки/параметры, ответ (для JSON-ответов)
-- `job`: коннекшен, payload, статус, исключение
+- `job`: коннекшен, payload, статус (`processed`, `failed`, `released_after_exception`, `timed_out`), исключение
 - `event`: слушатели, broadcast, опционально сериализованный payload
 - `model`: действие, класс модели, ключ, изменения
 - `mail`: from/to/cc/bcc, тема, queued, mailable/notification
@@ -167,6 +167,12 @@ SLOGGER_LOG_SCHEDULE_ENABLED=true
 - `http-client`: метод, url, запрос/ответ
 - `schedule`: команда, описание, cron, вывод
 - `dump`, `log`, `gate`: информация о dump/сообщении/ability
+
+Воркер очереди завершает job по таймауту из обработчика `SIGALRM`, то есть посреди работы
+job, и сразу после этого убивает себя. Трейсы, открытые внутри job и ещё не закрытые к
+этому моменту, закрываются со статусом `failed` и пометкой `__interrupted` в `data`, а
+job, отправленный на повтор вместо `failed`, закрывается по событию `JobTimedOut` — так
+таймаут воркера больше не оставляет трейсы висеть в статусе `started`.
 
 ## Запросы
 

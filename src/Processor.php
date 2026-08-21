@@ -27,9 +27,11 @@ class Processor
     private bool $started = false;
 
     /**
-     * @var array<string|null>
+     * Currently started parent traces, from the outermost to the innermost one.
+     *
+     * @var list<array{trace_id: string, pre_parent_trace_id: string|null, logged_at: Carbon}>
      */
-    private array $preParentIdsStack = [];
+    private array $tracesStack = [];
 
     private bool $paused = false;
 
@@ -222,7 +224,11 @@ class Processor
             )
         );
 
-        $this->preParentIdsStack[] = $parentTraceId;
+        $this->tracesStack[] = [
+            'trace_id'            => $traceId,
+            'pre_parent_trace_id' => $parentTraceId,
+            'logged_at'           => $loggedAt->clone(),
+        ];
 
         $this->traceIdContainer->setParentTraceId($traceId);
 
@@ -289,25 +295,30 @@ class Processor
         ?float $duration,
         Carbon $parentLoggedAt,
     ): void {
-        if (!$this->isActive()) {
-            throw new LogicException('Tracing process isn\'t active.');
+        $index = $this->findStackIndex($traceId);
+
+        if (is_null($index)) {
+            // the trace has already been stopped: a worker can report the same job
+            // twice - the timeout signal handler fails a job that has just been
+            // processed, so both JobProcessed and JobFailed ask to stop it
+            return;
         }
 
-        $currentParentTraceId = $this->traceIdContainer->getParentTraceId();
+        // the trace may be stopped while nested ones are still open: the queue worker
+        // fails a job from the SIGALRM handler, i.e. in the middle of whatever the job
+        // was doing. Close the interrupted children, otherwise they would hang
+        // in the "started" status forever
+        $this->stopInterruptedNested(parentIndex: $index, parentTraceId: $traceId);
 
-        if ($traceId !== $currentParentTraceId) {
-            throw new LogicException(
-                "Current parent trace id [$currentParentTraceId] isn't same that stopping [$traceId]."
-            );
-        }
+        $stackItem = $this->tracesStack[$index];
 
-        $preParentTraceId = array_pop($this->preParentIdsStack);
+        array_pop($this->tracesStack);
 
         $this->traceIdContainer->setParentTraceId(
-            parentTraceId: $preParentTraceId
+            parentTraceId: $stackItem['pre_parent_trace_id']
         );
 
-        if (count($this->preParentIdsStack) == 0) {
+        if (count($this->tracesStack) == 0) {
             $this->started = false;
 
             $this->traceIdContainer->setParentTraceId(null);
@@ -330,6 +341,48 @@ class Processor
                 parentLoggedAt: $parentLoggedAt,
             )
         );
+    }
+
+    private function findStackIndex(string $traceId): ?int
+    {
+        for ($index = count($this->tracesStack) - 1; $index >= 0; $index--) {
+            if ($this->tracesStack[$index]['trace_id'] === $traceId) {
+                return $index;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Closes the traces started above the stopping one as failed.
+     */
+    private function stopInterruptedNested(int $parentIndex, string $parentTraceId): void
+    {
+        $interrupted = array_slice($this->tracesStack, $parentIndex + 1);
+
+        $this->tracesStack = array_slice($this->tracesStack, 0, $parentIndex + 1);
+
+        foreach (array_reverse($interrupted) as $stackItem) {
+            $loggedAt = $stackItem['logged_at'];
+
+            $this->dispatchUpdateTrace(
+                new TraceUpdateObject(
+                    traceId: $stackItem['trace_id'],
+                    status: TraceStatusEnum::Failed->value,
+                    profiling: null,
+                    tags: null,
+                    data: [
+                        '__interrupted' => "Parent trace [$parentTraceId] has been stopped"
+                            . ' while this trace was still active.',
+                    ],
+                    duration: TraceHelper::calcDuration($loggedAt),
+                    memory: MetricsHelper::getMemoryUsagePercent(),
+                    cpu: MetricsHelper::getCpuAvgPercent(),
+                    parentLoggedAt: $loggedAt,
+                )
+            );
+        }
     }
 
     private function dispatchPushTrace(TraceCreateObject $trace): void

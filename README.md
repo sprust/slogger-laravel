@@ -157,7 +157,7 @@ Each trace contains:
 
 Watcher data highlights:
 - `request`: url, method, action, headers/params, response (for JSON responses)
-- `job`: connection, payload, status, exception
+- `job`: connection, payload, status (`processed`, `failed`, `released_after_exception`, `timed_out`), exception
 - `event`: listeners, broadcast, optional serialized payload
 - `model`: action, model class, key, changes
 - `mail`: from/to/cc/bcc, subject, queued, mailable/notification
@@ -167,6 +167,12 @@ Watcher data highlights:
 - `http-client`: method, url, request/response
 - `schedule`: command, description, cron, output
 - `dump`, `log`, `gate`: dump/message/ability info
+
+A queue worker fails a timed out job from its `SIGALRM` handler, i.e. in the middle of
+whatever the job was doing, and kills itself right after. Traces started by the job and
+still open at that moment are closed as `failed` with an `__interrupted` note in `data`,
+and a job that is retried instead of failed is closed by the `JobTimedOut` event — so a
+worker timeout never leaves traces hanging in the `started` status.
 
 ## Requests
 
