@@ -6,8 +6,6 @@ use Illuminate\Config\Repository;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Events\Dispatcher;
-use Illuminate\Support\Arr;
-use Illuminate\Support\Facades\Log;
 use SLoggerLaravel\Configs\DispatcherConfig;
 use SLoggerLaravel\Configs\DispatcherQueueConfig;
 use SLoggerLaravel\Configs\GeneralConfig;
@@ -17,7 +15,6 @@ use SLoggerLaravel\Dispatcher\ApiClients\ApiClientFactory;
 use SLoggerLaravel\Dispatcher\ApiClients\ApiClientInterface;
 use SLoggerLaravel\Dispatcher\Items\DispatcherFactory;
 use SLoggerLaravel\Dispatcher\Items\Memory\MemoryDispatcher;
-use SLoggerLaravel\Dispatcher\Items\Queue\Jobs\SendTracesJob;
 use SLoggerLaravel\Dispatcher\Items\Queue\QueueDispatcher;
 use SLoggerLaravel\Dispatcher\Items\TraceDispatcherInterface;
 use SLoggerLaravel\Dispatcher\StartDispatcherCommand;
@@ -31,35 +28,15 @@ use SLoggerLaravel\Traces\ProcessTraceScopeResolver;
 use SLoggerLaravel\Traces\TraceScopeResolverInterface;
 use SLoggerLaravel\Traces\TraceIdContainer;
 use SLoggerLaravel\Watchers\Children\HttpClientWatcher;
-use SLoggerLaravel\Watchers\Children\ModelWatcher;
-use SLoggerLaravel\Watchers\Parents\RequestWatcher;
-use Throwable;
 use SLoggerLaravel\Watchers\WatcherInterface;
 
 class ServiceProvider extends \Illuminate\Support\ServiceProvider
 {
-    private static bool $retiredMaskingConfigReported = false;
-
-    /**
-     * The warning is said once per process; a test that boots the provider more than
-     * once needs to be able to hear it again.
-     *
-     * @see SendTracesJob::resetDropStats()
-     */
-    public static function resetRetiredMaskingConfigReport(): void
-    {
-        self::$retiredMaskingConfigReported = false;
-    }
-
     /**
      * @throws BindingResolutionException
      */
     public function register(): void
     {
-        // a published config replaces this package's own, so without the merge an
-        // application that published one before a key existed silently runs without it
-        $this->mergeConfigFrom(__DIR__ . '/../config/slogger.php', 'slogger');
-
         $this->app->singleton(GeneralConfig::class);
 
         if (!$this->app->make(GeneralConfig::class)->isEnabled()) {
@@ -129,8 +106,6 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
             return;
         }
 
-        $this->warnAboutRetiredMaskingConfig();
-
         $this->registerListeners();
         $this->registerWatchers();
 
@@ -142,76 +117,6 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
                 'slogger-laravel',
             ]
         );
-    }
-
-    /**
-     * A config published before 1.3 still carries the per-watcher masking sections,
-     * which are no longer read. Anything the application added to them - `*ssn*`,
-     * `*iban*`, a model's own `masks` - silently stopped being masked the moment it
-     * upgraded. Say so once, out loud: this is a security regression triggered by a
-     * routine `composer update`, and a README is not where anyone will look for it.
-     *
-     * @throws BindingResolutionException
-     */
-    private function warnAboutRetiredMaskingConfig(): void
-    {
-        // once per process: this is a "go and fix your config" message, and repeating
-        // it for every request, job and command turns it into noise nobody reads
-        if (self::$retiredMaskingConfigReported) {
-            return;
-        }
-
-        self::$retiredMaskingConfigReported = true;
-
-        // these live inside the watcher's own entry in `slogger.watchers`, which is a
-        // list - there is no path to them that config() can take
-        $retired = [
-            RequestWatcher::class => [
-                'config.input.headers_masking',
-                'config.input.parameters_masking',
-                'config.output.headers_masking',
-                'config.output.fields_masking',
-            ],
-            ModelWatcher::class => [
-                'config.masks',
-            ],
-        ];
-
-        /** @var array<array{class?: string, config?: array<string, mixed>}> $watcherConfigs */
-        $watcherConfigs = $this->app->make(Repository::class)['slogger.watchers'] ?? [];
-
-        $found = [];
-
-        foreach ($watcherConfigs as $watcherConfig) {
-            $watcherClass = $watcherConfig['class'] ?? null;
-
-            if (!is_string($watcherClass) || !isset($retired[$watcherClass])) {
-                continue;
-            }
-
-            foreach ($retired[$watcherClass] as $path) {
-                if (!is_null(Arr::get($watcherConfig, $path))) {
-                    $found[] = $watcherClass . ' ' . $path;
-                }
-            }
-        }
-
-        if (!$found) {
-            return;
-        }
-
-        try {
-            Log::channel($this->app->make(GeneralConfig::class)->getLogChannel())
-                ->warning(
-                    sprintf(
-                        'slogger: these config sections are no longer read and mask nothing: %s. '
-                        . 'Move the keys you added there into masking.full_keys or masking.partial_keys.',
-                        implode(', ', $found)
-                    )
-                );
-        } catch (Throwable) {
-            // a broken log channel must not stop the application from booting
-        }
     }
 
     /**

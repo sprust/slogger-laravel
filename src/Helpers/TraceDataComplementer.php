@@ -10,6 +10,12 @@ use SLoggerLaravel\Traces\TraceScopeResolverInterface;
 
 class TraceDataComplementer
 {
+    /**
+     * Where the application's own additions land: one level in, which is where the
+     * dispatcher job's key list can reach them.
+     */
+    public const ADDITIONAL_KEY = '__add';
+
     private readonly string $basePathVendor;
     private readonly string $basePathPackages;
 
@@ -39,7 +45,7 @@ class TraceDataComplementer
 
     /**
      * Adds a value to every trace this process records. It lands under
-     * `__additional`, one level in, which is where the dispatcher job's key list can
+     * `__add`, one level in, which is where the dispatcher job's key list can
      * reach it - the top level of a trace's data belongs to the watcher and is never
      * masked, and this is application data.
      */
@@ -112,6 +118,6 @@ class TraceDataComplementer
             $additional[$key] = $value;
         }
 
-        $data['__additional'] = $additional;
+        $data[self::ADDITIONAL_KEY] = $additional;
     }
 }

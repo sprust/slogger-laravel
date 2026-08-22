@@ -2,8 +2,16 @@
 
 namespace SLoggerLaravel\Configs;
 
-readonly class MaskingConfig
+class MaskingConfig
 {
+    /**
+     * The package's own config, read once per instance rather than per call. The
+     * class is bound as a singleton, so that is once per process.
+     *
+     * @var array<string, mixed>|null
+     */
+    private ?array $shippedMasking = null;
+
     /**
      * Case-insensitive substrings of a trace data key whose value is masked whole. An
      * empty list turns full masking off; only an explicit empty list does, a missing
@@ -49,7 +57,7 @@ readonly class MaskingConfig
         $configured = config("slogger.masking.$name");
 
         if (is_null($configured)) {
-            $configured = self::shippedDefaults()[$name] ?? [];
+            $configured = $this->shippedDefaults()[$name] ?? [];
         }
 
         return array_values(
@@ -63,27 +71,25 @@ readonly class MaskingConfig
     /**
      * The package's own config file, read straight from disk.
      *
-     * `ServiceProvider::register()` merges it into the application's configuration,
-     * but `mergeConfigFrom` is a no-op while that configuration is cached - so an
-     * application upgrading without rebuilding its config cache would otherwise mask
-     * nothing at all. Reading the file keeps the defaults in one place: the file a
-     * user publishes and edits.
+     * A published config replaces this one rather than extending it, so an
+     * application that published before a list existed has no value for it at all -
+     * and would then mask nothing. Reading the file keeps the defaults in one place:
+     * the same file a user publishes and edits.
      *
      * @return array<string, mixed>
      */
-    private static function shippedDefaults(): array
+    private function shippedDefaults(): array
     {
-        /** @var array<string, mixed>|null $masking */
-        static $masking = null;
-
-        if (is_null($masking)) {
-            /** @var array<string, mixed> $config */
-            $config = require __DIR__ . '/../../config/slogger.php';
-
-            /** @var array<string, mixed> $masking */
-            $masking = $config['masking'] ?? [];
+        if (!is_null($this->shippedMasking)) {
+            return $this->shippedMasking;
         }
 
-        return $masking;
+        /** @var array<string, mixed> $config */
+        $config = require __DIR__ . '/../../config/slogger.php';
+
+        /** @var array<string, mixed> $masking */
+        $masking = $config['masking'] ?? [];
+
+        return $this->shippedMasking = $masking;
     }
 }

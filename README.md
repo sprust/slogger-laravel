@@ -6,7 +6,7 @@ SLogger Laravel is a tracing/observability package for Laravel apps. It records 
 
 This README documents installation, configuration, watchers, masking, dispatchers, profiling, and usage patterns.
 
-## Upgrading to 1.3
+## Upgrading to 2.0
 
 Masking moved out of the traced application and into the dispatcher job.
 
@@ -28,7 +28,7 @@ Masking moved out of the traced application and into the dispatcher job.
   `masking.partial_keys` (addresses, phone numbers, names) keep two characters at each
   end, which is what tells two records apart.
 - **Restart the slogger workers together with the application.** Masking happens in the
-  worker now, so a worker still running 1.2.x drains a 1.3 queue and ships those batches
+  worker now, so a worker still running 1.x drains a 2.0 queue and ships those batches
   unmasked. Deploy the workers first, or drain the slogger queue across the switch.
 - **The slogger queue now holds unmasked trace data.** Masking happens on the way out,
   so whatever the watchers collected sits in the queue store until the batch is sent.
@@ -48,7 +48,7 @@ Masking moved out of the traced application and into the dispatcher job.
     live in `route_parameters`, where the key list reaches them by parameter name.
   - the outbound `uri` loses its userinfo, so credentials written into a url do not
     reach a tag;
-  - values added through `TraceDataComplementer::add()` land under `__additional`
+  - values added through `TraceDataComplementer::add()` land under `__add`
     rather than at the top level, which is what puts them in the masker's reach.
 - **An XML body is now recorded**, under `__xml`, where before it was dropped:
   both watchers ran every body through `json_decode`, and an XML one gave `[]`. A

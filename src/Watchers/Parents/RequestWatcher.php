@@ -79,7 +79,7 @@ class RequestWatcher implements WatcherInterface
         // wrong trace and leave its own open
         $this->processor->onTraceInterrupted(
             function (string $traceId): void {
-                $this->scopeResolver->current()->forgetWatcherItemsFor(self::class, $traceId);
+                $this->scopeResolver->current()->forgetWatcherItemsFor($this, $traceId);
             }
         );
 
@@ -138,7 +138,7 @@ class RequestWatcher implements WatcherInterface
         // concurrent runtime every request is its own coroutine, and two of them
         // sharing one stack would pop each other's entries
         $this->scopeResolver->current()->pushWatcherItem(
-            self::class,
+            $this,
             [
                 'trace_id'   => $traceId,
                 'boot_time'  => $bootTime,
@@ -159,7 +159,7 @@ class RequestWatcher implements WatcherInterface
         }
 
         /** @var array{trace_id: string, boot_time: float, started_at: Carbon, logged_at: Carbon}|null $requestData */
-        $requestData = $this->scopeResolver->current()->popWatcherItem(self::class);
+        $requestData = $this->scopeResolver->current()->popWatcherItem($this);
 
         if (!$requestData) {
             return;

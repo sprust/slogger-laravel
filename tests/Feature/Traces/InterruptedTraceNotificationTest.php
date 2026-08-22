@@ -69,8 +69,10 @@ class InterruptedTraceNotificationTest extends BaseWatcherTestCase
         $this->fireStarting('inner');
 
         // two open commands
+        $watcher = $this->getApp()->make(CommandWatcher::class);
+
         self::assertNotNull($scope->popWatcherItemMatching(
-            CommandWatcher::class,
+            $watcher,
             static fn(mixed $item): bool => is_array($item) && ($item['command'] ?? null) === 'inner'
         ));
 
@@ -82,7 +84,7 @@ class InterruptedTraceNotificationTest extends BaseWatcherTestCase
         // nothing of either is left: the swept entry was dropped rather than waiting
         // to be popped by the next command's finish
         self::assertNull($scope->popWatcherItemMatching(
-            CommandWatcher::class,
+            $watcher,
             static fn(mixed $item): bool => true
         ));
     }

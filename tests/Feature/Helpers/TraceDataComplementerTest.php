@@ -41,8 +41,8 @@ class TraceDataComplementerTest extends BaseTestCase
 
         // one level in, not at the top: the top level of a trace's data belongs to
         // the watcher and is never masked, and this is application data
-        self::assertSame('bar', $data['__additional']['foo']);
-        self::assertSame('ok', $data['__additional']['calc']);
+        self::assertSame('bar', $data[TraceDataComplementer::ADDITIONAL_KEY]['foo']);
+        self::assertSame('ok', $data[TraceDataComplementer::ADDITIONAL_KEY]['calc']);
     }
 
     public function testAdditionalDataIsReachableByTheMasker(): void
@@ -62,8 +62,8 @@ class TraceDataComplementerTest extends BaseTestCase
 
         $masked = app(TraceDataMasker::class)->mask($data);
 
-        self::assertSame('jo****************om', $masked['__additional']['customer_email']);
-        self::assertSame(MaskHelper::FULL_MASK, $masked['__additional']['api_token']);
+        self::assertSame('jo****************om', $masked[TraceDataComplementer::ADDITIONAL_KEY]['customer_email']);
+        self::assertSame(MaskHelper::FULL_MASK, $masked[TraceDataComplementer::ADDITIONAL_KEY]['api_token']);
     }
 
     public function testInjectRespectsExcludedFileMasks(): void

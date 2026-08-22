@@ -33,7 +33,7 @@ class CommandWatcher implements WatcherInterface
         // wrong trace and leave its own open
         $this->processor->onTraceInterrupted(
             function (string $traceId): void {
-                $this->scopeResolver->current()->forgetWatcherItemsFor(self::class, $traceId);
+                $this->scopeResolver->current()->forgetWatcherItemsFor($this, $traceId);
             }
         );
 
@@ -86,7 +86,7 @@ class CommandWatcher implements WatcherInterface
         // concurrent runtime two coroutines sharing one stack would pop each
         // other's entries
         $this->scopeResolver->current()->pushWatcherItem(
-            self::class,
+            $this,
             [
                 'command'    => $event?->command,
                 'trace_id'   => $traceId,
@@ -114,7 +114,7 @@ class CommandWatcher implements WatcherInterface
         // that never reported finishing would otherwise be closed in its place
         /** @var array{command: string|null, trace_id: string, started_at: Carbon}|null $commandData */
         $commandData = $this->scopeResolver->current()->popWatcherItemMatching(
-            self::class,
+            $this,
             static fn(mixed $item): bool => is_array($item) && ($item['command'] ?? null) === $command
         );
 

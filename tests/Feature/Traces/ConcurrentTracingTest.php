@@ -431,7 +431,7 @@ class ConcurrentTracingTest extends BaseWatcherTestCase
 
             $complementer->inject($data);
 
-            $seen['first'] = $data['__additional'] ?? null;
+            $seen['first'] = $data[TraceDataComplementer::ADDITIONAL_KEY] ?? null;
         });
 
         $second = $this->resolver->spawn(static function () use ($complementer, &$seen): void {
@@ -439,7 +439,7 @@ class ConcurrentTracingTest extends BaseWatcherTestCase
 
             $complementer->inject($data);
 
-            $seen['second'] = $data['__additional'] ?? null;
+            $seen['second'] = $data[TraceDataComplementer::ADDITIONAL_KEY] ?? null;
         });
 
         $first->start();
