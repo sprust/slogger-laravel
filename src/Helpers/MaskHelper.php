@@ -124,8 +124,16 @@ class MaskHelper
     {
         $patterns = self::preparePatterns($valuePatterns);
 
-        if (!$patterns || $value === '' || strlen($value) > self::MAX_STRING_LENGTH) {
+        if (!$patterns || $value === '') {
             return $value;
+        }
+
+        if (strlen($value) > self::MAX_STRING_LENGTH) {
+            // too long to look inside, so it goes whole. Passing it through was the
+            // worse of the two failure modes: a value nothing has read is a value
+            // nothing can vouch for, and it was the caps upstream - not this - that
+            // were supposed to keep it out of a trace in the first place
+            return self::FULL_MASK;
         }
 
         return self::maskByValuePatterns($value, $patterns);
@@ -316,8 +324,13 @@ class MaskHelper
      */
     private static function maskUnmatchedString(mixed $value, string $key, array $rules): mixed
     {
-        if (!is_string($value) || $value === '' || strlen($value) > self::MAX_STRING_LENGTH) {
+        if (!is_string($value) || $value === '') {
             return $value;
+        }
+
+        if (strlen($value) > self::MAX_STRING_LENGTH) {
+            // see maskString(): unread means unvouched-for, and it leaves whole
+            return self::FULL_MASK;
         }
 
         if (in_array(Str::lower($key), self::QUERY_STRING_KEYS, true)) {

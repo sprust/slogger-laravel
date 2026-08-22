@@ -48,6 +48,11 @@ Route::group(
                 );
         })->name('xml');
 
+        // a response as big as the caller asks for, to be measured against the cap
+        Route::get('/big', fn(Request $request, ResponseFactory $factory) => $factory->json(
+            ['blob' => str_repeat('a', (int) $request->query('bytes', '100'))]
+        ))->name('big');
+
         Route::get('/failed', fn() => abort(500))
             ->name('failed');
         Route::get('/exception', fn() => throw new Exception('Test exception'))

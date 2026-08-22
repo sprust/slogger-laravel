@@ -64,6 +64,8 @@ class RequestWatcher implements WatcherInterface
 
     protected int $maxResponseBytes = 1048576;
 
+    protected int $maxRequestBytes = 1048576;
+
     public function __construct(
         protected readonly Application $app,
         protected readonly Processor $processor,
@@ -533,6 +535,17 @@ class RequestWatcher implements WatcherInterface
      */
     protected function getRequestParameters(Request $request): array
     {
+        // before input() parses anything: this runs in the traced application's own
+        // request, and a 20 MB json body must not be decoded just to be dropped by
+        // the cap afterwards. A multipart body is left to the check below - its
+        // length is mostly file bytes, and of a file only the name and the size is
+        // recorded
+        if ($this->declaredBodyTooLarge($request)) {
+            return [
+                '__skipped' => 'request_too_large',
+            ];
+        }
+
         $files = $request->files->all();
 
         array_walk_recursive($files, function (&$file) {
@@ -557,7 +570,74 @@ class RequestWatcher implements WatcherInterface
         // the body entirely
         $body = $this->readXmlRequestBody($request);
 
-        return $body ? [...$parameters, ...$body] : $parameters;
+        $parameters = $body ? [...$parameters, ...$body] : $parameters;
+
+        // Content-Length is absent on a chunked request and misleading on a multipart
+        // one, so what was actually collected is measured too. Above this the masker
+        // refuses to read a value, and what it will not read must not be recorded
+        if (self::exceedsBytes($parameters, $this->maxRequestBytes)) {
+            return [
+                '__skipped' => 'request_too_large',
+            ];
+        }
+
+        return $parameters;
+    }
+
+    /**
+     * Whether the request says, before it is read, that it is too big to record.
+     */
+    protected function declaredBodyTooLarge(Request $request): bool
+    {
+        $contentType = (string) $request->headers->get('Content-Type');
+
+        if (Str::startsWith(Str::lower($contentType), 'multipart/')) {
+            return false;
+        }
+
+        $length = $request->headers->get('Content-Length');
+
+        return is_numeric($length) && (int) $length > $this->maxRequestBytes;
+    }
+
+    /**
+     * Whether the collected parameters weigh more than the cap.
+     *
+     * Counted by walking the values rather than by encoding them: encoding an
+     * oversized payload just to measure it is the cost the cap exists to avoid. The
+     * walk stops at the first byte over the limit, so an 8 MB body costs no more to
+     * reject than a 1 MB one.
+     *
+     * @param array<int|string, mixed> $parameters
+     */
+    protected static function exceedsBytes(array $parameters, int $limit): bool
+    {
+        $bytes = 0;
+
+        $walk = static function (mixed $value) use (&$walk, &$bytes, $limit): bool {
+            if (is_array($value)) {
+                foreach ($value as $key => $item) {
+                    $bytes += strlen((string) $key);
+
+                    if ($bytes > $limit || $walk($item)) {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            if (is_string($value)) {
+                $bytes += strlen($value);
+            } else {
+                // a number, a bool, a null: nothing that can carry a payload
+                $bytes += 8;
+            }
+
+            return $bytes > $limit;
+        };
+
+        return $walk($parameters);
     }
 
     /**
@@ -627,6 +707,7 @@ class RequestWatcher implements WatcherInterface
             $formatterMap[$urlPattern]->setHideAllResponseData(true);
         }
 
+        $this->maxRequestBytes  = (int) ($config['input']['max_content_length'] ?? $this->maxRequestBytes);
         $this->maxResponseBytes = (int) ($config['output']['max_content_length'] ?? $this->maxResponseBytes);
 
         $this->formatters = new RequestDataFormatters();
