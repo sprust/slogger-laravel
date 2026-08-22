@@ -16,8 +16,18 @@ use Throwable;
 
 class Dispatcher
 {
+    private const RESTARTS_BEFORE_BACKOFF = 3;
+
+    private const MAX_RESTART_DELAY_SECONDS = 30;
     private bool $enabled;
     private bool $shouldQuit = false;
+
+    /**
+     * Consecutive restarts per worker slot, for the backoff below.
+     *
+     * @var array<int, int>
+     */
+    private array $restartFailures = [];
     private LoggerInterface $logger;
 
     public function __construct(
@@ -155,6 +165,8 @@ class Dispatcher
                     if ($process->isRunning()) {
                         $this->readProcessOutput($process);
 
+                        $this->restartFailures[$index] = 0;
+
                         continue;
                     }
 
@@ -162,6 +174,15 @@ class Dispatcher
                     // why on its way out, and dropping that leaves a restart loop with
                     // no explanation anywhere
                     $this->readProcessOutput($process);
+
+                    // a worker that dies on boot would otherwise be restarted once a
+                    // second forever - about 86k restarts and 86k state-file writes a
+                    // day, with nothing to show for them
+                    $restartDelay = $this->restartDelayFor($index);
+
+                    if ($restartDelay > 0) {
+                        sleep($restartDelay);
+                    }
 
                     $restartedProcess = $processor->createProcess();
                     $restartedProcess->start();
@@ -363,6 +384,28 @@ class Dispatcher
     {
         $this->output->writeln($message);
         $this->logger->info($message);
+    }
+
+    /**
+     * How long to wait before replacing a worker that keeps dying.
+     *
+     * Counted per slot and reset as soon as one survives long enough to be seen
+     * running, so an occasional crash restarts immediately and a boot loop backs off.
+     */
+    private function restartDelayFor(int $index): int
+    {
+        $failures = ($this->restartFailures[$index] ?? 0) + 1;
+
+        $this->restartFailures[$index] = $failures;
+
+        if ($failures <= self::RESTARTS_BEFORE_BACKOFF) {
+            return 0;
+        }
+
+        return (int) min(
+            self::MAX_RESTART_DELAY_SECONDS,
+            2 ** ($failures - self::RESTARTS_BEFORE_BACKOFF)
+        );
     }
 
     /**
