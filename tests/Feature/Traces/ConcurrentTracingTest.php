@@ -422,11 +422,17 @@ class ConcurrentTracingTest extends BaseWatcherTestCase
     {
         $complementer = $this->getApp()->make(TraceDataComplementer::class);
 
+        // annotated because inject() fills the array by reference, and on Laravel 10
+        // the container's return type is not specific enough for the analyser to see
+        // the call at all - it then reads every lookup below as a lookup in an array
+        // it knows to be empty
+        /** @var array<string, array<string, mixed>|null> $seen */
         $seen = [];
 
         $first = $this->resolver->spawn(static function () use ($complementer, &$seen): void {
             $complementer->add('user_id', 1);
 
+            /** @var array<string, mixed> $data */
             $data = [];
 
             $complementer->inject($data);
@@ -435,6 +441,7 @@ class ConcurrentTracingTest extends BaseWatcherTestCase
         });
 
         $second = $this->resolver->spawn(static function () use ($complementer, &$seen): void {
+            /** @var array<string, mixed> $data */
             $data = [];
 
             $complementer->inject($data);
