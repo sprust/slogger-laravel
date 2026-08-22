@@ -159,13 +159,56 @@ class MaskHelperTest extends BaseTestCase
         foreach (
             [
                 // a credential equal to the parameter that names it
-                'GET /reset?password=pass'   => 'GET /reset?password=' . MaskHelper::FULL_MASK,
-                'GET /v1?api_key=key'        => 'GET /v1?api_key=' . MaskHelper::FULL_MASK,
-                'GET /cb?code=code&state=x'  => 'GET /cb?code=' . MaskHelper::FULL_MASK . '&state=x',
+                'GET /reset?password=pass'  => 'GET /reset?password=' . MaskHelper::FULL_MASK,
+                'GET /v1?api_key=key'       => 'GET /v1?api_key=' . MaskHelper::FULL_MASK,
+                'GET /cb?code=code&state=x' => 'GET /cb?code=' . MaskHelper::FULL_MASK . '&state=x',
+
+                // and the same in a url's authority, where the password is routinely
+                // the user name over again
+                'could not connect to postgres://postgres:postgres@db:5432/app' => 'could not connect to postgres://postgres:' . MaskHelper::FULL_MASK . '@db:5432/app',
+                'redis://redis:redis@cache:6379'                                => 'redis://redis:' . MaskHelper::FULL_MASK . '@cache:6379',
+
+                // a password containing the delimiter: all of it goes, not the part
+                // before the first `@`
+                'https://svc:S3cr3tP@ss@host/api' => 'https://svc:' . MaskHelper::FULL_MASK . '@host/api',
             ] as $input => $expected
         ) {
             self::assertSame($expected, MaskHelper::maskString($input, $patterns));
         }
+    }
+
+    /**
+     * The authority pattern needs a scheme in front of it. Without one it took any
+     * `word:word@` it could find - a path segment, a timestamp - and masked the
+     * middle of an ordinary url.
+     */
+    public function testTheAuthorityPatternLeavesAColonAndAnAtInAPathAlone(): void
+    {
+        $patterns = ['/\b[a-z][a-z0-9+.-]*:\/\/[^\/\s:@]+:([^\/\s]+)@/i'];
+
+        foreach (
+            [
+                'https://cdn.example.com//assets:v2@2x.png',
+                'see https://example.com/a:b@c',
+                'ftp://anonymous@ftp.example.com/pub',
+                'scp user@host:/path',
+            ] as $untouched
+        ) {
+            self::assertSame($untouched, MaskHelper::maskString($untouched, $patterns));
+        }
+    }
+
+    public function testAStringTooLongToLookInsideIsMaskedWhole(): void
+    {
+        // it is the caps in the watchers that keep a value this size out of a trace;
+        // if one gets here anyway, unread must not mean unmasked
+        $huge = str_repeat('a', 1000001) . ' john.doe@example.com';
+
+        self::assertSame(MaskHelper::FULL_MASK, MaskHelper::maskString($huge, [self::EMAIL_PATTERN]));
+
+        $masked = MaskHelper::maskArrayByKeys(['ctx' => ['note' => $huge]], [], [], [self::EMAIL_PATTERN]);
+
+        self::assertSame(MaskHelper::FULL_MASK, $masked['ctx']['note']);
     }
 
     public function testMaskArrayByKeysLooksInsideXmlDocuments(): void

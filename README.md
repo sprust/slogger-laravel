@@ -476,6 +476,12 @@ and a PIN, an OTP and an account number are all short and numeric.
     // narrow ones come before the broad one. a pattern with a capture group masks
     // the group and keeps the rest.
     'value_patterns' => [
+        // a password written into a url's authority: postgres://app:secret@db.
+        // a scheme is required, so `//assets:v2@2x.png` in a path is left alone,
+        // and the group runs to the last `@` of the authority, so a password
+        // containing one goes whole rather than in part
+        'url_credentials' => '/\b[a-z][a-z0-9+.-]*:\/\/[^\/\s:@]+:([^\/\s]+)@/i',
+
         // a secret written into a url, wherever that url turns up: a Location
         // header, an exception message, a log line
         // the parameter name is matched as a word, not as a substring: an
