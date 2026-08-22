@@ -76,6 +76,7 @@ jobs:
 
       - run: composer require "laravel/framework:${{ matrix.laravel }}" --no-update
       - run: composer update --with-all-dependencies --prefer-dist --no-interaction
+      - run: vendor/bin/php-cs-fixer fix --config php-cs-fixer.dist.php --dry-run --diff
       - run: vendor/bin/phpstan analyse
       - run: vendor/bin/phpunit
 

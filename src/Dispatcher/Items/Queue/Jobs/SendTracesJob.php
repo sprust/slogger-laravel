@@ -3,7 +3,6 @@
 namespace SLoggerLaravel\Dispatcher\Items\Queue\Jobs;
 
 use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldBeEncrypted;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
@@ -19,10 +18,14 @@ use SLoggerLaravel\Processor;
 use Throwable;
 
 /**
- * Encrypted on purpose: traces are masked by this job, right before they are sent,
- * so the payload sits in the queue with whatever the watchers collected.
+ * Carries a batch of traces to the receiver, masking it on the way out.
+ *
+ * The payload sits in the queue with whatever the watchers collected: masking happens
+ * here, not in the traced application. Treat the slogger queue as holding raw trace
+ * data and give it the retention and access rules that implies - see the security
+ * note in the README.
  */
-class SendTracesJob implements ShouldQueue, ShouldBeEncrypted
+class SendTracesJob implements ShouldQueue
 {
     use Dispatchable;
     use InteractsWithQueue;

@@ -43,20 +43,14 @@ readonly class DatabaseWatcher implements WatcherInterface
         );
     }
 
+    /**
+     * Bindings are positional: nothing here says which of them is a password and
+     * which is a page number, so all of them are masked. Length is not a signal
+     * either - a PIN, an OTP and an account number are short and numeric, and those
+     * were exactly what a length or a type check used to let through.
+     */
     protected function maskValue(mixed $value): mixed
     {
-        if (is_string($value)) {
-            if (Str::length($value) > 5) {
-                return MaskHelper::maskValue($value);
-            }
-
-            return $value;
-        }
-
-        if (is_numeric($value)) {
-            return $value;
-        }
-
         if (is_array($value)) {
             $arrayValue = [];
 
@@ -67,6 +61,6 @@ readonly class DatabaseWatcher implements WatcherInterface
             return $arrayValue;
         }
 
-        return $value;
+        return MaskHelper::maskValue($value);
     }
 }

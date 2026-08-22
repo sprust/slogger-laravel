@@ -40,7 +40,7 @@ class CommandWatcher implements WatcherInterface
 
     public function handleCommandStarting(?CommandStarting $event): void
     {
-        if (in_array($event?->command, $this->exceptedCommands)) {
+        if (in_array($event?->command, $this->exceptedCommands, strict: true)) {
             return;
         }
 
@@ -90,7 +90,7 @@ class CommandWatcher implements WatcherInterface
     {
         // the start of an excepted command is not traced, so its finish must not pop
         // the entry of the command that is running it
-        if (in_array($event?->command, $this->exceptedCommands)) {
+        if (in_array($event?->command, $this->exceptedCommands, strict: true)) {
             return;
         }
 

@@ -9,7 +9,6 @@ use Illuminate\Support\Facades\Log;
 use Psr\Log\NullLogger;
 use ReflectionClass;
 use RuntimeException;
-use Illuminate\Contracts\Queue\ShouldBeEncrypted;
 use SLoggerLaravel\Configs\GeneralConfig;
 use SLoggerLaravel\Configs\MaskingConfig;
 use SLoggerLaravel\Helpers\TraceDataMasker;
@@ -38,16 +37,6 @@ class SendTracesJobTest extends BaseTestCase
         self::assertSame(5, $job->tries);
         self::assertSame([5, 10, 30, 60], $job->backoff);
         self::assertSame(count($job->backoff) + 1, $job->tries);
-    }
-
-    public function testTheBatchIsEncryptedInTheQueue(): void
-    {
-        // traces reach the queue unmasked - masking happens in handle(), on the way
-        // out - so the payload must not sit there readable
-        self::assertInstanceOf(
-            ShouldBeEncrypted::class,
-            new SendTracesJob($this->makeTraces())
-        );
     }
 
     public function testBackoffAcceptsIntAssignedByQueueDriver(): void

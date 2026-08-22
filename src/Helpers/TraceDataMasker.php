@@ -6,33 +6,43 @@ use SLoggerLaravel\Configs\MaskingConfig;
 use SLoggerLaravel\Objects\TracesObject;
 
 /**
- * Masks trace data by the globally configured key list.
+ * Masks trace data by the globally configured key lists.
  *
  * It runs in the dispatcher job, right before the batch is sent, and never in the
  * traced application: masking a payload is the expensive part, and the traced
- * process should not pay for it. Traces sit in the queue unmasked, which is why
- * the job carrying them is encrypted.
+ * process should not pay for it. Traces therefore sit in the queue with whatever the
+ * watchers collected - see the security note in the README.
  */
 class TraceDataMasker
 {
     /**
      * @var string[]
      */
-    private readonly array $keys;
+    private readonly array $fullKeys;
+
+    /**
+     * @var string[]
+     */
+    private readonly array $partialKeys;
+
+    private readonly bool $enabled;
 
     public function __construct(MaskingConfig $config)
     {
-        $this->keys = $config->getKeys();
+        $this->fullKeys    = $config->getFullKeys();
+        $this->partialKeys = $config->getPartialKeys();
+
+        $this->enabled = $this->fullKeys !== [] || $this->partialKeys !== [];
     }
 
     public function isEnabled(): bool
     {
-        return $this->keys !== [];
+        return $this->enabled;
     }
 
     public function maskTraces(TracesObject $traces): TracesObject
     {
-        if (!$this->isEnabled()) {
+        if (!$this->enabled) {
             return $traces;
         }
 
@@ -62,14 +72,15 @@ class TraceDataMasker
      */
     public function mask(array $data): array
     {
-        if (!$data || !$this->isEnabled()) {
+        if (!$data || !$this->enabled) {
             return $data;
         }
 
         /** @var array<string, mixed> $masked */
         $masked = MaskHelper::maskArrayByKeys(
             data: $data,
-            keys: $this->keys
+            fullKeys: $this->fullKeys,
+            partialKeys: $this->partialKeys
         );
 
         return $masked;

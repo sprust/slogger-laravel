@@ -16,9 +16,6 @@ abstract class BaseTestCase extends TestCase
 
     protected function getEnvironmentSetUp($app): void
     {
-        // SendTracesJob is encrypted, which needs a key
-        $app['config']->set('app.key', 'base64:' . base64_encode(random_bytes(32)));
-
         $app['config']->set('database.default', 'sqlite');
         $app['config']->set('database.connections.sqlite.database', ':memory:');
 

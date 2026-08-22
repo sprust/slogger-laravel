@@ -71,21 +71,17 @@ return [
 
     // global data masking. it is applied by the dispatcher job, right before a batch
     // is sent - never in the traced application, which must not pay for masking a
-    // payload. an empty list turns masking off.
+    // payload. two empty lists turn masking off.
     'masking' => [
         // case-insensitive substrings of a trace data key. the top level of a trace's
         // data is the watcher's own structure and is never masked; matching starts
         // one level in, where the traced data actually is.
-        'keys' => [
+        //
+        // a value under a matching key is replaced whole - nothing of it survives.
+        'full_keys' => [
             'token',
             'pass',
             'auth',
-            'email',
-            'phone',
-            '_name',
-            'lastname',
-            'firstname',
-            'surname',
             'secret',
             'private',
             'apikey',
@@ -94,6 +90,18 @@ return [
             'credential',
             'sign',
             'cookie',
+        ],
+
+        // a value under a matching key keeps two characters at each end, so two
+        // records still look different. these identify a person rather than
+        // authenticate one - never put a secret here.
+        'partial_keys' => [
+            'email',
+            'phone',
+            '_name',
+            'lastname',
+            'firstname',
+            'surname',
         ],
     ],
 

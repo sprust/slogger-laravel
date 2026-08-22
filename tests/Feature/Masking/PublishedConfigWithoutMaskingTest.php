@@ -19,11 +19,12 @@ class PublishedConfigWithoutMaskingTest extends BaseTestCase
     {
         $this->forgetMaskingSection();
 
-        // the code-level fallback, which holds even while the config cache is stale:
+        // the file-level fallback, which holds even while the config cache is stale:
         // `mergeConfigFrom` is a no-op for a cached configuration
         $config = new MaskingConfig();
 
-        self::assertSame(MaskingConfig::DEFAULT_KEYS, $config->getKeys());
+        self::assertSame($this->shippedMasking()['full_keys'], $config->getFullKeys());
+        self::assertSame($this->shippedMasking()['partial_keys'], $config->getPartialKeys());
     }
 
     public function testRegisterMergesTheSectionBack(): void
@@ -34,21 +35,47 @@ class PublishedConfigWithoutMaskingTest extends BaseTestCase
 
         (new ServiceProvider($this->getApp()))->register();
 
-        self::assertSame(MaskingConfig::DEFAULT_KEYS, config('slogger.masking.keys'));
-    }
-
-    public function testTheShippedConfigMatchesTheDefaults(): void
-    {
-        // the published file is what a user edits, the constants are the fallback;
-        // they must not drift apart
-        self::assertSame(MaskingConfig::DEFAULT_KEYS, config('slogger.masking.keys'));
+        self::assertSame($this->shippedMasking(), config('slogger.masking'));
     }
 
     public function testAnExplicitEmptyListStillTurnsMaskingOff(): void
     {
-        $this->getApp()['config']->set('slogger.masking.keys', []);
+        $this->getApp()['config']->set('slogger.masking.full_keys', []);
 
-        self::assertSame([], (new MaskingConfig())->getKeys());
+        self::assertSame([], (new MaskingConfig())->getFullKeys());
+
+        // the other list is untouched: clearing one must not clear both
+        self::assertNotSame([], (new MaskingConfig())->getPartialKeys());
+    }
+
+    public function testAMisconfiguredListDoesNotTakeTheBatchDown(): void
+    {
+        // this is read inside the dispatcher job, where a TypeError costs the batch
+        // and every retry of it
+        $this->getApp()['config']->set('slogger.masking.full_keys', 'token');
+
+        self::assertSame(['token'], (new MaskingConfig())->getFullKeys());
+
+        $this->getApp()['config']->set('slogger.masking.full_keys', ['token', 42, '', null]);
+
+        self::assertSame(['token'], (new MaskingConfig())->getFullKeys());
+    }
+
+    /**
+     * The package's config file is the single source of the defaults - there is no
+     * second copy of the lists in code to drift away from it.
+     *
+     * @return array<string, mixed>
+     */
+    private function shippedMasking(): array
+    {
+        /** @var array<string, mixed> $config */
+        $config = require __DIR__ . '/../../../config/slogger.php';
+
+        /** @var array<string, mixed> $masking */
+        $masking = $config['masking'];
+
+        return $masking;
     }
 
     private function forgetMaskingSection(): void

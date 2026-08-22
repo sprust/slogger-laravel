@@ -11,6 +11,11 @@ use Symfony\Component\Mime\Address;
 
 /**
  * Not tested
+ *
+ * Addresses are nested under `message` and carried as `email`/`full_name` pairs: the
+ * dispatcher job matches key names, so an address has to sit in a value under a key
+ * that says what it is. The previous shape - the address as the key, the name as the
+ * value - put it somewhere no key list could reach.
  */
 class MailWatcher implements WatcherInterface
 {
@@ -29,12 +34,14 @@ class MailWatcher implements WatcherInterface
         $data = [
             'mailable' => $this->getMailable($event),
             'queued'   => $this->getQueuedStatus($event),
-            'from'     => $this->formatAddresses($event->message->getFrom()),
-            'reply_to' => $this->formatAddresses($event->message->getReplyTo()),
-            'to'       => $this->formatAddresses($event->message->getTo()),
-            'cc'       => $this->formatAddresses($event->message->getCc()),
-            'bcc'      => $this->formatAddresses($event->message->getBcc()),
-            'subject'  => $event->message->getSubject(),
+            'message'  => [
+                'from'     => $this->formatAddresses($event->message->getFrom()),
+                'reply_to' => $this->formatAddresses($event->message->getReplyTo()),
+                'to'       => $this->formatAddresses($event->message->getTo()),
+                'cc'       => $this->formatAddresses($event->message->getCc()),
+                'bcc'      => $this->formatAddresses($event->message->getBcc()),
+                'subject'  => $event->message->getSubject(),
+            ],
         ];
 
         $this->processor->push(
@@ -59,7 +66,7 @@ class MailWatcher implements WatcherInterface
     /**
      * @param array<string, string>|Address[]|null $addresses
      *
-     * @return array<string, string>|null
+     * @return list<array{email: string, full_name: string}>|null
      */
     protected function formatAddresses(?array $addresses): ?array
     {
@@ -67,14 +74,22 @@ class MailWatcher implements WatcherInterface
             return null;
         }
 
-        return collect($addresses)
-            ->flatMap(function ($address, $key) {
-                if ($address instanceof Address) {
-                    return [$address->getAddress() => $address->getName()];
-                }
+        return array_values(
+            collect($addresses)
+                ->map(function ($address, $key) {
+                    if ($address instanceof Address) {
+                        return [
+                            'email'     => $address->getAddress(),
+                            'full_name' => $address->getName(),
+                        ];
+                    }
 
-                return [$key => $address];
-            })
-            ->all();
+                    return [
+                        'email'     => (string) $key,
+                        'full_name' => (string) $address,
+                    ];
+                })
+                ->all()
+        );
     }
 }

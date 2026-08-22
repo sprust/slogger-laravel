@@ -15,6 +15,14 @@ use SLoggerLaravel\Processor;
 use SLoggerLaravel\Watchers\WatcherInterface;
 
 // TODO: register all cache event
+
+/**
+ * A cached value is nested under the cache key it was stored with, so the key becomes
+ * part of the path the dispatcher job matches against. Nothing else can reach it:
+ * `value` says nothing about what it holds, and a cache key is the only thing that
+ * does. `key` is kept at the top level as well, where it stays readable - it is an
+ * identifier, and it is already a tag.
+ */
 readonly class CacheWatcher implements WatcherInterface
 {
     public function __construct(
@@ -42,8 +50,12 @@ readonly class CacheWatcher implements WatcherInterface
         $data = [
             'type'  => $type,
             'key'   => $event->key,
-            'value' => $this->prepareValue($event->key, $event->value),
-            'tags'  => $event->tags,
+            'cache' => [
+                $event->key => [
+                    'value' => $this->prepareValue($event->key, $event->value),
+                    'tags'  => $event->tags,
+                ],
+            ],
         ];
 
         $this->processor->push(
@@ -66,9 +78,13 @@ readonly class CacheWatcher implements WatcherInterface
         $type = 'missed';
 
         $data = [
-            'type' => $type,
-            'key'  => $event->key,
-            'tags' => $event->tags,
+            'type'  => $type,
+            'key'   => $event->key,
+            'cache' => [
+                $event->key => [
+                    'tags' => $event->tags,
+                ],
+            ],
         ];
 
         $this->processor->push(
@@ -91,11 +107,15 @@ readonly class CacheWatcher implements WatcherInterface
         $type = 'set';
 
         $data = [
-            'type'       => $type,
-            'key'        => $event->key,
-            'value'      => $this->prepareValue($event->key, $event->value),
-            'tags'       => $event->tags,
-            'expiration' => $event->seconds,
+            'type'  => $type,
+            'key'   => $event->key,
+            'cache' => [
+                $event->key => [
+                    'value'      => $this->prepareValue($event->key, $event->value),
+                    'tags'       => $event->tags,
+                    'expiration' => $event->seconds,
+                ],
+            ],
         ];
 
         $this->processor->push(

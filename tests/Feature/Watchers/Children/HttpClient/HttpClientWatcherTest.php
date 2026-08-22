@@ -15,6 +15,8 @@ use GuzzleHttp\Psr7\Response;
 use ReflectionClass;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Guzzle\GuzzleHandlerFactory;
+use SLoggerLaravel\Helpers\MaskHelper;
+use SLoggerLaravel\Helpers\TraceDataMasker;
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
 use SLoggerLaravel\RequestPreparer\RequestDataFormatters;
@@ -192,6 +194,106 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
         self::assertSame([], $this->getTrackedRequests($watcher));
     }
 
+    public function testDoesNotLeakTrackedRequestsSweptByTheProcessor(): void
+    {
+        $this->registerWatcher(JobWatcher::class, null);
+
+        $watcher = $this->bindSharedWatcher();
+
+        dispatch(static function (): void {
+            $handlerStack = app(GuzzleHandlerFactory::class)->prepareHandler(
+                formatters: new RequestDataFormatters(),
+                handlerStack: HandlerStack::create(new MockHandler([new Response(200)]))
+            );
+
+            $client = new Client([
+                'handler'     => $handlerStack,
+                'http_errors' => false,
+            ]);
+
+            // started and never waited for: the promise never settles, so neither
+            // response hook ever runs and the processor's sweep closes the trace
+            $client->requestAsync('GET', 'https://example.test/alpha');
+        });
+
+        // the job is over, so the sweep has run
+        self::assertCount(
+            1,
+            $this->dispatcher->findUpdating(tag: Processor::INTERRUPTED_TAG)
+        );
+
+        // and it told the watcher, which would otherwise keep the entry forever
+        self::assertSame([], $this->getTrackedRequests($watcher));
+    }
+
+    public function testTheQueryStringIsCarriedAsDataAndNotAsATag(): void
+    {
+        $this->registerWatcher(JobWatcher::class, null);
+
+        dispatch(static function (): void {
+            $handlerStack = app(GuzzleHandlerFactory::class)->prepareHandler(
+                formatters: new RequestDataFormatters(),
+                handlerStack: HandlerStack::create(new MockHandler([new Response(200)]))
+            );
+
+            $client = new Client([
+                'handler'     => $handlerStack,
+                'http_errors' => false,
+            ]);
+
+            $client->request('get', 'https://example.test/alpha?page=2&api_token=tok-secret');
+        });
+
+        $creating = $this->dispatcher->findCreating(type: 'http-client');
+
+        self::assertCount(1, $creating);
+
+        $data = $creating[0]->data;
+
+        // nothing masks a url, so the query string does not travel in one
+        self::assertSame('https://example.test/alpha', $data['uri']);
+        self::assertSame('tok-secret', $data['query']['api_token']);
+        self::assertSame('page=2&api_token=tok-secret', $data['query_string']);
+
+        $updating = $this->dispatcher->findUpdating(traceId: $creating[0]->traceId);
+
+        self::assertCount(1, $updating);
+        self::assertSame(['https://example.test/alpha'], $updating[0]->tags);
+    }
+
+    public function testTheQueryStringIsMaskedOnTheWayOut(): void
+    {
+        $this->registerWatcher(JobWatcher::class, null);
+
+        dispatch(static function (): void {
+            $handlerStack = app(GuzzleHandlerFactory::class)->prepareHandler(
+                formatters: new RequestDataFormatters(),
+                handlerStack: HandlerStack::create(new MockHandler([new Response(200)]))
+            );
+
+            $client = new Client([
+                'handler'     => $handlerStack,
+                'http_errors' => false,
+            ]);
+
+            $client->request('get', 'https://example.test/alpha?page=2&api_token=tok-secret');
+        });
+
+        $creating = $this->dispatcher->findCreating(type: 'http-client');
+
+        self::assertCount(1, $creating);
+
+        $masked = app(TraceDataMasker::class)->mask($creating[0]->data);
+
+        $parameters = [];
+
+        parse_str($masked['query_string'], $parameters);
+
+        self::assertSame('2', $parameters['page']);
+        self::assertSame(MaskHelper::FULL_MASK, $parameters['api_token']);
+        self::assertSame(MaskHelper::FULL_MASK, $masked['query']['api_token']);
+    }
+
     protected function getTraceType(): string
     {
         return 'http-client';
@@ -255,6 +357,10 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
         $watcher = app(HttpClientWatcher::class);
 
         $this->getApp()->instance(HttpClientWatcher::class, $watcher);
+
+        // setUp() registered a different instance, so its sweep callback points at an
+        // object nothing else uses; register the shared one the handler will resolve
+        $watcher->register(null);
 
         return $watcher;
     }

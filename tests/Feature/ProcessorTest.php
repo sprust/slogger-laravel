@@ -9,6 +9,7 @@ use RuntimeException;
 use SLoggerLaravel\Dispatcher\Items\DispatcherProcessorInterface;
 use SLoggerLaravel\Dispatcher\Items\Memory\MemoryDispatcher;
 use SLoggerLaravel\Enums\TraceStatusEnum;
+use SLoggerLaravel\Events\WatcherErrorEvent;
 use SLoggerLaravel\Dispatcher\Items\TraceDispatcherInterface;
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
@@ -73,6 +74,62 @@ class ProcessorTest extends BaseTestCase
         // the push itself fires watchable events and must not be traced recursively
         self::assertSame([true, true], $fakeDispatcher->pausedStates);
         self::assertFalse($processor->isPaused());
+    }
+
+    public function testNestedHandleWithoutTracingKeepsTheOuterPause(): void
+    {
+        $processor = $this->getApp()->make(Processor::class);
+
+        $seen = [];
+
+        $processor->handleWithoutTracing(function () use ($processor, &$seen): void {
+            $processor->handleWithoutTracing(static function (): void {
+                // a watcher error is reported from inside an already paused section:
+                // the reporting listener pauses again
+            });
+
+            // the inner call must not lift the pause the outer one holds
+            $seen[] = $processor->isPaused();
+        });
+
+        self::assertSame([true], $seen);
+        self::assertFalse($processor->isPaused());
+    }
+
+    public function testHandleWithoutTracingRestoresThePauseAfterAThrow(): void
+    {
+        $processor = $this->getApp()->make(Processor::class);
+
+        try {
+            $processor->handleWithoutTracing(static function (): void {
+                throw new RuntimeException('boom');
+            });
+        } catch (RuntimeException) {
+            // the caller still gets the exception - SendTracesJob relies on it
+        }
+
+        self::assertFalse($processor->isPaused());
+    }
+
+    public function testABrokenReportingPathDoesNotReachTheApplication(): void
+    {
+        $processor = $this->getApp()->make(Processor::class);
+
+        $this->getApp()->make('events')->listen(
+            WatcherErrorEvent::class,
+            static function (): void {
+                // the reporting path itself is broken: a dead log channel, a full disk
+                throw new RuntimeException('reporting is broken too');
+            }
+        );
+
+        $result = $processor->handleWatcher(static function (): void {
+            throw new RuntimeException('watcher failed');
+        });
+
+        // telemetry must not surface in the host application, least of all as an
+        // exception that replaces the watcher's original one
+        self::assertNull($result);
     }
 
     public function testStopClosesInterruptedNestedTraces(): void

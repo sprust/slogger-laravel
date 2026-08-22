@@ -7,7 +7,6 @@ use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\Carbon;
 use LogicException;
-use RuntimeException;
 use SLoggerLaravel\Dispatcher\Items\TraceDispatcherInterface;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Events\WatcherErrorEvent;
@@ -44,6 +43,14 @@ class Processor
      * @var array<string, array{owner_trace_id: string|null, tags: string[], logged_at: Carbon}>
      */
     private array $detachedTraces = [];
+
+    /**
+     * Called with the trace id of every detached trace closed by the sweep rather
+     * than by its own watcher.
+     *
+     * @var list<Closure(string): void>
+     */
+    private array $detachedTraceInterruptedListeners = [];
 
     private bool $paused = false;
 
@@ -82,6 +89,16 @@ class Processor
         $this->state->addEnabledWatcher($watcherClass);
     }
 
+    /**
+     * @param Closure(string): void $listener
+     *
+     * @see stopInterruptedDetached()
+     */
+    public function onDetachedTraceInterrupted(Closure $listener): void
+    {
+        $this->detachedTraceInterruptedListeners[] = $listener;
+    }
+
     public function registerEvent(string $event, callable $listener): void
     {
         $this->dispatcher->listen(
@@ -108,11 +125,11 @@ class Processor
                 $this->handleWithoutTracing(function () use ($exception) {
                     $this->dispatcher->dispatch(new WatcherErrorEvent($exception));
                 });
-            } catch (Throwable $exception) {
-                throw new RuntimeException(
-                    message: $exception->getMessage(),
-                    previous: $exception
-                );
+            } catch (Throwable) {
+                // the reporting path itself is broken (a dead log channel, a full
+                // disk). There is nowhere left to report it to, and telemetry must
+                // not surface in the host application - least of all as an exception
+                // that replaces the watcher's original one
             }
         }
 
@@ -124,23 +141,18 @@ class Processor
      */
     public function handleWithoutTracing(Closure $callback): mixed
     {
+        $previousPaused = $this->paused;
+
         $this->paused = true;
 
-        $exception = null;
-
         try {
-            $result = $callback();
-        } catch (Throwable $exception) {
-            $result = null;
+            return $callback();
+        } finally {
+            // restore rather than clear: these nest (a watcher error is reported from
+            // inside a paused section), and clearing would lift the outer pause with
+            // the inner one
+            $this->paused = $previousPaused;
         }
-
-        $this->paused = false;
-
-        if ($exception) {
-            throw $exception;
-        }
-
-        return $result;
     }
 
     /**
@@ -569,6 +581,25 @@ class Processor
                 duration: TraceHelper::calcDuration($detachedTrace['logged_at']),
                 parentLoggedAt: $detachedTrace['logged_at'],
             );
+
+            $this->notifyDetachedTraceInterrupted($traceId);
+        }
+    }
+
+    /**
+     * The watcher that started a detached trace keeps its own bookkeeping for it and
+     * clears it when the trace is closed. A trace swept from here is closed without
+     * the watcher ever hearing about it, so tell it - otherwise a long-lived worker
+     * accumulates one orphaned entry per swept trace.
+     */
+    private function notifyDetachedTraceInterrupted(string $traceId): void
+    {
+        foreach ($this->detachedTraceInterruptedListeners as $listener) {
+            try {
+                $listener($traceId);
+            } catch (Throwable) {
+                // a bookkeeping callback must never break the sweep
+            }
         }
     }
 

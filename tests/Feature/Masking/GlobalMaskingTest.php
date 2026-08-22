@@ -10,6 +10,7 @@ use SLoggerLaravel\Configs\GeneralConfig;
 use SLoggerLaravel\Dispatcher\ApiClients\ApiClientInterface;
 use SLoggerLaravel\Dispatcher\Items\Queue\Jobs\SendTracesJob;
 use SLoggerLaravel\Enums\TraceStatusEnum;
+use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Helpers\TraceDataMasker;
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TracesObject;
@@ -66,26 +67,52 @@ class GlobalMaskingTest extends BaseWatcherTestCase
 
         $context = $sent['context'];
 
-        self::assertNotSame('customer@example.test', $context['customer_email']);
-        self::assertNotSame('key-1', $context['API_KEY']);
+        // an address identifies rather than authenticates: enough is left to tell two
+        // customers apart, not enough to reach either of them
+        self::assertSame('cu*****************st', $context['customer_email']);
 
-        // nothing in this key matches the list
+        // a key authenticates: nothing of it survives
+        self::assertSame(MaskHelper::FULL_MASK, $context['API_KEY']);
+
+        // nothing in this key matches either list
         self::assertSame(42, $context['order_id']);
 
         // `connection_name` matches `_name` but describes the trace, not the traced data
         self::assertSame('redis', $sent['connection_name']);
     }
 
-    public function testAnEmptyKeyListTurnsMaskingOff(): void
+    public function testEmptyKeyListsTurnMaskingOff(): void
     {
-        $this->getApp()['config']->set('slogger.masking.keys', []);
+        $this->getApp()['config']->set('slogger.masking.full_keys', []);
+        $this->getApp()['config']->set('slogger.masking.partial_keys', []);
 
         // the masker reads the config once, when it is built
         $this->getApp()->forgetInstance(TraceDataMasker::class);
 
-        $sent = $this->sendThroughJob(['customer_email' => 'customer@example.test']);
+        $sent = $this->sendThroughJob(
+            ['context' => ['customer_email' => 'customer@example.test']]
+        );
 
-        self::assertSame('customer@example.test', $sent['customer_email']);
+        self::assertSame('customer@example.test', $sent['context']['customer_email']);
+    }
+
+    public function testClearingOneListLeavesTheOtherWorking(): void
+    {
+        $this->getApp()['config']->set('slogger.masking.partial_keys', []);
+
+        $this->getApp()->forgetInstance(TraceDataMasker::class);
+
+        $sent = $this->sendThroughJob(
+            [
+                'context' => [
+                    'customer_email' => 'customer@example.test',
+                    'API_KEY'        => 'key-1',
+                ],
+            ]
+        );
+
+        self::assertSame('customer@example.test', $sent['context']['customer_email']);
+        self::assertSame(MaskHelper::FULL_MASK, $sent['context']['API_KEY']);
     }
 
     /**

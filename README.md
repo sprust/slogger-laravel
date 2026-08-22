@@ -14,20 +14,30 @@ Masking moved out of the traced application and into the dispatcher job.
   `output.headers_masking`, `output.fields_masking` and the model watcher's `masks` are
   no longer read. Leftovers in a published config are ignored, not an error - which
   means any key you added there stops being masked. **Port your own keys into
-  `masking.keys`**; the shipped defaults cover only what the shipped defaults covered
-  before (`authorization`, `cookie`, `x-xsrf-token`, `set-cookie`, `*token*`,
-  `*password*`), not `ssn`, `iban`, `card` or anything else you added yourself.
-- **One global list instead**, under `masking.keys`. A published config is merged with
-  the package's own now, so the defaults apply without republishing; add the section to
-  your config only to change it. The defaults are also compiled into
-  `MaskingConfig::DEFAULT_KEYS`, so a stale config cache cannot leave you with no
-  masking at all.
+  `masking.full_keys`**; the shipped defaults cover the shipped defaults, not `ssn`,
+  `iban`, `card` or anything else you added yourself.
+- **Two global lists instead**, under `masking.full_keys` and `masking.partial_keys`. A
+  published config is merged with the package's own now, so the defaults apply without
+  republishing; add the section to your config only to change it. A missing list falls
+  back to the package's own config file, so a stale config cache cannot leave you with
+  no masking at all.
+- **A masked secret keeps nothing.** A value under a `masking.full_keys` key becomes
+  `********` - the previous release left the first and last third of every string
+  readable, which for a token or a password is not a mask. Values under
+  `masking.partial_keys` (addresses, phone numbers, names) keep two characters at each
+  end, which is what tells two records apart.
 - **Restart the slogger workers together with the application.** Masking happens in the
   worker now, so a worker still running 1.2.x drains a 1.3 queue and ships those batches
   unmasked. Deploy the workers first, or drain the slogger queue across the switch.
-- **`APP_KEY` is required.** Traces reach the queue unmasked, so `SendTracesJob` is
-  encrypted. Without a key the job cannot be dispatched: the application keeps working,
-  but telemetry stops and says so in the slogger log channel.
+- **The slogger queue now holds unmasked trace data.** Masking happens on the way out,
+  so whatever the watchers collected sits in the queue store until the batch is sent.
+  Give that queue the retention and access rules the data deserves - a separate Redis
+  database or queue connection, and no long-lived `failed_jobs` rows for it.
+- **Trace data changed shape** where the old shape put application data out of the
+  masker's reach: cache values are nested under their cache key (`cache.<key>.value`),
+  mail addresses are nested under `message` and carried as `email`/`full_name` pairs
+  instead of address-as-key, and the query string is split off the url into `query` and
+  `query_string`. Anything consuming those fields on the receiving side needs updating.
 - **Laravel 10.17** is the new floor. `src/` needs 10.12 (`JobTimedOut` landed there),
   but 10.17 is the oldest release the test suite can actually be installed against, and
   an untested floor is not a supported one.
@@ -35,6 +45,8 @@ Masking moved out of the traced application and into the dispatcher job.
   `requestHeaders`, `requestParameters`, `responseHeaders` and `responseFields`
   arguments along with the matching `add*()` methods, and
   `MaskHelper::maskArrayByList()`/`maskArrayByPatterns()` are gone.
+  `MaskHelper::maskValue()` now masks a string whole; `maskValuePartially()` is the
+  one that keeps a couple of characters.
 
 ## Requirements
 
@@ -190,11 +202,11 @@ Watcher data highlights:
 - `job`: connection, payload, status (`processed`, `failed`, `released_after_exception`, `timed_out`, `exception_occurred`), exception
 - `event`: listeners, broadcast, optional serialized payload
 - `model`: action, model class, key, changes
-- `mail`: from/to/cc/bcc, subject, queued, mailable/notification
+- `mail`: mailable/notification, queued, `message` (from/reply_to/to/cc/bcc as `email`/`full_name` pairs, subject)
 - `notification`: notifiable, channel, queued, response
-- `cache`: type, key, tags, value
-- `db`: query, bindings, time
-- `http-client`: method, url, request/response (concurrent requests are traced independently, so `Http::pool()` works)
+- `cache`: type, key, and `cache.<key>` (value, tags, expiration)
+- `db`: query, bindings (always masked), time
+- `http-client`: method, url, query/query_string, request/response (concurrent requests are traced independently, so `Http::pool()` works)
 - `schedule`: command, description, cron, output
 - `dump`, `log`, `gate`: dump/message/ability info
 
@@ -290,59 +302,89 @@ traced application. Building a trace costs the application only what it takes to
 collect and hand off the data; walking a payload key by key is paid for by the
 dispatcher workers instead. Two consequences follow:
 
-- `SendTracesJob` is **encrypted** (`ShouldBeEncrypted`), because the traces sit in the
-  queue with whatever the watchers collected. This needs `APP_KEY`, which a Laravel
-  application always has.
+- **The queue holds unmasked trace data.** Whatever the watchers collected sits in the
+  queue store until the batch is sent, so the slogger queue is as sensitive as the
+  traces themselves: give it its own connection, keep its retention short, and do not
+  let failed batches pile up in `failed_jobs`.
 - The `memory` dispatcher never masks - it has no job. It is a development and testing
   aid and sends nothing anywhere.
 
 Watchers do not mask. What they do at runtime is hide and truncate: `only_paths`,
 `excepted_paths`, `hidden_paths`, `max_content_length`, per-watcher `excepted` lists.
 The one exception is the database watcher: query bindings are positional, so no key list
-can reach them, and it masks them where they are recorded.
+can reach them, and it masks them where they are recorded. All of them, whatever their
+type or length - nothing in a binding says whether it is a password or a page number,
+and a PIN, an OTP and an account number are all short and numeric.
 
-### The key list
+### The key lists
 
 ```php
 'masking' => [
-    // case-insensitive substrings of a key. an empty list turns masking off
-    'keys' => [
-        'token', 'pass', 'auth', 'email', 'phone', '_name', 'lastname',
-        'firstname', 'surname', 'secret', 'private', 'apikey', 'api_key',
-        'api-key', 'credential', 'sign', 'cookie',
+    // a value under a matching key is replaced whole - nothing of it survives
+    'full_keys' => [
+        'token', 'pass', 'auth', 'secret', 'private', 'apikey',
+        'api_key', 'api-key', 'credential', 'sign', 'cookie',
+    ],
+
+    // a value under a matching key keeps two characters at each end
+    'partial_keys' => [
+        'email', 'phone', '_name', 'lastname', 'firstname', 'surname',
     ],
 ],
 ```
 
+Both lists are case-insensitive substrings of a key; two empty lists turn masking off.
 A key matches when it *contains* one of the substrings, so `customer_email`, `API_KEY`
-and `lastName` are all masked. A match on a parent key masks its subtree, so `auth`
-masks `auth.method` too.
+and `lastName` are all matched. A match on a parent key applies to its subtree, so
+`auth` covers `auth.method` too. A key in both lists is masked whole - the stricter
+list wins.
+
+The split is the point. A secret is worthless the moment any of it leaks, so
+`masking.full_keys` replaces the value entirely: `********`, a fixed width, so the length of
+the secret does not leak either. An address, a phone number or a name is mostly there
+to tell two records apart, so `masking.partial_keys` keeps two characters at each end -
+`john.doe@example.com` becomes `jo****************om`. **Never put a secret in
+`partial_keys`**: what is left is enough to correlate records, and for a short value it
+is enough to guess it.
 
 A value that is a **string containing a JSON document** is decoded, masked and encoded
 back: applications hand whole documents over as strings - an Eloquent `array` cast puts
 one straight into a model's changes - and the key carrying such a string says nothing
 about what is inside it. Only strings that start with `{` or `[` are parsed, and a
-document in which nothing matched is kept byte for byte rather than re-encoded.
+document in which nothing matched is kept byte for byte. A document in which something
+matched is re-encoded, so its escaping is normalised and a number too large or too
+precise for a PHP float loses precision.
+
+A value under a **`query_string`** key is masked parameter by parameter rather than as
+a whole, so `page=2&api_token=secret` keeps the page and loses the token. This is where
+the request watchers put a url's query string: a url is also a tag and a title, and
+nothing masks those.
 
 **The top level of a trace's `data` is never masked.** That level belongs to the
 watcher, not to the application: `connection_name`, `request`, `changes`, `context`,
 `bindings` and so on are a fixed structure, and the traced data starts one level in.
 Matching therefore begins inside it - `context.customer_email` and
 `job.data.customer_email` are masked, while `connection_name` is left readable even
-though it contains `_name`.
+though it contains `_name`. Watchers whose own top level used to hold application data
+were reshaped so this rule holds for them too: a cache value sits under its cache key
+(`cache.<key>.value`, so the key itself is what the list matches against), and mail
+addresses sit under `message` as `email`/`full_name` pairs.
 
-The list is deliberately blunt: it masks `sign` inside `assignee` and `auth` inside
+The lists are deliberately blunt: they mask `sign` inside `assignee` and `auth` inside
 `author`. Over-masking is the safe direction for telemetry; trim the list if a field you
 need is caught by it.
 
 ### Masked values
 
-Masked values keep basic types:
+Masked values keep basic types, so a masked payload stays shaped like the original:
+- `null` -> `null`
 - `bool` -> `false`
 - `int` -> `0`
 - `float` -> `0.0`
-- `string` -> masked string
-- arrays/objects -> masked string
+- `string` -> `********`, or two characters at each end for a partial mask
+- arrays/objects -> `********`
+
+An empty string is left as it is: a mask there would claim something had been hidden.
 
 ## Guzzle / HTTP Client tracing
 

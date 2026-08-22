@@ -185,7 +185,7 @@ class RequestWatcher implements WatcherInterface
      */
     protected function getCommonRequestData(Request $request): array
     {
-        $url = str_replace($request->root(), '', $request->fullUrl());
+        $url = $this->getUrlWithoutQuery($request);
 
         /**
          * for support for Laravel 10, 12
@@ -202,12 +202,16 @@ class RequestWatcher implements WatcherInterface
             $middlewares = null;
         }
 
+        $queryString = $request->getQueryString();
+
         return [
-            'ip_address'  => $request->ip(),
-            'uri'         => $this->prepareUrl($url),
-            'method'      => $request->method(),
-            'action'      => $action,
-            'middlewares' => $middlewares,
+            'ip_address'   => $request->ip(),
+            'uri'          => $this->prepareUrl($url),
+            'method'       => $request->method(),
+            'action'       => $action,
+            'middlewares'  => $middlewares,
+            'query'        => $request->query->all(),
+            'query_string' => $queryString === '' ? null : $queryString,
         ];
     }
 
@@ -216,11 +220,19 @@ class RequestWatcher implements WatcherInterface
      */
     protected function getPreTags(Request $request): array
     {
-        $url = str_replace($request->root(), '', $request->fullUrl());
-
         return [
-            $this->prepareUrl($url),
+            $this->prepareUrl($this->getUrlWithoutQuery($request)),
         ];
+    }
+
+    /**
+     * A url is carried as a tag and as `uri`, and nothing masks either of those. The
+     * query string is split off and carried as data instead: `query` is matched key
+     * by key and `query_string` parameter by parameter by the dispatcher job.
+     */
+    protected function getUrlWithoutQuery(Request $request): string
+    {
+        return str_replace($request->root(), '', $request->url());
     }
 
     /**

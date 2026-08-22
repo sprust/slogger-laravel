@@ -9,13 +9,20 @@ use SLoggerLaravel\Tests\Feature\BaseTestCase;
 
 class MaskHelperTest extends BaseTestCase
 {
-    public function testMaskValueKeepsFalsyValues(): void
+    public function testMaskValueKeepsWhatCannotHideAnything(): void
     {
         self::assertNull(MaskHelper::maskValue(null));
         self::assertSame('', MaskHelper::maskValue(''));
         self::assertSame(0, MaskHelper::maskValue(0));
-        self::assertSame('0', MaskHelper::maskValue('0'));
         self::assertFalse(MaskHelper::maskValue(false));
+    }
+
+    public function testMaskValueMasksAFalsyString(): void
+    {
+        // a falsy string is still a value: '0' under a `pin` key used to come out
+        // untouched because the early return tested truthiness
+        self::assertSame(MaskHelper::FULL_MASK, MaskHelper::maskValue('0'));
+        self::assertSame('*', MaskHelper::maskValuePartially('0'));
     }
 
     public function testMaskValueHandlesTypes(): void
@@ -40,18 +47,107 @@ class MaskHelperTest extends BaseTestCase
         self::assertSame('********', MaskHelper::maskValue((object) ['a' => 'b']));
     }
 
-    public function testMaskValueMasksStringsByLength(): void
+    public function testMaskValueLeavesNothingOfAString(): void
     {
-        self::assertSame('*', MaskHelper::maskValue('a'));
-        self::assertSame('a*', MaskHelper::maskValue('ab'));
-        self::assertSame('a*c', MaskHelper::maskValue('abc'));
-        self::assertSame('ab**ef', MaskHelper::maskValue('abcdef'));
+        // the whole point: a token is worthless the moment any of it leaks, and the
+        // width is fixed so the length of the secret does not leak either
+        self::assertSame(MaskHelper::FULL_MASK, MaskHelper::maskValue('a'));
+        self::assertSame(MaskHelper::FULL_MASK, MaskHelper::maskValue('abcdef'));
+        self::assertSame(
+            MaskHelper::FULL_MASK,
+            MaskHelper::maskValue('eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl')
+        );
     }
 
-    public function testMaskValueMasksASingleMultibyteCharacter(): void
+    public function testMaskValuePartiallyKeepsTwoCharactersAtEachEnd(): void
+    {
+        self::assertSame('jo****************om', MaskHelper::maskValuePartially('john.doe@example.com'));
+        self::assertSame('ab**ef', MaskHelper::maskValuePartially('abcdef'));
+    }
+
+    public function testMaskValuePartiallyKeepsNothingOfAShortString(): void
+    {
+        // below six characters, two at each end is most of the value
+        self::assertSame('*', MaskHelper::maskValuePartially('a'));
+        self::assertSame('**', MaskHelper::maskValuePartially('ab'));
+        self::assertSame('*****', MaskHelper::maskValuePartially('abcde'));
+    }
+
+    public function testMaskValuePartiallyCountsCharactersNotBytes(): void
     {
         // strlen() counts bytes, so a two-byte character used to slip through unmasked
-        self::assertSame('*', MaskHelper::maskValue('é'));
+        self::assertSame('*', MaskHelper::maskValuePartially('é'));
+        self::assertSame('Ив****ич', MaskHelper::maskValuePartially('Иванович'));
+    }
+
+    public function testMaskArrayByKeysPicksTheModeFromTheListTheKeyIsIn(): void
+    {
+        $data = [
+            'context' => [
+                'api_token' => 'tok-abcdefghijklmnop',
+                'email'     => 'john.doe@example.com',
+            ],
+        ];
+
+        $masked = MaskHelper::maskArrayByKeys($data, ['token'], ['email']);
+
+        self::assertSame(MaskHelper::FULL_MASK, $masked['context']['api_token']);
+        self::assertSame('jo****************om', $masked['context']['email']);
+    }
+
+    public function testMaskArrayByKeysMasksWholeWhenAKeyIsInBothLists(): void
+    {
+        $masked = MaskHelper::maskArrayByKeys(
+            ['context' => ['email_token' => 'tok-abcdefghij']],
+            ['token'],
+            ['email']
+        );
+
+        // the stricter list wins; a partial mask on a token is not a mask
+        self::assertSame(MaskHelper::FULL_MASK, $masked['context']['email_token']);
+    }
+
+    public function testMaskArrayByKeysMasksAQueryStringParameterByParameter(): void
+    {
+        $masked = MaskHelper::maskArrayByKeys(
+            [
+                'uri'          => '/api/orders',
+                'query_string' => 'page=2&api_token=tok-secret&sort=asc',
+            ],
+            ['token']
+        );
+
+        $parameters = [];
+
+        parse_str($masked['query_string'], $parameters);
+
+        // the shape of the request survives, the secret does not
+        self::assertSame('2', $parameters['page']);
+        self::assertSame('asc', $parameters['sort']);
+        self::assertSame(MaskHelper::FULL_MASK, $parameters['api_token']);
+    }
+
+    public function testMaskArrayByKeysKeepsAQueryStringWhenNothingMatches(): void
+    {
+        $data = [
+            'query_string' => 'page=2&sort=asc',
+        ];
+
+        // parse_str is lossy, so an untouched query string must come back byte for byte
+        self::assertSame($data, MaskHelper::maskArrayByKeys($data, ['token']));
+    }
+
+    public function testMaskArrayByKeysMasksAQueryStringAtTheTopLevelToo(): void
+    {
+        // watchers put `query_string` next to `uri`, in their own top-level structure,
+        // and the top level is where the depth rule would otherwise skip it
+        $masked = MaskHelper::maskArrayByKeys(
+            ['query_string' => 'api_token=tok-secret'],
+            ['token']
+        );
+
+        // the mask stays readable: `*` is legal in a query string
+        self::assertSame('api_token=' . MaskHelper::FULL_MASK, $masked['query_string']);
     }
 
     public function testMaskArrayByKeysLeavesTheTopLevelAlone(): void

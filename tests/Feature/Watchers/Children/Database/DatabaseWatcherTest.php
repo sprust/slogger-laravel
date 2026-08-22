@@ -32,7 +32,30 @@ class DatabaseWatcherTest extends BaseChildWatcherTestCase
         self::assertCount(1, $creating);
 
         self::assertSame(
-            [MaskHelper::maskValue('secret-value')],
+            [MaskHelper::FULL_MASK],
+            $creating[0]->data['bindings'] ?? null
+        );
+    }
+
+    /**
+     * Nothing here says which binding is a password and which is a page number, and
+     * length is not a signal either: a PIN, an OTP and an account number are short
+     * and numeric, and those were exactly what a length or a type check let through.
+     */
+    public function testShortAndNumericBindingsAreMaskedToo(): void
+    {
+        $this->registerWatcher(JobWatcher::class, null);
+
+        dispatch(static function (): void {
+            DB::select('SELECT ? as pin, ? as otp', ['0000', 4321]);
+        });
+
+        $creating = $this->dispatcher->findCreating(type: 'database');
+
+        self::assertCount(1, $creating);
+
+        self::assertSame(
+            [MaskHelper::FULL_MASK, 0],
             $creating[0]->data['bindings'] ?? null
         );
     }

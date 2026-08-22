@@ -40,6 +40,15 @@ class HttpClientWatcher implements WatcherInterface
     public function register(?array $config): void
     {
         /** @see GuzzleHandlerFactory */
+
+        // a request whose promise never settles (an abandoned pool, a job killed by
+        // the timeout signal) is closed by the processor's sweep, and neither
+        // response hook ever runs to clear its entry
+        $this->processor->onDetachedTraceInterrupted(
+            function (string $traceId): void {
+                unset($this->requests[$traceId]);
+            }
+        );
     }
 
     final public function handleRequest(RequestInterface $request): RequestInterface
@@ -159,7 +168,7 @@ class HttpClientWatcher implements WatcherInterface
         /** @var Carbon $startedAt */
         $startedAt = $requestData['started_at'];
 
-        $uri = (string) $request->getUri();
+        $uri = $this->getRequestUrl($request);
 
         $statusCode = $response->getStatusCode();
 
@@ -215,7 +224,7 @@ class HttpClientWatcher implements WatcherInterface
         /** @var Carbon $startedAt */
         $startedAt = $requestData['started_at'];
 
-        $uri = (string) $request->getUri();
+        $uri = $this->getRequestUrl($request);
 
         $this->processor->stopDetached(
             traceId: $traceId,
@@ -359,18 +368,38 @@ class HttpClientWatcher implements WatcherInterface
     }
 
     /**
+     * The query string is split out of the url and carried as data: a url is a tag
+     * and a title, and nothing masks those, while `query` is matched key by key and
+     * `query_string` parameter by parameter by the dispatcher job.
+     *
      * @return array<string, mixed>
      */
     protected function getCommonRequestData(RequestInterface $request): array
     {
+        $queryString = $request->getUri()->getQuery();
+
+        $query = [];
+
+        parse_str($queryString, $query);
+
         return [
-            'uri'    => $request->getUri(),
-            'method' => $request->getMethod(),
+            'uri'          => $this->getRequestUrl($request),
+            'method'       => $request->getMethod(),
+            'query'        => $query,
+            'query_string' => $queryString === '' ? null : $queryString,
         ];
+    }
+
+    /**
+     * The request url with its query string removed.
+     */
+    protected function getRequestUrl(RequestInterface $request): string
+    {
+        return (string) $request->getUri()->withQuery('');
     }
 
     protected function getRequestPath(RequestInterface $request): string
     {
-        return $request->getUri();
+        return (string) $request->getUri();
     }
 }
