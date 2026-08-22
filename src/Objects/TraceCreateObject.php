@@ -38,7 +38,7 @@ class TraceCreateObject
                 'tp'   => $this->type,
                 'st'   => $this->status,
                 'tgs'  => $this->tags,
-                'dt'   => json_encode($this->data, JSON_INVALID_UTF8_SUBSTITUTE),
+                'dt'   => json_encode($this->data),
                 'dur'  => $this->duration,
                 'mem'  => $this->memory,
                 'cpu'  => $this->cpu,

@@ -36,7 +36,7 @@ class TraceUpdateObject
                 'st'    => $this->status,
                 'pr'    => null, // the receiver does not read it yet
                 'tg'    => $this->tags,
-                'dt'    => json_encode($this->data, JSON_INVALID_UTF8_SUBSTITUTE),
+                'dt'    => json_encode($this->data),
                 'du'    => $this->duration,
                 'mem'   => $this->memory,
                 'cpu'   => $this->cpu,
