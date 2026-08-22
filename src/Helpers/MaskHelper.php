@@ -240,11 +240,14 @@ class MaskHelper
                 $maskedKey .= '#' . (count($result) + 1);
             }
 
-            // an object is walked as what it will be serialised into. Left alone it
-            // went straight past the masker and out through json_encode, which unfolds
-            // an Eloquent model through toArray() and a DTO through its public
-            // properties - so `Log::info('x', ['user' => $user])` shipped the token
-            // and the password hash in full
+            // an object is walked as what it will be serialised into.
+            //
+            // Neither shipped dispatcher can hand one over: the queue job encodes the
+            // batch in its constructor, so by the time masking runs the data is plain
+            // arrays, and the memory dispatcher does not mask. This is for a caller
+            // that reaches the masker directly - a custom dispatcher, an application
+            // masking something itself - where an object would otherwise pass through
+            // untouched and be unfolded later by whatever serialises it
             if (is_object($value) && !$value instanceof Closure) {
                 if ($value instanceof Stringable || method_exists($value, '__toString')) {
                     // its string form is what it means to a reader, and what the
@@ -754,11 +757,13 @@ class MaskHelper
     {
         $lowerKey = Str::lower($key);
 
-        if (self::matchesAny($lowerKey, $rules['needles'])) {
+        $components = self::keyComponents($key);
+
+        if (self::matchesAny($lowerKey, $components, $rules['needles'])) {
             return self::MODE_FULL;
         }
 
-        if (self::matchesAny($lowerKey, $rules['partialNeedles'])) {
+        if (self::matchesAny($lowerKey, $components, $rules['partialNeedles'])) {
             return self::MODE_PARTIAL;
         }
 
@@ -766,19 +771,58 @@ class MaskHelper
     }
 
     /**
-     * Whole-key matching with `*` wildcards, not substring search.
+     * Masks with `*` wildcards, matched against the whole key **and against each of
+     * its word components** - `db_pass`, `x-auth-user` and `apiToken` are split on
+     * `_`, `-`, `.`, `:` and camelCase boundaries.
      *
-     * A substring rule cannot be narrowed: `auth` also matched `author`, `pass`
-     * matched `passengers` and `compass`, and each of those took the whole value -
-     * and, through inheritance, its whole subtree. With masks the caller decides:
-     * `authorization` matches only itself, `*token*` matches `api_token` and
-     * `access_token`, `otp*` matches `otp_code` and not `crypto`.
+     * Substring search was too broad and could not be narrowed: `auth` also matched
+     * `author`, `pass` matched `passengers` and `compass`, and each match took the
+     * whole value and its subtree with it. Whole-key masks alone were too narrow:
+     * `auth` then stopped matching `php-auth-pw` - the plaintext password Symfony
+     * puts beside the base64 header - and `pass` stopped matching `db_pass`.
+     *
+     * Matching a component gives both: `pass` matches `db_pass` and `smtp_pass`,
+     * because `pass` is a word there, and not `passengers` or `compass`, where it is
+     * only a prefix. A mask that names a whole key still works as written, and one
+     * with wildcards is only ever matched against the whole key.
      *
      * @param string[] $needles
+     * @param string[] $components
      */
-    private static function matchesAny(string $lowerKey, array $needles): bool
+    private static function matchesAny(string $lowerKey, array $components, array $needles): bool
     {
-        return $needles !== [] && Str::is($needles, $lowerKey);
+        if ($needles === []) {
+            return false;
+        }
+
+        if (Str::is($needles, $lowerKey)) {
+            return true;
+        }
+
+        foreach ($components as $component) {
+            if (Str::is($needles, $component)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * The word components of a key, lowercased.
+     *
+     * @return string[]
+     */
+    private static function keyComponents(string $key): array
+    {
+        $split = preg_split('/[^\p{L}\p{N}]+|(?<=[\p{Ll}\p{N}])(?=\p{Lu})/u', $key) ?: [];
+
+        return array_values(
+            array_filter(
+                array_map(static fn(string $part): string => Str::lower($part), $split),
+                static fn(string $part): bool => $part !== ''
+            )
+        );
     }
 
     private static function mask(mixed $value, int $mode): mixed

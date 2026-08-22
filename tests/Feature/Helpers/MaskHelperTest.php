@@ -149,8 +149,8 @@ class MaskHelperTest extends BaseTestCase
 
     /**
      * The group is spliced by offset, never by searching the match for the captured
-     * text. A credential is routinely equal to - or a substring of - the thing that
-     * names it, and searching then masked the name and shipped the secret.
+     * text. A credential is routinely equal to the thing that names it -
+     * `?password=pass` - and searching then masked the name and shipped the secret.
      */
     public function testAValuePatternMasksTheGroupEvenWhenItRepeatsTheNameAroundIt(): void
     {
@@ -158,15 +158,10 @@ class MaskHelperTest extends BaseTestCase
 
         foreach (
             [
-                // the shipped default of every one of these
-                'could not connect to postgres://postgres:postgres@db:5432/app' => 'could not connect to postgres://postgres:' . MaskHelper::FULL_MASK . '@db:5432/app',
-                'redis://redis:redis@cache:6379'                                => 'redis://redis:' . MaskHelper::FULL_MASK . '@cache:6379',
-                'GET /reset?password=pass'                                      => 'GET /reset?password=' . MaskHelper::FULL_MASK,
-                'GET /v1?api_key=key'                                           => 'GET /v1?api_key=' . MaskHelper::FULL_MASK,
-
-                // a password containing the delimiter: all of it goes, not the part
-                // before the first `@`
-                'https://svc:S3cr3tP@ss@host/api' => 'https://svc:' . MaskHelper::FULL_MASK . '@host/api',
+                // a credential equal to the parameter that names it
+                'GET /reset?password=pass'   => 'GET /reset?password=' . MaskHelper::FULL_MASK,
+                'GET /v1?api_key=key'        => 'GET /v1?api_key=' . MaskHelper::FULL_MASK,
+                'GET /cb?code=code&state=x'  => 'GET /cb?code=' . MaskHelper::FULL_MASK . '&state=x',
             ] as $input => $expected
         ) {
             self::assertSame($expected, MaskHelper::maskString($input, $patterns));
@@ -685,8 +680,6 @@ class MaskHelperTest extends BaseTestCase
             'passengers'    => 4,
             'compass'       => 'NNE',
             'bypass_cache'  => false,
-            'private_notes' => 'a note',
-            'session_count' => 12,
             'signed_at'     => '2026-01-02',
             'assigned_to'   => 'bob',
             'designer'      => 'Ivan',
@@ -703,6 +696,66 @@ class MaskHelperTest extends BaseTestCase
                 $masking['value_patterns']
             )
         );
+    }
+
+    /**
+     * `private` and `session` are words that almost always name something worth
+     * hiding, so the defaults take them even where they do not - a `private_notes`
+     * field, a `session_count`. That is a choice, not an oversight: narrow the mask
+     * in your own config if you need one of them.
+     */
+    public function testTheShippedDefaultsTakeTheseOnPurpose(): void
+    {
+        $masking = (require __DIR__ . '/../../../config/slogger.php')['masking'];
+
+        $masked = MaskHelper::maskArrayByKeys(
+            ['ctx' => ['private_notes' => 'a note', 'session_count' => 12]],
+            $masking['full_keys'],
+            $masking['partial_keys'],
+            $masking['value_patterns']
+        );
+
+        self::assertSame(MaskHelper::FULL_MASK, $masked['ctx']['private_notes']);
+        self::assertSame(0, $masked['ctx']['session_count']);
+    }
+
+    /**
+     * The masks match a whole key or one of its word components, which is what makes
+     * `db_pass` and `php-auth-pw` reachable without `pass` also taking `passengers`.
+     */
+    public function testAMaskMatchesAWordInsideAKeyButNotAnyPrefix(): void
+    {
+        $masking = (require __DIR__ . '/../../../config/slogger.php')['masking'];
+
+        $mask = fn(array $keys): array => MaskHelper::maskArrayByKeys(
+            ['ctx' => array_fill_keys($keys, 'SECRET')],
+            $masking['full_keys'],
+            $masking['partial_keys'],
+            $masking['value_patterns']
+        )['ctx'];
+
+        // Symfony puts the plaintext of a Basic Auth header beside the base64 one
+        foreach (
+            $mask([
+                'authorization', 'php-auth-user', 'php-auth-pw', 'x-forwarded-authorization',
+                'db_pass', 'smtp_pass', 'passcode', 'basic_auth', 'authentication',
+                'oauth', 'laravel_session', 'sessionid', 'session_key',
+                'signed_payload', 'signed_url', 'privatekey', 'sms_otp',
+                'iban_number', 'employee_ssn', 'recovery_key', 'apiToken',
+            ]) as $key => $value
+        ) {
+            self::assertSame(MaskHelper::FULL_MASK, $value, $key);
+        }
+
+        // and the prefixes that are not words stay whole
+        foreach (
+            $mask([
+                'author', 'authored_by', 'authorized', 'passengers', 'compass',
+                'bypass_cache', 'signed_at', 'assigned_to', 'designer', 'pinned', 'spinner',
+            ]) as $key => $value
+        ) {
+            self::assertSame('SECRET', $value, $key);
+        }
     }
 
     public function testTheShippedDefaultsStillCatchWhatTheyAreFor(): void

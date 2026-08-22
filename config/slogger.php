@@ -78,19 +78,51 @@ return [
         //
         // a value under a matching key is replaced whole - nothing of it survives.
         //
-        // masks, not substrings: `authorization` matches only itself, `*token*`
-        // matches `api_token` and `access_token`, `otp*` matches `otp_code` and not
-        // `crypto`. Matching is against the key alone, case-insensitively; a match on
+        // a mask is matched against the whole key and against each of its word
+        // components (`db_pass`, `x-auth-user`, `apiToken` split on `_`, `-`, `.`,
+        // `:` and camelCase). so `pass` covers `db_pass` and not `passengers`, and
+        // `*token*` covers `api_token` and `tokenizer`. case-insensitive; a match on
         // a key covers everything under it.
         'full_keys' => [
+            // a word here matches a whole key or one of its components, so `auth`
+            // covers `basic_auth`, `x-auth-user` and `php-auth-pw` - and not `author`
             'auth',
+            'authentication',
             'authorization',
-            'proxy-authorization',
-            'www-authenticate',
+            'oauth',
+            'token',
+            'password',
+            'passwd',
+            'pass',
+            'passcode',
+            'passphrase',
+            'pw',
+            'secret',
+            'apikey',
+            'credential',
+            'credentials',
+            'cookie',
+            'cookies',
+            'signature',
+            // not bare `signed`: it would take `signed_at` and `signed_by` too
+            'signed_payload',
+            'signed_request',
+            'signed_url',
+            'private',
+            'privatekey',
+            'session',
+            'sessionid',
+            'otp',
+            'cvv',
+            'cvc',
+            'pin',
+            'iban',
+            'ssn',
+            'recovery',
+
+            // and a wildcard matches the whole key, for names that are one word
             '*token*',
             '*password*',
-            '*passwd*',
-            'passphrase',
             '*secret*',
             '*api_key*',
             '*apikey*',
@@ -98,15 +130,8 @@ return [
             '*credential*',
             '*cookie*',
             '*signature*',
-            '*private_key*',
-            'session',
             '*session_id*',
-            'otp*',
-            'cvv',
-            'cvc',
-            'iban',
             '*card_number*',
-            'ssn',
             '*recovery_code*',
         ],
 
@@ -114,17 +139,20 @@ return [
         // records still look different. these identify a person rather than
         // authenticate one - never put a secret here.
         'partial_keys' => [
+            'email',
+            'phone',
+            'recipient',
+            'name',
+            'username',
+            'surname',
+            'firstname',
+            'lastname',
+
             '*email*',
             '*phone*',
             '*recipient*',
-            'username',
-            'first_name',
-            'last_name',
-            'full_name',
-            'middle_name',
             '*firstname*',
             '*lastname*',
-            'surname',
         ],
 
         // matched against the value instead of the key, and masked in place, keeping
@@ -137,12 +165,16 @@ return [
         // narrow ones come before the broad one. a pattern with a capture group masks
         // the group and keeps the rest.
         'value_patterns' => [
-            // credentials written into a url's authority: https://user:secret@host
-            'url_credentials' => '/\/\/[^\/\s:@]+:([^\/\s]+)@/',
-
             // a secret written into a url, wherever that url turns up: a Location
             // header, an exception message, a log line
-            'url_secret' => '/[?&][\w.-]*(?:token|key|secret|pass|auth|code|sig)[\w.-]*=([^&\s"\'<>]+)/i',
+            // the parameter name is matched as a word, not as a substring: an
+            // unbounded alternation took `?author=`, `?design=`, `?monkey=` and
+            // `?country_code=` with it
+            'url_secret' => '/[?&](?:[\w.-]*[_-])?(?:token|apikey|api_key|api-key|secret|password|passwd|auth|authorization|signature|credential|session|sessionid)(?:[_-][\w.-]*)?=([^&\s"\'<>]+)/i',
+
+            // an oauth authorization code, matched as a whole parameter name only:
+            // with affixes allowed it would also take `country_code` and `zip_code`
+            'url_oauth_code' => '/[?&]code=([^&\s"\'<>]+)/i',
 
             'email' => '/[\w.+-]+@[\w-]+\.[\w.-]*[\w-]/u',
         ],

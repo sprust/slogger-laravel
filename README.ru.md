@@ -383,39 +383,133 @@ htmx- или Turbo-эндпоинт, — это валидная разметк�
 
 ```php
 'masking' => [
-    // значение под подходящим ключом заменяется целиком — от него не остаётся ничего
+    // masks matched against a trace data key. the top level of a trace's data is
+    // the watcher's own structure and is never matched; matching starts one level
+    // in, where the traced data actually is.
+    //
+    // a value under a matching key is replaced whole - nothing of it survives.
+    //
+    // a mask is matched against the whole key and against each of its word
+    // components (`db_pass`, `x-auth-user`, `apiToken` split on `_`, `-`, `.`,
+    // `:` and camelCase). so `pass` covers `db_pass` and not `passengers`, and
+    // `*token*` covers `api_token` and `tokenizer`. case-insensitive; a match on
+    // a key covers everything under it.
     'full_keys' => [
-        'auth', 'authorization', '*token*', '*password*', '*secret*',
-        '*api_key*', '*apikey*', '*credential*', '*cookie*', '*signature*',
-        'session', 'otp*', 'cvv', 'iban', '*card_number*', 'ssn',
+        // a word here matches a whole key or one of its components, so `auth`
+        // covers `basic_auth`, `x-auth-user` and `php-auth-pw` - and not `author`
+        'auth',
+        'authentication',
+        'authorization',
+        'oauth',
+        'token',
+        'password',
+        'passwd',
+        'pass',
+        'passcode',
+        'passphrase',
+        'pw',
+        'secret',
+        'apikey',
+        'credential',
+        'credentials',
+        'cookie',
+        'cookies',
+        'signature',
+        // not bare `signed`: it would take `signed_at` and `signed_by` too
+        'signed_payload',
+        'signed_request',
+        'signed_url',
+        'private',
+        'privatekey',
+        'session',
+        'sessionid',
+        'otp',
+        'cvv',
+        'cvc',
+        'pin',
+        'iban',
+        'ssn',
+        'recovery',
+
+        // and a wildcard matches the whole key, for names that are one word
+        '*token*',
+        '*password*',
+        '*secret*',
+        '*api_key*',
+        '*apikey*',
+        '*api-key*',
+        '*credential*',
+        '*cookie*',
+        '*signature*',
+        '*session_id*',
+        '*card_number*',
+        '*recovery_code*',
     ],
 
-    // значение под подходящим ключом сохраняет по два символа с каждого края
+    // a value under a matching key keeps two characters at each end, so two
+    // records still look different. these identify a person rather than
+    // authenticate one - never put a secret here.
     'partial_keys' => [
-        '*email*', '*phone*', '*recipient*', 'username',
-        'first_name', 'last_name', 'full_name', '*lastname*', 'surname',
+        'email',
+        'phone',
+        'recipient',
+        'name',
+        'username',
+        'surname',
+        'firstname',
+        'lastname',
+
+        '*email*',
+        '*phone*',
+        '*recipient*',
+        '*firstname*',
+        '*lastname*',
     ],
 
-    // сверяются со значением, а не с ключом, и маскируются по месту
+    // matched against the value instead of the key, and masked in place, keeping
+    // the rest of the string readable. some things identify a person or a secret
+    // by their own shape wherever they turn up - an address inside a notifiable
+    // string, a key inside an exception message - and no key name points at those.
+    // an invalid pattern is ignored, not fatal.
+    //
+    // order matters: the first pattern to match a stretch of text wins, so the
+    // narrow ones come before the broad one. a pattern with a capture group masks
+    // the group and keeps the rest.
     'value_patterns' => [
+        // a secret written into a url, wherever that url turns up: a Location
+        // header, an exception message, a log line
+        // the parameter name is matched as a word, not as a substring: an
+        // unbounded alternation took `?author=`, `?design=`, `?monkey=` and
+        // `?country_code=` with it
+        'url_secret' => '/[?&](?:[\w.-]*[_-])?(?:token|apikey|api_key|api-key|secret|password|passwd|auth|authorization|signature|credential|session|sessionid)(?:[_-][\w.-]*)?=([^&\s"\'<>]+)/i',
+
+        // an oauth authorization code, matched as a whole parameter name only:
+        // with affixes allowed it would also take `country_code` and `zip_code`
+        'url_oauth_code' => '/[?&]code=([^&\s"\'<>]+)/i',
+
         'email' => '/[\w.+-]+@[\w-]+\.[\w.-]*[\w-]/u',
     ],
 ],
 ```
 
-Оба списка — это **маски, которые сверяются с ключом целиком**, без учёта регистра, где
-`*` — подстановочный знак:
+Оба списка — это **маски**, без учёта регистра, где `*` — подстановочный знак. Маска
+сверяется с ключом целиком **и с каждым его словом-компонентом**: ключ разбивается по
+`_`, `-`, `.`, `:` и границам camelCase:
 
 | Маска | Подходит | Не подходит |
 | --- | --- | --- |
-| `authorization` | `authorization`, `Authorization` | `authorization_code` |
-| `*token*` | `api_token`, `access_token`, `tokenizer` | `stock` |
-| `otp*` | `otp`, `otp_code` | `crypto` |
+| `pass` | `pass`, `db_pass`, `smtp_pass`, `pass_hash` | `passengers`, `compass`, `bypass_cache` |
+| `auth` | `auth`, `basic_auth`, `x-auth-user`, `php-auth-pw` | `author`, `authorized` |
+| `token` | `token`, `api_token`, `apiToken` | `tokenizer` |
+| `*token*` | `api_token`, `tokenizer` | `stock` |
 
-Это не поиск подстроки. Подстрочное правило нельзя сузить, если оно оказалось слишком
-широким: `auth` подходил и к `author`, `pass` — к `passengers` и `compass`, и каждое
-такое совпадение забирало значение целиком, а вместе с ним и всё поддерево. С масками
-ширину выбирает тот, кто пишет правило.
+Ни поиск подстроки, ни сверка с ключом целиком по отдельности не годятся. Подстрочное
+правило нельзя сузить, когда оно оказалось слишком широким: `auth` подходил и к
+`author`, и каждое совпадение забирало значение целиком, а с ним и всё поддерево. А
+сверку с ключом целиком нельзя расширить, не вернув ложные срабатывания звёздочками:
+`auth` тогда перестал подходить к `php-auth-pw` — открытому паролю, который Symfony
+кладёт рядом с base64-заголовком. Сверка по компонентам даёт и то, и другое, а маска со
+звёздочками остаётся для имён, состоящих из одного слова.
 
 Совпадение на родительском ключе распространяется на всё поддерево: `auth` покрывает и
 `auth.method` — родитель при этом должен быть уровнем ниже верхнего, потому что верхний

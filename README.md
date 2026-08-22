@@ -383,39 +383,133 @@ and a PIN, an OTP and an account number are all short and numeric.
 
 ```php
 'masking' => [
-    // a value under a matching key is replaced whole - nothing of it survives
+    // masks matched against a trace data key. the top level of a trace's data is
+    // the watcher's own structure and is never matched; matching starts one level
+    // in, where the traced data actually is.
+    //
+    // a value under a matching key is replaced whole - nothing of it survives.
+    //
+    // a mask is matched against the whole key and against each of its word
+    // components (`db_pass`, `x-auth-user`, `apiToken` split on `_`, `-`, `.`,
+    // `:` and camelCase). so `pass` covers `db_pass` and not `passengers`, and
+    // `*token*` covers `api_token` and `tokenizer`. case-insensitive; a match on
+    // a key covers everything under it.
     'full_keys' => [
-        'auth', 'authorization', '*token*', '*password*', '*secret*',
-        '*api_key*', '*apikey*', '*credential*', '*cookie*', '*signature*',
-        'session', 'otp*', 'cvv', 'iban', '*card_number*', 'ssn',
+        // a word here matches a whole key or one of its components, so `auth`
+        // covers `basic_auth`, `x-auth-user` and `php-auth-pw` - and not `author`
+        'auth',
+        'authentication',
+        'authorization',
+        'oauth',
+        'token',
+        'password',
+        'passwd',
+        'pass',
+        'passcode',
+        'passphrase',
+        'pw',
+        'secret',
+        'apikey',
+        'credential',
+        'credentials',
+        'cookie',
+        'cookies',
+        'signature',
+        // not bare `signed`: it would take `signed_at` and `signed_by` too
+        'signed_payload',
+        'signed_request',
+        'signed_url',
+        'private',
+        'privatekey',
+        'session',
+        'sessionid',
+        'otp',
+        'cvv',
+        'cvc',
+        'pin',
+        'iban',
+        'ssn',
+        'recovery',
+
+        // and a wildcard matches the whole key, for names that are one word
+        '*token*',
+        '*password*',
+        '*secret*',
+        '*api_key*',
+        '*apikey*',
+        '*api-key*',
+        '*credential*',
+        '*cookie*',
+        '*signature*',
+        '*session_id*',
+        '*card_number*',
+        '*recovery_code*',
     ],
 
-    // a value under a matching key keeps two characters at each end
+    // a value under a matching key keeps two characters at each end, so two
+    // records still look different. these identify a person rather than
+    // authenticate one - never put a secret here.
     'partial_keys' => [
-        '*email*', '*phone*', '*recipient*', 'username',
-        'first_name', 'last_name', 'full_name', '*lastname*', 'surname',
+        'email',
+        'phone',
+        'recipient',
+        'name',
+        'username',
+        'surname',
+        'firstname',
+        'lastname',
+
+        '*email*',
+        '*phone*',
+        '*recipient*',
+        '*firstname*',
+        '*lastname*',
     ],
 
-    // matched against the value instead of the key, and masked in place
+    // matched against the value instead of the key, and masked in place, keeping
+    // the rest of the string readable. some things identify a person or a secret
+    // by their own shape wherever they turn up - an address inside a notifiable
+    // string, a key inside an exception message - and no key name points at those.
+    // an invalid pattern is ignored, not fatal.
+    //
+    // order matters: the first pattern to match a stretch of text wins, so the
+    // narrow ones come before the broad one. a pattern with a capture group masks
+    // the group and keeps the rest.
     'value_patterns' => [
+        // a secret written into a url, wherever that url turns up: a Location
+        // header, an exception message, a log line
+        // the parameter name is matched as a word, not as a substring: an
+        // unbounded alternation took `?author=`, `?design=`, `?monkey=` and
+        // `?country_code=` with it
+        'url_secret' => '/[?&](?:[\w.-]*[_-])?(?:token|apikey|api_key|api-key|secret|password|passwd|auth|authorization|signature|credential|session|sessionid)(?:[_-][\w.-]*)?=([^&\s"\'<>]+)/i',
+
+        // an oauth authorization code, matched as a whole parameter name only:
+        // with affixes allowed it would also take `country_code` and `zip_code`
+        'url_oauth_code' => '/[?&]code=([^&\s"\'<>]+)/i',
+
         'email' => '/[\w.+-]+@[\w-]+\.[\w.-]*[\w-]/u',
     ],
 ],
 ```
 
-Both lists are **masks matched against the whole key**, case-insensitively, with `*`
-as a wildcard:
+Both lists are **masks**, case-insensitive, with `*` as a wildcard. A mask is matched
+against the whole key **and against each of its word components** — a key is split on
+`_`, `-`, `.`, `:` and camelCase boundaries:
 
 | Mask | Matches | Does not match |
 | --- | --- | --- |
-| `authorization` | `authorization`, `Authorization` | `authorization_code` |
-| `*token*` | `api_token`, `access_token`, `tokenizer` | `stock` |
-| `otp*` | `otp`, `otp_code` | `crypto` |
+| `pass` | `pass`, `db_pass`, `smtp_pass`, `pass_hash` | `passengers`, `compass`, `bypass_cache` |
+| `auth` | `auth`, `basic_auth`, `x-auth-user`, `php-auth-pw` | `author`, `authorized` |
+| `token` | `token`, `api_token`, `apiToken` | `tokenizer` |
+| `*token*` | `api_token`, `tokenizer` | `stock` |
 
-Not a substring search. A substring rule cannot be narrowed once it is too broad:
-`auth` also matched `author`, `pass` matched `passengers` and `compass`, and each
-match took the whole value - and, through inheritance, the whole subtree under it.
-With masks, the breadth is the caller's choice.
+Neither a substring search nor a whole-key match on its own would do. A substring rule
+cannot be narrowed once it is too broad: `auth` also took `author`, and each match took
+the whole value and, through inheritance, the subtree under it. A whole-key rule cannot
+be widened without wildcards that bring the false positives back: `auth` then stopped
+matching `php-auth-pw` — the plaintext password Symfony puts beside the base64 header.
+Matching a component gives both, and a mask with wildcards is still available for names
+that are one word.
 
 A match on a parent key applies to its subtree, so `auth` covers `auth.method` too -
 that needs the parent to be one level in, since the top level is not matched at all
