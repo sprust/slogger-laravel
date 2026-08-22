@@ -31,6 +31,17 @@ class TraceDataComplementer
 
     private readonly int $maxDepth;
 
+    /**
+     * Callbacks registered for the whole process, evaluated per trace.
+     *
+     * Process-wide is right for these and wrong for plain values: a callback
+     * registered in a service provider has to survive the first job of a
+     * `queue:work` worker, and a value belonging to that job must not.
+     *
+     * @var array<string, Closure>
+     */
+    private array $providers = [];
+
     public function __construct(
         private readonly Application $app,
         WatchersConfig $watchersConfig,
@@ -44,13 +55,29 @@ class TraceDataComplementer
     }
 
     /**
-     * Adds a value to every trace this process records. It lands under
+     * Adds a value to every trace of the current unit of work. It lands under
      * `__add`, one level in, which is where the dispatcher job's key list can
      * reach it - the top level of a trace's data belongs to the watcher and is never
      * masked, and this is application data.
+     *
+     * A callback and a value are kept apart on purpose. A callback is a rule for
+     * computing the value - `fn() => auth()->id()` - so it is registered once, for
+     * the process, and evaluated separately for every trace. A value is this unit's
+     * own: a `user_id` the next request does not have, and it is dropped when the
+     * unit ends.
      */
     public function add(string $key, mixed $value): void
     {
+        if ($value instanceof Closure) {
+            $this->providers[$key] = $value;
+
+            // a value left under this key earlier would otherwise shadow the
+            // callback that has just replaced it
+            unset($this->scopeResolver->current()->additional[$key]);
+
+            return;
+        }
+
         $this->scopeResolver->current()->additional[$key] = $value;
     }
 
@@ -102,7 +129,12 @@ class TraceDataComplementer
 
         $data['__trace'] = $trace;
 
-        $configured = $this->scopeResolver->current()->additional;
+        // this unit's own values win: a callback registered for the process is the
+        // general rule, and a value set here is this unit saying otherwise
+        $configured = [
+            ...$this->providers,
+            ...$this->scopeResolver->current()->additional,
+        ];
 
         if (!$configured) {
             return;

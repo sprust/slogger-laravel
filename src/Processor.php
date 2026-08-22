@@ -423,6 +423,8 @@ class Processor
             // its own stack and an inherited parent, and clearing it there would drop
             // every child trace pushed afterwards, in silence
             $this->stopInterruptedDetached(ownerTraceId: null);
+
+            $scope->endUnitOfWork();
         }
 
         $this->dispatchStopTrace(
