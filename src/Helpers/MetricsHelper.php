@@ -50,7 +50,17 @@ class MetricsHelper
             return null;
         }
 
-        return round(($cpuAvg[0] / self::getCpuCount()) * 100, 2);
+        return self::normaliseCpuPercent($cpuAvg[0], self::getCpuCount());
+    }
+
+    /**
+     * A load average as a percentage of capacity: one core fully busy is 100% on a
+     * one-core machine and 25% on four. The previous `loadavg * 10` meant something
+     * only on a ten-core box.
+     */
+    public static function normaliseCpuPercent(float $loadAverage, int $cpuCount): float
+    {
+        return round(($loadAverage / max(1, $cpuCount)) * 100, 2);
     }
 
     private static function getMemoryLimitInMb(): false|float

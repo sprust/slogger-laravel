@@ -63,32 +63,24 @@ class MetricsHelperTest extends BaseTestCase
 
     public function testGetCpuAvgPercentIsNormalisedByCoreCount(): void
     {
-        $cores = $this->getCpuCount();
-
-        // pin the relationship, not the arithmetic: re-deriving the helper's own
-        // formula here would agree with an implementation that is wrong in the same
-        // way. A load average equal to the core count is a fully busy machine, which
-        // is 100% by definition - the old `loadavg * 10` said 100% only on a ten-core
-        // box and was meaningless everywhere else
-        self::assertSame(100.0, $this->percentFor((float) $cores, $cores));
-        self::assertSame(50.0, $this->percentFor($cores / 2, $cores));
-        self::assertSame(0.0, $this->percentFor(0.0, $cores));
+        // call the helper, do not re-derive its arithmetic here: a test that
+        // reimplements the formula agrees with an implementation that is wrong in the
+        // same way, and the old `loadavg * 10` passed one of those
+        self::assertSame(100.0, MetricsHelper::normaliseCpuPercent(4.0, 4));
+        self::assertSame(50.0, MetricsHelper::normaliseCpuPercent(2.0, 4));
+        self::assertSame(0.0, MetricsHelper::normaliseCpuPercent(0.0, 4));
 
         // an overloaded machine is allowed to exceed 100
-        self::assertSame(200.0, $this->percentFor((float) ($cores * 2), $cores));
+        self::assertSame(200.0, MetricsHelper::normaliseCpuPercent(8.0, 4));
+
+        // the same load means different things on machines of different size, which
+        // is the whole point of normalising
+        self::assertSame(400.0, MetricsHelper::normaliseCpuPercent(4.0, 1));
 
         $value = MetricsHelper::getCpuAvgPercent();
 
         self::assertNotNull($value);
         self::assertGreaterThanOrEqual(0, $value);
-    }
-
-    /**
-     * The helper's normalisation, applied to a load average chosen by the test.
-     */
-    private function percentFor(float $loadAverage, int $cores): float
-    {
-        return round(($loadAverage / $cores) * 100, 2);
     }
 
     /**
@@ -132,14 +124,5 @@ class MetricsHelperTest extends BaseTestCase
 
         $reflection->getProperty('memoryLimitInMb')->setValue(null, null);
         $reflection->getProperty('cpuCount')->setValue(null, null);
-    }
-
-    private function getCpuCount(): int
-    {
-        $cpuInfo = file_get_contents('/proc/cpuinfo');
-
-        self::assertIsString($cpuInfo);
-
-        return max(1, preg_match_all('/^processor\s*:/mi', $cpuInfo));
     }
 }

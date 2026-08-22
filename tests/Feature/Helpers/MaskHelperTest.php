@@ -147,6 +147,32 @@ class MaskHelperTest extends BaseTestCase
         );
     }
 
+    /**
+     * The group is spliced by offset, never by searching the match for the captured
+     * text. A credential is routinely equal to - or a substring of - the thing that
+     * names it, and searching then masked the name and shipped the secret.
+     */
+    public function testAValuePatternMasksTheGroupEvenWhenItRepeatsTheNameAroundIt(): void
+    {
+        $patterns = (require __DIR__ . '/../../../config/slogger.php')['masking']['value_patterns'];
+
+        foreach (
+            [
+                // the shipped default of every one of these
+                'could not connect to postgres://postgres:postgres@db:5432/app' => 'could not connect to postgres://postgres:' . MaskHelper::FULL_MASK . '@db:5432/app',
+                'redis://redis:redis@cache:6379'                                => 'redis://redis:' . MaskHelper::FULL_MASK . '@cache:6379',
+                'GET /reset?password=pass'                                      => 'GET /reset?password=' . MaskHelper::FULL_MASK,
+                'GET /v1?api_key=key'                                           => 'GET /v1?api_key=' . MaskHelper::FULL_MASK,
+
+                // a password containing the delimiter: all of it goes, not the part
+                // before the first `@`
+                'https://svc:S3cr3tP@ss@host/api' => 'https://svc:' . MaskHelper::FULL_MASK . '@host/api',
+            ] as $input => $expected
+        ) {
+            self::assertSame($expected, MaskHelper::maskString($input, $patterns));
+        }
+    }
+
     public function testMaskArrayByKeysLooksInsideXmlDocuments(): void
     {
         $masked = MaskHelper::maskArrayByKeys(
@@ -227,6 +253,51 @@ class MaskHelperTest extends BaseTestCase
 
         // one that never had a declaration must not gain one
         self::assertStringStartsWith('<root>', $without['payload']);
+    }
+
+    public function testAByteOrderMarkDoesNotHideADocument(): void
+    {
+        // a BOM is legal before the declaration and is not whitespace, so ltrim leaves
+        // it - and then the document does not start with `<` and is never masked
+        $masked = MaskHelper::maskArrayByKeys(
+            ['payload' => "\xEF\xBB\xBF<r><token>abc</token></r>"],
+            ['token']
+        );
+
+        self::assertStringContainsString('<token>' . MaskHelper::FULL_MASK . '</token>', $masked['payload']);
+    }
+
+    public function testADoctypeAfterTheDeclarationIsNotMissed(): void
+    {
+        // a real document with a DTD starts with `<?xml`, so a check anchored at byte
+        // zero never fired
+        $masked = MaskHelper::maskArrayByKeys(
+            ['payload' => '<?xml version="1.0"?><!DOCTYPE r SYSTEM "http://elsewhere/x.dtd"><r><a>&e;</a>'],
+            ['token']
+        );
+
+        self::assertSame(MaskHelper::FULL_MASK, $masked['payload']);
+    }
+
+    public function testABareSignDoesNotSwallowOrdinaryWords(): void
+    {
+        $keys = (require __DIR__ . '/../../../config/slogger.php')['masking']['full_keys'];
+
+        $masked = MaskHelper::maskArrayByKeys(
+            [
+                'cache' => [
+                    'design:home'   => ['value' => 'a page'],
+                    'assignee:42'   => ['value' => 'a name'],
+                    'signature:abc' => ['value' => 'a secret'],
+                ],
+            ],
+            $keys
+        );
+
+        // `sign` used to match all three and take the value with it
+        self::assertSame('a page', $masked['cache']['design:home']['value']);
+        self::assertSame('a name', $masked['cache']['assignee:42']['value']);
+        self::assertSame(MaskHelper::FULL_MASK, $masked['cache']['signature:abc']['value']);
     }
 
     public function testMaskArrayByKeysLeavesBrokenXmlAlone(): void

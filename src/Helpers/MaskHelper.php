@@ -314,40 +314,65 @@ class MaskHelper
     private static function maskByValuePatterns(string $value, array $patterns): string
     {
         foreach ($patterns as $pattern) {
-            $replaced = @preg_replace_callback(
-                $pattern,
-                static function (array $matches): string {
-                    /** @var string $matched */
-                    $matched = $matches[0];
-
-                    // a pattern with a capture group masks the group and keeps the
-                    // rest: `?api_key=SECRET` should lose the secret, not the name of
-                    // the parameter that gives it away
-                    if (isset($matches[1]) && $matches[1] !== '') {
-                        /** @var string $maskedGroup */
-                        $maskedGroup = self::mask($matches[1], self::MODE_FULL);
-
-                        $position = strpos($matched, $matches[1]);
-
-                        return $position === false
-                            ? $maskedGroup
-                            : substr_replace($matched, $maskedGroup, $position, strlen($matches[1]));
-                    }
-
-                    /** @var string $masked */
-                    $masked = self::mask($matched, self::MODE_PARTIAL);
-
-                    return $masked;
-                },
-                $value
-            );
-
-            if (is_string($replaced)) {
-                $value = $replaced;
-            }
+            $value = self::applyValuePattern($value, $pattern);
         }
 
         return $value;
+    }
+
+    /**
+     * Rebuilds the string around what the pattern found.
+     *
+     * By offset, never by searching the match for the captured text: a credential is
+     * routinely equal to - or a substring of - the thing that names it
+     * (`postgres:postgres@`, `?password=pass`), and searching found the first
+     * occurrence, masking the name and shipping the secret.
+     */
+    private static function applyValuePattern(string $value, string $pattern): string
+    {
+        $matches = [];
+
+        $found = @preg_match_all($pattern, $value, $matches, PREG_OFFSET_CAPTURE);
+
+        if (!$found) {
+            return $value;
+        }
+
+        $result = '';
+        $cursor = 0;
+
+        foreach ($matches[0] as $index => $whole) {
+            $matched       = (string) $whole[0];
+            $matchedOffset = (int) $whole[1];
+
+            if ($matchedOffset < $cursor) {
+                continue;
+            }
+
+            // a pattern with a capture group masks the group and keeps the rest:
+            // `?api_key=SECRET` should lose the secret, not the name that gives it away
+            $group = $matches[1][$index] ?? null;
+
+            if (is_array($group) && $group[0] !== '' && $group[1] >= $matchedOffset) {
+                /** @var string $maskedGroup */
+                $maskedGroup = self::mask($group[0], self::MODE_FULL);
+
+                $groupOffset = (int) $group[1];
+
+                $replacement = substr($matched, 0, $groupOffset - $matchedOffset)
+                    . $maskedGroup
+                    . substr($matched, $groupOffset - $matchedOffset + strlen($group[0]));
+            } else {
+                /** @var string $replacement */
+                $replacement = self::mask($matched, self::MODE_PARTIAL);
+            }
+
+            $result .= substr($value, $cursor, $matchedOffset - $cursor) . $replacement;
+
+            $cursor = $matchedOffset + strlen($matched);
+        }
+
+        return $result . substr($value, $cursor);
     }
 
     /**
@@ -442,7 +467,7 @@ class MaskHelper
             // a fragment of prose that happens to start with `<`, and not fine for a
             // document carrying a DTD: libxml refuses an entity bomb outright, and
             // returning it untouched would ship whatever its declarations hold
-            return stripos($trimmed, '<!DOCTYPE') === 0 || str_contains($trimmed, '<!ENTITY')
+            return stripos($trimmed, '<!DOCTYPE') !== false || stripos($trimmed, '<!ENTITY') !== false
                 ? self::FULL_MASK
                 : $value;
         }

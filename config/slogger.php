@@ -87,7 +87,10 @@ return [
             'api_key',
             'api-key',
             'credential',
-            'sign',
+            // not bare `sign`: it matches design, assign, campaign, signal - and a
+            // match takes the whole value with it
+            'signature',
+            'signed',
             'cookie',
             'session',
             'otp',
@@ -122,7 +125,7 @@ return [
         // the group and keeps the rest.
         'value_patterns' => [
             // credentials written into a url's authority: https://user:secret@host
-            'url_credentials' => '/\/\/[^\/\s:@]+:([^\/\s@]+)@/',
+            'url_credentials' => '/\/\/[^\/\s:@]+:([^\/\s]+)@/',
 
             // a secret written into a url, wherever that url turns up: a Location
             // header, an exception message, a log line

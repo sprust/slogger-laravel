@@ -38,9 +38,21 @@ class BodyDecoder
     public const MAX_BODY_BYTES = 1000000;
 
     /**
+     * Content types that carry XML. Anything else is not recorded as XML, however
+     * well it parses: an HTML fragment - what an htmx or Turbo endpoint answers with
+     * - is well-formed markup carrying a CSRF token in `value="…"`, which the masker
+     * matches names against and therefore cannot reach.
+     */
+    private const XML_CONTENT_TYPES = [
+        'application/xml',
+        'text/xml',
+        'application/soap+xml',
+    ];
+
+    /**
      * @return array<int|string, mixed>
      */
-    public static function decode(string $contents): array
+    public static function decode(string $contents, ?string $contentType = null): array
     {
         if (trim($contents) === '') {
             return [];
@@ -61,7 +73,7 @@ class BodyDecoder
             return $decoded;
         }
 
-        if (!self::isXml($contents)) {
+        if (!self::isXmlContentType($contentType) || !self::isXml($contents)) {
             return [];
         }
 
@@ -78,6 +90,26 @@ class BodyDecoder
         return [
             self::XML_KEY => $contents,
         ];
+    }
+
+    /**
+     * Whether the sender said this is XML. An absent content type is not a yes: a
+     * body nobody labelled is a body nobody promised anything about.
+     */
+    public static function isXmlContentType(?string $contentType): bool
+    {
+        if (is_null($contentType) || $contentType === '') {
+            return false;
+        }
+
+        $type = Str::lower(trim(Str::before($contentType, ';')));
+
+        if (in_array($type, self::XML_CONTENT_TYPES, true)) {
+            return true;
+        }
+
+        // application/vnd.something+xml, image/svg+xml, ...
+        return str_ends_with($type, '+xml');
     }
 
     /**

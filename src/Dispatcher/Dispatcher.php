@@ -40,7 +40,9 @@ class Dispatcher
         if ($previousState = $processState->getSaved()) {
             $this->stop($previousState);
 
-            $processState->purge();
+            // not purged here: between this point and the moment the new state is
+            // saved, a crash would leave the workers about to be started with no file
+            // to be found by. The new state overwrites this one atomically anyway
 
             $this->logInfo(
                 $this->makeLogMessage(
@@ -155,6 +157,11 @@ class Dispatcher
 
                         continue;
                     }
+
+                    // read what it said before replacing it: a worker that died says
+                    // why on its way out, and dropping that leaves a restart loop with
+                    // no explanation anywhere
+                    $this->readProcessOutput($process);
 
                     $restartedProcess = $processor->createProcess();
                     $restartedProcess->start();

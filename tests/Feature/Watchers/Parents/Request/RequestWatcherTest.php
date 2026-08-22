@@ -111,6 +111,39 @@ class RequestWatcherTest extends BaseParentWatcherTestCase
         );
     }
 
+    public function testAnUnroutedPathKeepsOnlyItsFirstSegment(): void
+    {
+        // routing has not happened when RequestHandling fires, and a 404 never routes
+        // at all, so the tag is built from what the caller typed
+        $shorten = (new \ReflectionClass(RequestWatcher::class))->getMethod('shortenUnroutedPath');
+
+        // the canonical secret-in-path shapes: a password reset, an email verify
+        self::assertSame('/reset/…', $shorten->invoke(null, '/reset/tok-secret'));
+        self::assertSame('/verify/…', $shorten->invoke(null, '/verify/abc'));
+        self::assertSame('/reset/…', $shorten->invoke(null, '/reset/tok-secret/confirm'));
+
+        // nothing to hide in a single segment
+        self::assertSame('/health', $shorten->invoke(null, '/health'));
+        self::assertSame('/', $shorten->invoke(null, '/'));
+    }
+
+    public function testAnUnroutedRequestKeepsTheTagsItsStartTraceCarried(): void
+    {
+        $watcher = $this->getApp()->make(RequestWatcher::class);
+
+        $method = (new \ReflectionClass(RequestWatcher::class))->getMethod('getPostTags');
+
+        $tags = $method->invoke(
+            $watcher,
+            \Illuminate\Http\Request::create('/nowhere/at/all'),
+            new \Symfony\Component\HttpFoundation\Response()
+        );
+
+        // null leaves them alone; [] would replace them with nothing, and a 404 under
+        // global middleware would end up untagged
+        self::assertNull($tags);
+    }
+
     protected function getTraceType(): string
     {
         return 'request';

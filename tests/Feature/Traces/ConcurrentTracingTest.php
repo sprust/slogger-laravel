@@ -6,6 +6,7 @@ namespace SLoggerLaravel\Tests\Feature\Traces;
 
 use Illuminate\Support\Carbon;
 use SLoggerLaravel\Enums\TraceStatusEnum;
+use SLoggerLaravel\Helpers\TraceDataComplementer;
 use SLoggerLaravel\Processor;
 use SLoggerLaravel\ServiceProvider;
 use SLoggerLaravel\Tests\Feature\Watchers\BaseWatcherTestCase;
@@ -38,6 +39,7 @@ class ConcurrentTracingTest extends BaseWatcherTestCase
         // the singletons captured the previous resolver
         $this->getApp()->forgetInstance(Processor::class);
         $this->getApp()->forgetInstance(TraceIdContainer::class);
+        $this->getApp()->forgetInstance(TraceDataComplementer::class);
     }
 
     public function testTwoCoroutinesDoNotStealEachOthersTraces(): void
@@ -414,6 +416,90 @@ class ConcurrentTracingTest extends BaseWatcherTestCase
         self::assertCount(0, $this->dispatcher->findUpdating(traceId: $traceId));
 
         $sender->resume();
+    }
+
+    public function testAdditionalTraceDataBelongsToItsUnitOfWork(): void
+    {
+        $complementer = $this->getApp()->make(TraceDataComplementer::class);
+
+        $seen = [];
+
+        $first = $this->resolver->spawn(static function () use ($complementer, &$seen): void {
+            $complementer->add('user_id', 1);
+
+            $data = [];
+
+            $complementer->inject($data);
+
+            $seen['first'] = $data['__additional'] ?? null;
+        });
+
+        $second = $this->resolver->spawn(static function () use ($complementer, &$seen): void {
+            $data = [];
+
+            $complementer->inject($data);
+
+            $seen['second'] = $data['__additional'] ?? null;
+        });
+
+        $first->start();
+        $second->start();
+
+        // held on the complementer, one unit's value stamped every other one - under
+        // Octane that means every later request in the same worker
+        self::assertSame(['user_id' => 1], $seen['first']);
+        self::assertNull($seen['second']);
+    }
+
+    public function testAnOwnerlessDetachedTraceOfADeadCoroutineIsEventuallySwept(): void
+    {
+        $processor = $this->getApp()->make(Processor::class);
+
+        $traceId = null;
+
+        $abandoned = $this->resolver->spawn(static function () use ($processor, &$traceId): void {
+            $traceId = $processor->startAndGetDetachedTraceId(
+                type: 'http-client',
+                tags: [],
+                data: [],
+                // started long enough ago that nothing is still waiting on it
+                loggedAt: Carbon::now()->subSeconds(Processor::DETACHED_TRACE_TTL_SECONDS + 1),
+            );
+        });
+
+        $abandoned->start();
+
+        unset($abandoned);
+
+        self::assertIsString($traceId);
+
+        // the scope that started it is gone, so nothing would ever sweep it and the
+        // map would grow for as long as the process lives
+        $other = $this->resolver->spawn(static function () use ($processor): void {
+            $own = $processor->startAndGetTraceId(
+                type: 'request',
+                tags: [],
+                data: [],
+                loggedAt: Carbon::now(),
+                customParentTraceId: null,
+            );
+
+            $processor->stop(
+                traceId: $own,
+                status: TraceStatusEnum::Success->value,
+                tags: null,
+                data: null,
+                duration: 1.0,
+                parentLoggedAt: Carbon::now(),
+            );
+        });
+
+        $other->start();
+
+        $updating = $this->dispatcher->findUpdating(traceId: $traceId);
+
+        self::assertCount(1, $updating);
+        self::assertContains(Processor::INTERRUPTED_TAG, $updating[0]->tags ?? []);
     }
 
     public function testTheDefaultResolverKeepsOneScopePerProcess(): void

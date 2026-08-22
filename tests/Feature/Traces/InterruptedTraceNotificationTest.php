@@ -10,6 +10,8 @@ use Illuminate\Support\Facades\Event;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Processor;
 use SLoggerLaravel\Tests\Feature\Watchers\BaseWatcherTestCase;
+use SLoggerLaravel\Traces\TraceIdContainer;
+use SLoggerLaravel\Traces\TraceScopeResolverInterface;
 use SLoggerLaravel\Watchers\Parents\CommandWatcher;
 use Symfony\Component\Console\Input\ArrayInput;
 use Symfony\Component\Console\Output\BufferedOutput;
@@ -54,6 +56,53 @@ class InterruptedTraceNotificationTest extends BaseWatcherTestCase
         self::assertCount(1, $updated);
 
         // nothing is left open
+        self::assertFalse($processor->isActive());
+    }
+
+    public function testTheSweptTracesEntryIsDroppedFromTheWatchersStack(): void
+    {
+        $this->registerWatcher(CommandWatcher::class, null);
+
+        $scope = $this->getApp()->make(TraceScopeResolverInterface::class)->current();
+
+        $this->fireStarting('outer');
+        $this->fireStarting('inner');
+
+        // two open commands
+        self::assertNotNull($scope->popWatcherItemMatching(
+            CommandWatcher::class,
+            static fn(mixed $item): bool => is_array($item) && ($item['command'] ?? null) === 'inner'
+        ));
+
+        // put it back and let the sweep take it instead
+        $this->fireStarting('inner');
+
+        $this->fireFinished('outer');
+
+        // nothing of either is left: the swept entry was dropped rather than waiting
+        // to be popped by the next command's finish
+        self::assertNull($scope->popWatcherItemMatching(
+            CommandWatcher::class,
+            static fn(mixed $item): bool => true
+        ));
+    }
+
+    public function testClosingTheRootTraceLeavesNoParentBehind(): void
+    {
+        $this->registerWatcher(CommandWatcher::class, null);
+
+        $processor = $this->getApp()->make(Processor::class);
+
+        $this->fireStarting('outer');
+        $this->fireFinished('outer');
+
+        $container = $this->getApp()->make(TraceIdContainer::class);
+
+        self::assertNull($container->getParentTraceId());
+
+        // and not as its own pre-parent either: an orphan event recorded afterwards
+        // would be filed as a child of a trace that is already closed
+        self::assertNull($container->getPreParentTraceId());
         self::assertFalse($processor->isActive());
     }
 

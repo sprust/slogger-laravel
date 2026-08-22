@@ -335,11 +335,12 @@ masked in place. This applies in both directions and to both watchers - an incom
 request body Laravel does not parse into `input()`, an outgoing one, and either
 response.
 
-**Parsing, not guessing.** A body is XML only if it parses as XML and is not an HTML
-page. Well-formed HTML parses as XML too, and an error page - which is what a failing
-endpoint answers with - carries CSRF tokens, inlined keys and, with a debug page
-installed, environment values. The masker cannot read any of that, so recording it
-would be shipping it. A body that is neither JSON nor XML is dropped, as it always was.
+**The sender has to say so.** A body is recorded as XML only when its `Content-Type`
+is one (`application/xml`, `text/xml`, `application/soap+xml`, `*+xml`) *and* it parses
+as XML. Parsing alone is not enough: an HTML fragment - what an htmx or Turbo endpoint
+returns - is well-formed markup carrying a CSRF token in `value="…"`, and the masker
+matches *names*, so it cannot reach it. A body that is neither JSON nor labelled XML is
+dropped, as it always was.
 
 A body is also dropped, with `{"__skipped": "body_too_large"}`, above the size the
 masker will read (1 MB), and with `{"__skipped": "non_utf8_body"}` when it is not

@@ -337,7 +337,7 @@ class HttpClientWatcher implements WatcherInterface
             ];
         }
 
-        return BodyDecoder::decode($contents);
+        return BodyDecoder::decode($contents, $request->getHeaderLine('Content-Type'));
     }
 
     /**
@@ -391,8 +391,10 @@ class HttpClientWatcher implements WatcherInterface
 
         $url = $this->getRequestPath($request);
 
+        $contentType = $response->getHeaderLine('Content-Type');
+
         $dataResolver = new DataResolver(
-            function () use ($body): array {
+            function () use ($body, $contentType): array {
                 $contents = $body->getContents();
 
                 if (strlen($contents) >= self::MAX_BODY_BYTES) {
@@ -403,7 +405,7 @@ class HttpClientWatcher implements WatcherInterface
                     ];
                 }
 
-                return BodyDecoder::decode($contents);
+                return BodyDecoder::decode($contents, $contentType);
             }
         );
 

@@ -404,7 +404,8 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
             // a SOAP call: neither direction used to reach the trace, because both
             // bodies were run through json_decode and an XML one gave []
             $client->request('post', 'https://example.test/soap', [
-                'body' => '<envelope><password>hunter2</password><amount>100</amount></envelope>',
+                'headers' => ['Content-Type' => 'application/xml'],
+                'body'    => '<envelope><password>hunter2</password><amount>100</amount></envelope>',
             ]);
         });
 

@@ -35,9 +35,11 @@ use Symfony\Component\HttpFoundation\Response;
 class RequestWatcher implements WatcherInterface
 {
     /**
-     * How much of a path survives when there is no route to name it.
+     * How much of a path survives when there is no route to name it. One: the
+     * canonical secret-in-path shape is `/{action}/{token}` - a password reset, an
+     * email verification, an invite - so keeping two segments keeps the token.
      */
-    private const UNROUTED_PATH_SEGMENTS = 2;
+    private const UNROUTED_PATH_SEGMENTS = 1;
 
     /**
      * @var string[]
@@ -290,13 +292,13 @@ class RequestWatcher implements WatcherInterface
      */
     protected static function shortenUnroutedPath(string $path): string
     {
-        $segments = explode('/', trim($path, '/'));
+        $segments = array_values(array_filter(explode('/', trim($path, '/')), static fn(string $s): bool => $s !== ''));
 
         if (count($segments) <= self::UNROUTED_PATH_SEGMENTS) {
-            return $path;
+            return '/' . implode('/', $segments);
         }
 
-        return implode('/', array_slice($segments, 0, self::UNROUTED_PATH_SEGMENTS)) . '/…';
+        return '/' . implode('/', array_slice($segments, 0, self::UNROUTED_PATH_SEGMENTS)) . '/…';
     }
 
     /**
@@ -304,9 +306,9 @@ class RequestWatcher implements WatcherInterface
      * `/reset/{token}` binds the token itself - the values travel as data instead, in
      * `route_parameters`, where the key list reaches them by parameter name.
      *
-     * @return string[]
+     * @return string[]|null
      */
-    protected function getPostTags(Request $request, Response $response): array
+    protected function getPostTags(Request $request, Response $response): ?array
     {
         /**
          * for support for Laravel 10, 12
@@ -316,7 +318,9 @@ class RequestWatcher implements WatcherInterface
         $route = $request->route();
 
         if (!$route) {
-            return [];
+            // null, not []: an empty array replaces the tags the start trace carried,
+            // and a 404 traced under global middleware ended up with none at all
+            return null;
         }
 
         if (is_string($route)) {
@@ -326,7 +330,7 @@ class RequestWatcher implements WatcherInterface
         }
 
         if (!$route instanceof Route) {
-            return [];
+            return null;
         }
 
         return [
@@ -453,16 +457,21 @@ class RequestWatcher implements WatcherInterface
 
         $content = $response->getContent();
 
+        $contentType = $response->headers->get('Content-Type');
+
         // an XML response is recorded too, and the client asking for XML rather than
         // JSON is exactly when it arrives: acceptsJson() alone dropped every SOAP and
         // XML-API response on the floor
-        if ($request->acceptsJson() || (is_string($content) && BodyDecoder::isXml($content))) {
+        if ($request->acceptsJson() || BodyDecoder::isXmlContentType($contentType)) {
             $url = $this->getRequestPath($request);
 
             if ($content === false) {
                 return [];
             }
 
+            // before anything reads or parses it: this runs in the traced
+            // application's own request, and a 20 MB body must not be parsed just to
+            // be thrown away by the cap afterwards
             if (strlen($content) > $this->maxResponseBytes) {
                 return [
                     '__skipped' => 'response_too_large',
@@ -470,7 +479,7 @@ class RequestWatcher implements WatcherInterface
             }
 
             $dataResolver = new DataResolver(
-                fn() => BodyDecoder::decode($content)
+                fn() => BodyDecoder::decode($content, $contentType)
             );
 
             foreach ($this->formatters->getItems() as $formatter) {
@@ -545,6 +554,15 @@ class RequestWatcher implements WatcherInterface
      */
     protected function readXmlRequestBody(Request $request): array
     {
+        $contentType = $request->headers->get('Content-Type');
+
+        // the cheapest check first, then the size, and only then anything that reads
+        // or parses the body - all three before the parse, because this is the traced
+        // application's own request path
+        if (!BodyDecoder::isXmlContentType($contentType)) {
+            return [];
+        }
+
         $length = $request->headers->get('Content-Length');
 
         if (is_numeric($length) && (int) $length > $this->maxResponseBytes) {
@@ -555,10 +573,6 @@ class RequestWatcher implements WatcherInterface
 
         $content = $request->getContent();
 
-        if (!BodyDecoder::isXml($content)) {
-            return [];
-        }
-
         if (strlen($content) > $this->maxResponseBytes) {
             // Content-Length is absent on a chunked request, so the cap has to be
             // re-checked against what was actually read
@@ -567,7 +581,7 @@ class RequestWatcher implements WatcherInterface
             ];
         }
 
-        return BodyDecoder::decode($content);
+        return BodyDecoder::decode($content, $contentType);
     }
 
     /**
