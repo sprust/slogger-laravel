@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace SLoggerLaravel\Tests\Feature\Watchers\Parents\Request;
 
+use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Contracts\Routing\ResponseFactory;
 use Illuminate\Support\Facades\Route;
 use SLoggerLaravel\Helpers\BodyDecoder;
+use SLoggerLaravel\Middleware\HttpMiddleware;
 use SLoggerLaravel\Tests\Feature\Watchers\BaseWatcherTestCase;
 use SLoggerLaravel\Watchers\Parents\RequestWatcher;
 
@@ -22,7 +24,7 @@ class HtmlNotRecordedTest extends BaseWatcherTestCase
     {
         parent::setUp();
 
-        Route::middleware(\SLoggerLaravel\Middleware\HttpMiddleware::class)
+        Route::middleware(HttpMiddleware::class)
             ->get('/zz-html', fn(ResponseFactory $factory) => $factory->make(
                 '<!DOCTYPE html><html><body><input name="_token" value="CSRF-SECRET"/></body></html>',
                 200,
@@ -30,7 +32,16 @@ class HtmlNotRecordedTest extends BaseWatcherTestCase
             ))
             ->name('zz.html');
 
-        Route::middleware(\SLoggerLaravel\Middleware\HttpMiddleware::class)
+        Route::middleware(HttpMiddleware::class)
+            ->get('/zz-xhtml', fn(ResponseFactory $factory) => $factory->make(
+                '<html xmlns="http://www.w3.org/1999/xhtml"><body>'
+                . '<input name="_token" value="CSRF-SECRET"/></body></html>',
+                200,
+                ['Content-Type' => 'application/xhtml+xml']
+            ))
+            ->name('zz.xhtml');
+
+        Route::middleware(HttpMiddleware::class)
             ->get('/zz-fragment', fn(ResponseFactory $factory) => $factory->make(
                 '<div><input name="_token" value="CSRF-SECRET"/></div>',
                 200,
@@ -51,11 +62,51 @@ class HtmlNotRecordedTest extends BaseWatcherTestCase
         $this->assertBodyNotRecorded('zz.fragment');
     }
 
-    private function assertBodyNotRecorded(string $route): void
+    public function testAnXhtmlPageIsNotRecordedThoughItsTypeSaysXml(): void
+    {
+        // `application/xhtml+xml` passes the content-type gate on its `+xml` suffix,
+        // so this is the case the root-element guard exists for. The two tests above
+        // never reach it: `text/html` is rejected before the document is parsed
+        $this->assertBodyNotRecorded('zz.xhtml', 'application/xhtml+xml');
+    }
+
+    /**
+     * A 404 never routes, so `getUrlPattern()` falls back to the path the caller
+     * typed - and `/reset/tok-secret` is a token in a tag, which nothing masks. The
+     * only test for this called the private helper through reflection and never went
+     * near the watcher.
+     */
+    public function testAnUnroutedRequestDoesNotTagTheSecretInItsPath(): void
     {
         $this->registerWatcher(RequestWatcher::class, null);
 
-        $this->call('GET', route($route), server: ['HTTP_ACCEPT' => 'text/html'])
+        // globally, which is how routing has not happened yet when RequestHandling
+        // fires - and the only way a 404 is traced at all
+        /** @var \Illuminate\Foundation\Http\Kernel $kernel */
+        $kernel = $this->getApp()->make(Kernel::class);
+
+        $kernel->pushMiddleware(HttpMiddleware::class);
+
+        $this->call('GET', '/reset/tok-SUPER-SECRET/confirm')->assertNotFound();
+
+        $creating = $this->dispatcher->findCreating(type: 'request');
+
+        self::assertCount(1, $creating);
+
+        self::assertSame(['/reset/…'], $creating[0]->tags);
+        self::assertSame('/reset/…', $creating[0]->data['uri']);
+
+        self::assertStringNotContainsString(
+            'tok-SUPER-SECRET',
+            json_encode($creating[0], JSON_THROW_ON_ERROR)
+        );
+    }
+
+    private function assertBodyNotRecorded(string $route, string $accept = 'text/html'): void
+    {
+        $this->registerWatcher(RequestWatcher::class, null);
+
+        $this->call('GET', route($route), server: ['HTTP_ACCEPT' => $accept])
             ->assertOk();
 
         $creating = $this->dispatcher->findCreating(type: 'request');

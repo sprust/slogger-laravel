@@ -108,6 +108,31 @@ class InterruptedTraceNotificationTest extends BaseWatcherTestCase
         self::assertFalse($processor->isActive());
     }
 
+    public function testPoppingAMatchDropsTheEntriesAboveIt(): void
+    {
+        $this->registerWatcher(CommandWatcher::class, null);
+
+        $scope = $this->getApp()->make(TraceScopeResolverInterface::class)->current();
+
+        $watcher = $this->getApp()->make(CommandWatcher::class);
+
+        $this->fireStarting('outer');
+        $this->fireStarting('inner-a');
+        $this->fireStarting('inner-b');
+
+        // the outer command finishes while two nested ones never reported doing so
+        $this->fireFinished('outer');
+
+        // both are gone, not waiting to be popped by the next command's finish
+        self::assertNull($scope->popWatcherItemMatching(
+            $watcher,
+            static fn(mixed $item): bool => true
+        ));
+
+        // and they were closed as interrupted rather than left open
+        self::assertCount(2, $this->dispatcher->findUpdating(tag: Processor::INTERRUPTED_TAG));
+    }
+
     private function fireStarting(string $command): void
     {
         Event::dispatch(

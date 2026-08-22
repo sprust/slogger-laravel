@@ -40,8 +40,9 @@ class ModelWatcherTest extends BaseChildWatcherTestCase
         self::assertSame(MaskHelper::FULL_MASK, $masked['changes']['api_token']);
         self::assertSame(MaskHelper::FULL_MASK, $masked['changes']['password']);
 
-        // nothing in this key matches either list
-        self::assertSame('Updated', $masked['changes']['name']);
+        // `name` is in partial_keys: it identifies a person rather than authenticates
+        // one, so enough is kept to tell two records apart
+        self::assertSame('Up***ed', $masked['changes']['name']);
     }
 
     protected function getTraceType(): string

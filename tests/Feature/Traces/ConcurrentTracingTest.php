@@ -502,6 +502,78 @@ class ConcurrentTracingTest extends BaseWatcherTestCase
         self::assertContains(Processor::INTERRUPTED_TAG, $updating[0]->tags ?? []);
     }
 
+    public function testACoroutineSweepsItsOwnOwnerlessDetachedTraceImmediately(): void
+    {
+        $processor = $this->getApp()->make(Processor::class);
+
+        $traceId = null;
+
+        // one coroutine: it starts an outbound call with no trace around it, then
+        // opens and closes a trace of its own. Its own unit of work ending is what
+        // makes the abandoned call an abandoned call
+        $coroutine = $this->resolver->spawn(static function () use ($processor, &$traceId): void {
+            $traceId = $processor->startAndGetDetachedTraceId(
+                type: 'http-client',
+                tags: [],
+                data: [],
+                loggedAt: Carbon::now(),
+            );
+
+            $own = $processor->startAndGetTraceId(
+                type: 'request',
+                tags: [],
+                data: [],
+                loggedAt: Carbon::now(),
+                customParentTraceId: null,
+            );
+
+            $processor->stop(
+                traceId: $own,
+                status: TraceStatusEnum::Success->value,
+                tags: null,
+                data: null,
+                duration: 1.0,
+                parentLoggedAt: Carbon::now(),
+            );
+        });
+
+        $coroutine->start();
+
+        self::assertIsString($traceId);
+
+        // no TTL involved: this is the owning scope, and it is done
+        $updating = $this->dispatcher->findUpdating(traceId: $traceId);
+
+        self::assertCount(1, $updating);
+        self::assertContains(Processor::INTERRUPTED_TAG, $updating[0]->tags ?? []);
+    }
+
+    public function testEveryCoroutineGetsAnIdOfItsOwn(): void
+    {
+        // spl_object_id is handed to the next allocation, and three fibers created in
+        // sequence routinely share one. A scope left behind by a finished coroutine
+        // would then be adopted by an unrelated new one
+        $ids = [];
+
+        $splIds = [];
+
+        for ($i = 0; $i < 5; $i++) {
+            $fiber = $this->resolver->spawn(static fn() => null);
+
+            $ids[]    = $this->resolver->publicOwnerIdOf($fiber);
+            $splIds[] = spl_object_id($fiber);
+
+            unset($fiber);
+
+            gc_collect_cycles();
+        }
+
+        self::assertCount(5, array_unique($ids), 'owner ids must never repeat');
+
+        // and this is the hazard being guarded against, demonstrated
+        self::assertLessThan(5, count(array_unique($splIds)), 'spl_object_id was expected to repeat');
+    }
+
     public function testTheDefaultResolverKeepsOneScopePerProcess(): void
     {
         // nothing changes for FPM, queue:work or an artisan command

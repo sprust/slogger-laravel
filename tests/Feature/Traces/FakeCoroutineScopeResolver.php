@@ -44,6 +44,16 @@ class FakeCoroutineScopeResolver extends FiberTraceScopeResolver
         return $fiber;
     }
 
+    /**
+     * The resolver's own id for a coroutine, for a test that needs to see it.
+     *
+     * @param Fiber<mixed, mixed, mixed, mixed> $fiber
+     */
+    public function publicOwnerIdOf(Fiber $fiber): int
+    {
+        return $this->ownerIdOf($fiber);
+    }
+
     protected function read(): ?TraceScope
     {
         $ownerId = $this->currentOwnerId();
