@@ -19,6 +19,8 @@ use SLoggerLaravel\Objects\TraceUpdateObject;
 use SLoggerLaravel\Profiling\AbstractProfiling;
 use SLoggerLaravel\Profiling\Dto\ProfilingObjects;
 use SLoggerLaravel\Traces\TraceIdContainer;
+use SLoggerLaravel\Traces\TraceScope;
+use SLoggerLaravel\Traces\TraceScopeResolverInterface;
 use SLoggerLaravel\Watchers\WatcherInterface;
 use Throwable;
 
@@ -30,29 +32,12 @@ class Processor
     public const INTERRUPTED_TAG = '__interrupted';
 
     /**
-     * Currently started parent traces, from the outermost to the innermost one.
-     *
-     * @var list<array{trace_id: string, pre_parent_trace_id: string|null, tags: string[], logged_at: Carbon}>
-     */
-    private array $tracesStack = [];
-
-    /**
-     * Open detached traces, by trace id. They are kept off the stack, so this is the
-     * only way the parent that started them can still close them.
-     *
-     * @var array<string, array{owner_trace_id: string|null, tags: string[], logged_at: Carbon}>
-     */
-    private array $detachedTraces = [];
-
-    /**
      * Called with the trace id of every detached trace closed by the sweep rather
      * than by its own watcher.
      *
      * @var list<Closure(string): void>
      */
     private array $detachedTraceInterruptedListeners = [];
-
-    private bool $paused = false;
 
     public function __construct(
         private readonly Application $app,
@@ -61,18 +46,30 @@ class Processor
         private readonly TraceDispatcherInterface $traceDispatcher,
         private readonly TraceIdContainer $traceIdContainer,
         private readonly AbstractProfiling $profiler,
-        private readonly TraceDataComplementer $traceDataComplementer
+        private readonly TraceDataComplementer $traceDataComplementer,
+        private readonly TraceScopeResolverInterface $scopeResolver
     ) {
     }
 
+    /**
+     * Whether a child trace pushed right now has somewhere to hang.
+     *
+     * The stack is the usual answer, but not the only one: a coroutine gets its own
+     * stack and inherits only where its parent's traces hang, so inside one the
+     * stack is empty while tracing is very much active. Under a plain process the
+     * two are the same thing - the parent trace id is set exactly while the stack is
+     * not empty.
+     */
     public function isActive(): bool
     {
-        return $this->tracesStack !== [];
+        $scope = $this->scope();
+
+        return $scope->tracesStack !== [] || !is_null($scope->parentTraceId);
     }
 
     public function isPaused(): bool
     {
-        return $this->paused;
+        return $this->scope()->paused;
     }
 
     /**
@@ -141,9 +138,11 @@ class Processor
      */
     public function handleWithoutTracing(Closure $callback): mixed
     {
-        $previousPaused = $this->paused;
+        $scope = $this->scope();
 
-        $this->paused = true;
+        $previousPaused = $scope->paused;
+
+        $scope->paused = true;
 
         try {
             return $callback();
@@ -151,7 +150,7 @@ class Processor
             // restore rather than clear: these nest (a watcher error is reported from
             // inside a paused section), and clearing would lift the outer pause with
             // the inner one
-            $this->paused = $previousPaused;
+            $scope->paused = $previousPaused;
         }
     }
 
@@ -234,7 +233,7 @@ class Processor
             parentTraceId: $customParentTraceId ?? $parentTraceId,
         );
 
-        $this->tracesStack[] = [
+        $this->scope()->tracesStack[] = [
             'trace_id'            => $traceId,
             'pre_parent_trace_id' => $parentTraceId,
             'tags'                => $tags,
@@ -272,7 +271,7 @@ class Processor
             parentTraceId: $ownerTraceId,
         );
 
-        $this->detachedTraces[$traceId] = [
+        $this->scope()->detachedTraces[$traceId] = [
             'owner_trace_id' => $ownerTraceId,
             'tags'           => $tags,
             'logged_at'      => $loggedAt->clone(),
@@ -339,7 +338,7 @@ class Processor
         ?float $duration,
         Carbon $parentLoggedAt,
     ): void {
-        if (isset($this->detachedTraces[$traceId])) {
+        if (isset($this->scope()->detachedTraces[$traceId])) {
             // the caller mixed up the two APIs; close it the way it was started
             $this->stopDetached(
                 traceId: $traceId,
@@ -370,15 +369,17 @@ class Processor
 
         $this->stopInterruptedDetached(ownerTraceId: $traceId);
 
-        $stackItem = $this->tracesStack[$index];
+        $scope = $this->scope();
 
-        array_pop($this->tracesStack);
+        $stackItem = $scope->tracesStack[$index];
+
+        array_pop($scope->tracesStack);
 
         $this->traceIdContainer->setParentTraceId(
             parentTraceId: $stackItem['pre_parent_trace_id']
         );
 
-        if (count($this->tracesStack) == 0) {
+        if (count($scope->tracesStack) == 0) {
             // detached traces started outside any parent have no owner to sweep them,
             // so the end of a unit of work is the last chance to close them
             $this->stopInterruptedDetached(ownerTraceId: null);
@@ -412,7 +413,7 @@ class Processor
         ?float $duration,
         Carbon $parentLoggedAt,
     ): void {
-        if (!isset($this->detachedTraces[$traceId])) {
+        if (!isset($this->scope()->detachedTraces[$traceId])) {
             if (is_null($this->findStackIndex($traceId))) {
                 // already closed
                 return;
@@ -431,7 +432,7 @@ class Processor
             return;
         }
 
-        unset($this->detachedTraces[$traceId]);
+        unset($this->scope()->detachedTraces[$traceId]);
 
         $this->dispatchStopTrace(
             traceId: $traceId,
@@ -442,6 +443,16 @@ class Processor
             duration: $duration,
             parentLoggedAt: $parentLoggedAt,
         );
+    }
+
+    /**
+     * The state of whatever is running right now. One scope per process normally,
+     * one per coroutine under a concurrent runtime - the singleton is shared either
+     * way, its state is not.
+     */
+    private function scope(): TraceScope
+    {
+        return $this->scopeResolver->current();
     }
 
     /**
@@ -512,8 +523,10 @@ class Processor
 
     private function findStackIndex(string $traceId): ?int
     {
-        for ($index = count($this->tracesStack) - 1; $index >= 0; $index--) {
-            if ($this->tracesStack[$index]['trace_id'] === $traceId) {
+        $tracesStack = $this->scope()->tracesStack;
+
+        for ($index = count($tracesStack) - 1; $index >= 0; $index--) {
+            if ($tracesStack[$index]['trace_id'] === $traceId) {
                 return $index;
             }
         }
@@ -528,9 +541,11 @@ class Processor
      */
     private function stopInterruptedNested(int $parentIndex, string $parentTraceId): void
     {
-        $interrupted = array_slice($this->tracesStack, $parentIndex + 1);
+        $scope = $this->scope();
 
-        $this->tracesStack = array_slice($this->tracesStack, 0, $parentIndex + 1);
+        $interrupted = array_slice($scope->tracesStack, $parentIndex + 1);
+
+        $scope->tracesStack = array_slice($scope->tracesStack, 0, $parentIndex + 1);
 
         foreach (array_reverse($interrupted) as $stackItem) {
             $this->stopInterruptedDetached(ownerTraceId: $stackItem['trace_id']);
@@ -562,12 +577,12 @@ class Processor
      */
     private function stopInterruptedDetached(?string $ownerTraceId): void
     {
-        foreach ($this->detachedTraces as $traceId => $detachedTrace) {
+        foreach ($this->scope()->detachedTraces as $traceId => $detachedTrace) {
             if ($detachedTrace['owner_trace_id'] !== $ownerTraceId) {
                 continue;
             }
 
-            unset($this->detachedTraces[$traceId]);
+            unset($this->scope()->detachedTraces[$traceId]);
 
             $this->dispatchStopTrace(
                 traceId: $traceId,
@@ -626,14 +641,16 @@ class Processor
      */
     private function withPausedTracing(Closure $callback): void
     {
-        $previousPaused = $this->paused;
+        $scope = $this->scope();
 
-        $this->paused = true;
+        $previousPaused = $scope->paused;
+
+        $scope->paused = true;
 
         try {
             $callback();
         } finally {
-            $this->paused = $previousPaused;
+            $scope->paused = $previousPaused;
         }
     }
 }

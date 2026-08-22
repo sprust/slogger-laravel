@@ -21,6 +21,7 @@ use SLoggerLaravel\Events\RequestHandling;
 use SLoggerLaravel\Helpers\TraceHelper;
 use SLoggerLaravel\Middleware\HttpMiddleware;
 use SLoggerLaravel\Processor;
+use SLoggerLaravel\Traces\TraceScopeResolverInterface;
 use SLoggerLaravel\RequestPreparer\RequestDataFormatter;
 use SLoggerLaravel\RequestPreparer\RequestDataFormatters;
 use SLoggerLaravel\Watchers\WatcherInterface;
@@ -32,10 +33,6 @@ use Symfony\Component\HttpFoundation\Response;
  */
 class RequestWatcher implements WatcherInterface
 {
-    /**
-     * @var array<array{trace_id: string, boot_time: float, started_at: Carbon, logged_at: Carbon}>
-     */
-    protected array $requests = [];
     /**
      * @var string[]
      */
@@ -62,6 +59,7 @@ class RequestWatcher implements WatcherInterface
     public function __construct(
         protected readonly Application $app,
         protected readonly Processor $processor,
+        protected readonly TraceScopeResolverInterface $scopeResolver,
     ) {
         $this->formatters = new RequestDataFormatters();
     }
@@ -119,12 +117,18 @@ class RequestWatcher implements WatcherInterface
             customParentTraceId: $parentTraceId
         );
 
-        $this->requests[] = [
-            'trace_id'   => $traceId,
-            'boot_time'  => $bootTime,
-            'started_at' => $startedAt,
-            'logged_at'  => $loggedAt,
-        ];
+        // the open requests live in the trace scope, not on the watcher: under a
+        // concurrent runtime every request is its own coroutine, and two of them
+        // sharing one stack would pop each other's entries
+        $this->scopeResolver->current()->pushWatcherItem(
+            self::class,
+            [
+                'trace_id'   => $traceId,
+                'boot_time'  => $bootTime,
+                'started_at' => $startedAt,
+                'logged_at'  => $loggedAt,
+            ]
+        );
     }
 
     public function handleRequestHandled(RequestHandled $event): void
@@ -137,7 +141,8 @@ class RequestWatcher implements WatcherInterface
             return;
         }
 
-        $requestData = array_pop($this->requests);
+        /** @var array{trace_id: string, boot_time: float, started_at: Carbon, logged_at: Carbon}|null $requestData */
+        $requestData = $this->scopeResolver->current()->popWatcherItem(self::class);
 
         if (!$requestData) {
             return;

@@ -24,6 +24,8 @@ use SLoggerLaravel\Helpers\TraceDataMasker;
 use SLoggerLaravel\Middleware\HttpMiddleware;
 use SLoggerLaravel\Profiling\AbstractProfiling;
 use SLoggerLaravel\Profiling\XHProfProfiler;
+use SLoggerLaravel\Traces\ProcessTraceScopeResolver;
+use SLoggerLaravel\Traces\TraceScopeResolverInterface;
 use SLoggerLaravel\Traces\TraceIdContainer;
 use SLoggerLaravel\Watchers\WatcherInterface;
 
@@ -48,6 +50,12 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         // resolves Processor, State or TraceIdContainer would get an auto-wired
         // duplicate outside the singleton, and end up with a second, disconnected
         // tracing state whose traces silently go nowhere
+        // the scope resolver decides what "the current unit of work" means, and
+        // everything the package keeps per unit follows it - see TraceScope. One
+        // process is the answer for FPM, `queue:work` and artisan; an application on
+        // a runtime that interleaves coroutines rebinds this with its own.
+        $this->app->singleton(TraceScopeResolverInterface::class, ProcessTraceScopeResolver::class);
+
         $this->app->singleton(TraceDataComplementer::class);
         $this->app->singleton(MaskingConfig::class);
         $this->app->singleton(TraceDataMasker::class);

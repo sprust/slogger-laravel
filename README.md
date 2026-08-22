@@ -496,6 +496,66 @@ You may want to ignore the folder:
 storage/slogger/*
 ```
 
+## Concurrent runtimes (coroutines)
+
+A runtime that runs each request or job in its own `Fiber` and switches between them
+on every async call breaks a package that keeps per-request state in process-wide
+objects. Everything slogger keeps per unit of work - the trace stack, where child
+traces hang, the pause flag, each parent watcher's open entries - would be shared by
+coroutines running interleaved in one process. The failure is quiet: not a crash,
+but a trace closed by the wrong coroutine and children hung under a stranger.
+
+All of that state lives in a `TraceScope`, and `TraceScopeResolverInterface` decides
+what "the current unit of work" means. The package binds `ProcessTraceScopeResolver`
+- one scope for the whole process, which is what FPM, `queue:work` and artisan want,
+and what the package has always done.
+
+**The package ships no runtime integration and knows about none.** An application
+running on a concurrent runtime rebinds the interface with a resolver of its own:
+
+```php
+$this->app->singleton(
+    \SLoggerLaravel\Traces\TraceScopeResolverInterface::class,
+    fn() => new MyRuntimeScopeResolver()
+);
+```
+
+For a Fiber-based runtime, extend `FiberTraceScopeResolver` and supply only the
+store - where a coroutine's scope is kept, and how a coroutine sees the one that
+spawned it:
+
+```php
+class MyRuntimeScopeResolver extends \SLoggerLaravel\Traces\FiberTraceScopeResolver
+{
+    // the scope visible from the current coroutine: its own, or the nearest ancestor's
+    protected function read(): ?TraceScope
+    {
+        return MyRuntime::context()->find('slogger.trace_scope');
+    }
+
+    protected function write(TraceScope $scope): void
+    {
+        MyRuntime::context()->set('slogger.trace_scope', $scope);
+    }
+}
+```
+
+The base class carries the rule, which has two halves and both matter: a coroutine
+gets its **own** stack (two coroutines popping one stack close each other's traces)
+but **inherits the parent trace id** from whoever spawned it, so a call made inside a
+coroutine hangs under the trace that started it instead of arriving as an orphan.
+
+**Profiling turns itself off inside a coroutine.** XHProf is process-wide: it
+measures everything the process does between start and stop, which under a
+concurrent runtime is every coroutine that ran in between, attributed to whichever
+trace stopped first. Wrong numbers are worse than none, so traces started inside a
+fiber carry no profiling data.
+
+One more thing worth knowing: **the trace batch is shared**. The dispatcher buffers
+traces per process, so one `SendTracesJob` can carry traces from several coroutines.
+That is intended - the batch is a transport detail, and each trace carries its own
+parent.
+
 ## Profiling (XHProf)
 
 Only for HTTP client tracing.

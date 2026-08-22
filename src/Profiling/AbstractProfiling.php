@@ -2,6 +2,7 @@
 
 namespace SLoggerLaravel\Profiling;
 
+use Fiber;
 use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\Profiling\Dto\ProfilingObjects;
 
@@ -23,6 +24,14 @@ abstract class AbstractProfiling
     public function start(): void
     {
         if (!$this->profilingEnabled) {
+            return;
+        }
+
+        if (!is_null(Fiber::getCurrent())) {
+            // a profiler is process-wide: it measures whatever the process does
+            // between start and stop, and under a concurrent runtime that is every
+            // coroutine that ran in between, attributed to whichever trace happened
+            // to stop first. Wrong numbers are worse than none
             return;
         }
 

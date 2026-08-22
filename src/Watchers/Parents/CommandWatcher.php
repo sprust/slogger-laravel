@@ -9,15 +9,12 @@ use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Helpers\TraceHelper;
 use SLoggerLaravel\Processor;
+use SLoggerLaravel\Traces\TraceScopeResolverInterface;
 use SLoggerLaravel\Watchers\WatcherInterface;
 use Symfony\Component\Console\Input\InputInterface;
 
 class CommandWatcher implements WatcherInterface
 {
-    /**
-     * @var array<array{trace_id: string, started_at: Carbon}>
-     */
-    protected array $commands = [];
     /**
      * @var string[]
      */
@@ -25,6 +22,7 @@ class CommandWatcher implements WatcherInterface
 
     public function __construct(
         protected readonly Processor $processor,
+        protected readonly TraceScopeResolverInterface $scopeResolver,
     ) {
     }
 
@@ -75,10 +73,16 @@ class CommandWatcher implements WatcherInterface
             customParentTraceId: null,
         );
 
-        $this->commands[] = [
-            'trace_id'   => $traceId,
-            'started_at' => $loggedAt,
-        ];
+        // the open commands live in the trace scope, not on the watcher: under a
+        // concurrent runtime two coroutines sharing one stack would pop each
+        // other's entries
+        $this->scopeResolver->current()->pushWatcherItem(
+            self::class,
+            [
+                'trace_id'   => $traceId,
+                'started_at' => $loggedAt,
+            ]
+        );
     }
 
     public function handleCommandFinished(?CommandFinished $event): void
@@ -94,7 +98,8 @@ class CommandWatcher implements WatcherInterface
             return;
         }
 
-        $commandData = array_pop($this->commands);
+        /** @var array{trace_id: string, started_at: Carbon}|null $commandData */
+        $commandData = $this->scopeResolver->current()->popWatcherItem(self::class);
 
         if (!$commandData) {
             return;
