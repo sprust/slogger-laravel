@@ -17,10 +17,11 @@ Masking moved out of the traced application and into the dispatcher job.
   `masking.full_keys`** and port over what the shipped list does not already cover -
   it covers the shipped defaults plus `ssn`, `iban` and `card_number`, not whatever
   else you added yourself.
-- **Keys are masks, not substrings.** `authorization` matches only `authorization`;
-  write `*token*` to match `api_token`. If you ported keys from the old per-watcher
-  lists, they were `Str::is` patterns there too - `*token*`, `*password*` - so they
-  carry over unchanged.
+- **Keys are masks, not substrings.** A mask is matched against the whole key and
+  against each of its word components, so `auth` covers `php-auth-pw` and `x-auth-user`
+  and not `author`, and `*token*` covers `api_token` and `tokenizer`. If you ported
+  keys from the old per-watcher lists, they were `Str::is` patterns there too -
+  `*token*`, `*password*` - so they carry over unchanged.
 - **Global lists instead**, under `masking.full_keys`, `masking.partial_keys` and
   `masking.value_patterns` - the last matching the value rather than the key. A list
   missing from your published config falls back to the package's own config file, so
