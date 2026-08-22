@@ -7,6 +7,7 @@ use Illuminate\Support\Str;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Helpers\MaskHelper;
+use SLoggerLaravel\Helpers\TraceDataMasker;
 use SLoggerLaravel\Helpers\TraceHelper;
 use SLoggerLaravel\Processor;
 use SLoggerLaravel\Watchers\WatcherInterface;
@@ -15,6 +16,7 @@ readonly class DatabaseWatcher implements WatcherInterface
 {
     public function __construct(
         protected Processor $processor,
+        protected TraceDataMasker $masker,
     ) {
     }
 
@@ -27,7 +29,9 @@ readonly class DatabaseWatcher implements WatcherInterface
     {
         $data = [
             'connection' => $event->connectionName,
-            'bindings'   => $this->maskValue($event->bindings),
+            'bindings'   => $this->masker->isEnabled()
+                ? $this->maskValue($event->bindings)
+                : $event->bindings,
             'sql'        => Str::substr($event->sql, 0, 10000),
         ];
 
@@ -48,6 +52,10 @@ readonly class DatabaseWatcher implements WatcherInterface
      * which is a page number, so all of them are masked. Length is not a signal
      * either - a PIN, an OTP and an account number are short and numeric, and those
      * were exactly what a length or a type check used to let through.
+     *
+     * This is the one masking the traced application still does, because no key list
+     * can reach a positional value. It follows the same switch as the rest: with
+     * masking off, bindings are recorded as they are.
      */
     protected function maskValue(mixed $value): mixed
     {

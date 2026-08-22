@@ -3,6 +3,7 @@
 namespace SLoggerLaravel\Traces;
 
 use Fiber;
+use WeakMap;
 
 /**
  * A scope per coroutine, for runtimes that run each unit of work in its own Fiber.
@@ -27,6 +28,23 @@ abstract class FiberTraceScopeResolver implements TraceScopeResolverInterface
      * one scope, the same way a plain process does.
      */
     protected const ROOT_OWNER_ID = 0;
+
+    /**
+     * Owner id per live fiber.
+     *
+     * Not `spl_object_id`: PHP hands the id of a collected object to the next one
+     * allocated, and three fibers created in sequence routinely get the same id. A
+     * scope left in the store by a finished coroutine would then be adopted by an
+     * unrelated new one - which inherits a stranger's stack, hangs its children
+     * under a dead trace, and sweeps that stranger's open traces as interrupted when
+     * it stops. The ids handed out here are never reused, and the map drops an entry
+     * when its fiber is collected.
+     *
+     * @var WeakMap<object, int>|null
+     */
+    private ?WeakMap $ownerIds = null;
+
+    private int $lastOwnerId = self::ROOT_OWNER_ID;
 
     /**
      * The scope visible from here: this coroutine's own if it has one, otherwise the
@@ -68,6 +86,27 @@ abstract class FiberTraceScopeResolver implements TraceScopeResolverInterface
 
         return is_null($fiber)
             ? static::ROOT_OWNER_ID
-            : spl_object_id($fiber);
+            : $this->ownerIdOf($fiber);
+    }
+
+    /**
+     * The id of a coroutine that is not the running one - a resolver that has to
+     * record a parent at spawn time needs this, before the child has ever run.
+     *
+     * @param Fiber<mixed, mixed, mixed, mixed> $fiber
+     */
+    protected function ownerIdOf(Fiber $fiber): int
+    {
+        /** @var WeakMap<object, int> $ownerIds */
+        $ownerIds = $this->ownerIds ??= new WeakMap();
+
+        if (!isset($ownerIds[$fiber])) {
+            $ownerIds[$fiber] = ++$this->lastOwnerId;
+        }
+
+        /** @var int $ownerId */
+        $ownerId = $ownerIds[$fiber];
+
+        return $ownerId;
     }
 }

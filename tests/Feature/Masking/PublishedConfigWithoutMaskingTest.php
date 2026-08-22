@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace SLoggerLaravel\Tests\Feature\Masking;
 
 use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\Log;
 use SLoggerLaravel\Configs\MaskingConfig;
 use SLoggerLaravel\ServiceProvider;
 use SLoggerLaravel\Tests\Feature\BaseTestCase;
@@ -59,6 +60,33 @@ class PublishedConfigWithoutMaskingTest extends BaseTestCase
         $this->getApp()['config']->set('slogger.masking.full_keys', ['token', 42, '', null]);
 
         self::assertSame(['token'], (new MaskingConfig())->getFullKeys());
+    }
+
+    public function testARetiredMaskingSectionIsReportedOutLoud(): void
+    {
+        // an application that added its own keys there stopped masking them on
+        // upgrade; a README is not where anyone will look for that
+        $this->getApp()['config']->set(
+            'slogger.watchers_config.requests.input.parameters_masking',
+            ['*' => ['*ssn*']]
+        );
+
+        Log::shouldReceive('channel')->andReturnSelf();
+        Log::shouldReceive('warning')
+            ->once()
+            ->withArgs(static function (string $message): bool {
+                return str_contains($message, 'no longer read')
+                    && str_contains($message, 'parameters_masking');
+            });
+
+        (new ServiceProvider($this->getApp()))->boot();
+    }
+
+    public function testAConfigWithoutRetiredSectionsSaysNothing(): void
+    {
+        Log::shouldReceive('channel')->never();
+
+        (new ServiceProvider($this->getApp()))->boot();
     }
 
     /**

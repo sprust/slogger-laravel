@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace SLoggerLaravel\Tests\Feature\Helpers;
 
 use SLoggerLaravel\Configs\WatchersConfig;
+use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Helpers\TraceDataComplementer;
+use SLoggerLaravel\Helpers\TraceDataMasker;
 use SLoggerLaravel\Tests\Feature\BaseTestCase;
 
 class TraceDataComplementerTest extends BaseTestCase
@@ -35,8 +37,30 @@ class TraceDataComplementerTest extends BaseTestCase
             self::assertTrue(isset($item['class']) || isset($item['file']));
         }
 
-        self::assertSame('bar', $data['foo']);
-        self::assertSame('ok', $data['calc']);
+        // one level in, not at the top: the top level of a trace's data belongs to
+        // the watcher and is never masked, and this is application data
+        self::assertSame('bar', $data['__additional']['foo']);
+        self::assertSame('ok', $data['__additional']['calc']);
+    }
+
+    public function testAdditionalDataIsReachableByTheMasker(): void
+    {
+        $complementer = new TraceDataComplementer(
+            app: $this->getApp(),
+            watchersConfig: new WatchersConfig()
+        );
+
+        $complementer->add('customer_email', 'john.doe@example.com');
+        $complementer->add('api_token', 'tok-secret');
+
+        $data = [];
+
+        $complementer->inject($data);
+
+        $masked = app(TraceDataMasker::class)->mask($data);
+
+        self::assertSame('jo****************om', $masked['__additional']['customer_email']);
+        self::assertSame(MaskHelper::FULL_MASK, $masked['__additional']['api_token']);
     }
 
     public function testInjectRespectsExcludedFileMasks(): void

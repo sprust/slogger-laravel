@@ -208,6 +208,107 @@ class ConcurrentTracingTest extends BaseWatcherTestCase
         $paused->resume();
     }
 
+    public function testADetachedTraceCanBeClosedFromAnotherCoroutine(): void
+    {
+        $processor = $this->getApp()->make(Processor::class);
+
+        $traceId = null;
+
+        // a coroutine sends an outbound request and suspends waiting for it
+        $sender = $this->resolver->spawn(static function () use ($processor, &$traceId): void {
+            $traceId = $processor->startAndGetDetachedTraceId(
+                type: 'http-client',
+                tags: [],
+                data: [],
+                loggedAt: Carbon::now(),
+            );
+
+            \Fiber::suspend();
+        });
+
+        $sender->start();
+
+        self::assertIsString($traceId);
+
+        // the runtime resolves the promise elsewhere - another coroutine, or the
+        // scheduler itself. A per-scope map would leave this find nothing, report
+        // "already closed", and let the sender sweep a request that succeeded
+        $processor->stopDetached(
+            traceId: $traceId,
+            status: TraceStatusEnum::Success->value,
+            tags: ['https://example.test'],
+            data: ['response' => ['status_code' => 200]],
+            duration: 1.0,
+            parentLoggedAt: Carbon::now(),
+        );
+
+        $sender->resume();
+
+        $updating = $this->dispatcher->findUpdating(traceId: $traceId);
+
+        self::assertCount(1, $updating);
+        self::assertSame(TraceStatusEnum::Success->value, $updating[0]->status);
+        self::assertNotContains(Processor::INTERRUPTED_TAG, $updating[0]->tags ?? []);
+        self::assertSame(200, ($updating[0]->data ?? [])['response']['status_code']);
+    }
+
+    public function testAFinishedCoroutinesScopeIsNotAdoptedByTheNextOne(): void
+    {
+        $processor = $this->getApp()->make(Processor::class);
+
+        $abandonedTraceId = null;
+
+        // a coroutine that starts a trace, never closes it, and is then collected
+        $abandoned = $this->resolver->spawn(static function () use ($processor, &$abandonedTraceId): void {
+            $abandonedTraceId = $processor->startAndGetTraceId(
+                type: 'first',
+                tags: [],
+                data: [],
+                loggedAt: Carbon::now(),
+                customParentTraceId: null,
+            );
+        });
+
+        $abandoned->start();
+
+        unset($abandoned);
+
+        gc_collect_cycles();
+
+        self::assertIsString($abandonedTraceId);
+
+        // PHP hands a collected object's spl_object_id to the next one allocated, so
+        // a resolver keyed by it would let this coroutine adopt the abandoned scope:
+        // a stranger's stack, its parent trace id, and its open traces to sweep
+        $adopted = null;
+
+        $fresh = $this->resolver->spawn(static function () use ($processor, &$adopted): void {
+            $adopted = [
+                'active' => $processor->isActive(),
+                'parent' => $processor->startAndGetTraceId(
+                    type: 'second',
+                    tags: [],
+                    data: [],
+                    loggedAt: Carbon::now(),
+                    customParentTraceId: null,
+                ),
+            ];
+        });
+
+        $fresh->start();
+
+        self::assertIsArray($adopted);
+
+        // a brand new unit of work starts clean
+        self::assertFalse($adopted['active']);
+        self::assertNotSame($abandonedTraceId, $adopted['parent']);
+
+        $created = $this->dispatcher->findCreating(type: 'second');
+
+        self::assertCount(1, $created);
+        self::assertNull($created[0]->parentTraceId);
+    }
+
     public function testTheDefaultResolverKeepsOneScopePerProcess(): void
     {
         // nothing changes for FPM, queue:work or an artisan command

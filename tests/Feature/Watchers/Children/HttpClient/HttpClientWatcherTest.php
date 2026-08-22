@@ -9,7 +9,9 @@ use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Psr7\NoSeekStream;
 use GuzzleHttp\Psr7\Request;
+use GuzzleHttp\Psr7\Utils as Psr7Utils;
 use GuzzleHttp\Promise\Utils;
 use GuzzleHttp\Psr7\Response;
 use ReflectionClass;
@@ -18,10 +20,10 @@ use SLoggerLaravel\Guzzle\GuzzleHandlerFactory;
 use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Helpers\TraceDataMasker;
 use SLoggerLaravel\Objects\TraceCreateObject;
+use SLoggerLaravel\Processor;
 use SLoggerLaravel\RequestPreparer\RequestDataFormatters;
 use SLoggerLaravel\Tests\Feature\Watchers\Children\BaseChildWatcherTestCase;
 use SLoggerLaravel\Watchers\Children\HttpClientWatcher;
-use SLoggerLaravel\Processor;
 use SLoggerLaravel\Watchers\Parents\JobWatcher;
 use Throwable;
 
@@ -233,6 +235,77 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
         self::assertSame([], $this->getTrackedRequests($watcher));
     }
 
+    public function testANonSeekableRequestBodyDoesNotBreakTheTrace(): void
+    {
+        $this->registerWatcher(JobWatcher::class, null);
+
+        dispatch(static function (): void {
+            $handlerStack = app(GuzzleHandlerFactory::class)->prepareHandler(
+                formatters: new RequestDataFormatters(),
+                handlerStack: HandlerStack::create(new MockHandler([new Response(200)]))
+            );
+
+            $client = new Client([
+                'handler'     => $handlerStack,
+                'http_errors' => false,
+            ]);
+
+            // an upload from a pipe: rewind() throws, and the trace used to die with
+            // it - reported as failed and swept as interrupted, with no data at all
+            $client->request('POST', 'https://example.test/upload', [
+                'body' => new NoSeekStream(Psr7Utils::streamFor('{"payload":"x"}')),
+            ]);
+        });
+
+        $creating = $this->dispatcher->findCreating(type: 'http-client');
+
+        self::assertCount(1, $creating);
+
+        $updating = $this->dispatcher->findUpdating(traceId: $creating[0]->traceId);
+
+        self::assertCount(1, $updating);
+
+        self::assertSame(TraceStatusEnum::Success->value, $updating[0]->status);
+        self::assertNotContains(Processor::INTERRUPTED_TAG, $updating[0]->tags ?? []);
+
+        self::assertSame(
+            ['__skipped' => 'non_seekable_body'],
+            ($updating[0]->data ?? [])['request']['payload']
+        );
+    }
+
+    public function testALargeRequestBodyIsDescribedRatherThanCopied(): void
+    {
+        $this->registerWatcher(JobWatcher::class, null);
+
+        dispatch(static function (): void {
+            $handlerStack = app(GuzzleHandlerFactory::class)->prepareHandler(
+                formatters: new RequestDataFormatters(),
+                handlerStack: HandlerStack::create(new MockHandler([new Response(200)]))
+            );
+
+            $client = new Client([
+                'handler'     => $handlerStack,
+                'http_errors' => false,
+            ]);
+
+            // telemetry must not double the memory an upload needs
+            $client->request('POST', 'https://example.test/upload', [
+                'body' => str_repeat('a', 1000000 + 1),
+            ]);
+        });
+
+        $creating = $this->dispatcher->findCreating(type: 'http-client');
+
+        self::assertCount(1, $creating);
+
+        $updating = $this->dispatcher->findUpdating(traceId: $creating[0]->traceId);
+
+        $payload = ($updating[0]->data ?? [])['request']['payload'];
+
+        self::assertArrayHasKey('__cleaned', $payload);
+    }
+
     public function testTheQueryStringIsCarriedAsDataAndNotAsATag(): void
     {
         $this->registerWatcher(JobWatcher::class, null);
@@ -266,6 +339,35 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
 
         self::assertCount(1, $updating);
         self::assertSame(['https://example.test/alpha'], $updating[0]->tags);
+    }
+
+    public function testCredentialsInAUrlNeverReachATag(): void
+    {
+        $this->registerWatcher(JobWatcher::class, null);
+
+        dispatch(static function (): void {
+            $handlerStack = app(GuzzleHandlerFactory::class)->prepareHandler(
+                formatters: new RequestDataFormatters(),
+                handlerStack: HandlerStack::create(new MockHandler([new Response(200)]))
+            );
+
+            $client = new Client([
+                'handler'     => $handlerStack,
+                'http_errors' => false,
+            ]);
+
+            $client->request('get', 'https://alice:hunter2@example.test/v1/me');
+        });
+
+        $creating = $this->dispatcher->findCreating(type: 'http-client');
+
+        self::assertCount(1, $creating);
+
+        $updating = $this->dispatcher->findUpdating(traceId: $creating[0]->traceId);
+
+        // a tag is never masked, so the password must not be in the url at all
+        self::assertSame(['https://example.test/v1/me'], $updating[0]->tags);
+        self::assertSame('https://example.test/v1/me', $creating[0]->data['uri']);
     }
 
     public function testTheQueryStringIsMaskedOnTheWayOut(): void

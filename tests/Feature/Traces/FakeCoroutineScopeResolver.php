@@ -39,7 +39,7 @@ class FakeCoroutineScopeResolver extends FiberTraceScopeResolver
 
         $fiber = new Fiber($callback);
 
-        $this->parents[spl_object_id($fiber)] = $parentId;
+        $this->parents[$this->ownerIdOf($fiber)] = $parentId;
 
         return $fiber;
     }

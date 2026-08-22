@@ -190,7 +190,7 @@ class RequestWatcher implements WatcherInterface
      */
     protected function getCommonRequestData(Request $request): array
     {
-        $url = $this->getUrlWithoutQuery($request);
+        $url = $this->getUrlPattern($request);
 
         /**
          * for support for Laravel 10, 12
@@ -211,7 +211,7 @@ class RequestWatcher implements WatcherInterface
 
         return [
             'ip_address'       => $request->ip(),
-            'uri'              => $this->prepareUrl($url),
+            'uri'              => $url,
             'method'           => $request->method(),
             'action'           => $action,
             'middlewares'      => $middlewares,
@@ -227,18 +227,42 @@ class RequestWatcher implements WatcherInterface
     protected function getPreTags(Request $request): array
     {
         return [
-            $this->prepareUrl($this->getUrlWithoutQuery($request)),
+            $this->getUrlPattern($request),
         ];
     }
 
     /**
-     * A url is carried as a tag and as `uri`, and nothing masks either of those. The
-     * query string is split off and carried as data instead: `query` is matched key
-     * by key and `query_string` parameter by parameter by the dispatcher job.
+     * The route pattern - `/reset/{token}` - not the url it was matched from.
+     *
+     * A url is carried as a tag and as `uri`, and nothing masks either of those:
+     * `/reset/tok-secret` would hand the receiver the token in the clear. The values
+     * travel as data instead, in `route_parameters`, where the key list reaches them
+     * by parameter name.
+     *
+     * Falls back to the path when there is no route to speak of (a 404, a request
+     * that never reached the router). Nothing better exists in that case, and there
+     * are no bound parameters to leak either - only whatever the caller typed.
      */
-    protected function getUrlWithoutQuery(Request $request): string
+    protected function getUrlPattern(Request $request): string
     {
-        return str_replace($request->root(), '', $request->url());
+        /**
+         * for support for Laravel 10, 12
+         *
+         * @var Route|object|string|null $route
+         */
+        $route = $request->route();
+
+        if ($route instanceof Route) {
+            return $this->prepareUrl($route->uri());
+        }
+
+        if (is_string($route) && $route !== '') {
+            return $this->prepareUrl($route);
+        }
+
+        return $this->prepareUrl(
+            str_replace($request->root(), '', $request->url())
+        );
     }
 
     /**

@@ -21,14 +21,6 @@ class TraceScope
      */
     public array $tracesStack = [];
 
-    /**
-     * Open detached traces, by trace id. They are kept off the stack, so this is the
-     * only way the parent that started them can still close them.
-     *
-     * @var array<string, array{owner_trace_id: string|null, tags: string[], logged_at: Carbon}>
-     */
-    public array $detachedTraces = [];
-
     public bool $paused = false;
 
     public ?string $parentTraceId = null;

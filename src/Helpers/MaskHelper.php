@@ -105,6 +105,26 @@ class MaskHelper
     }
 
     /**
+     * Masks every occurrence of a value pattern in a standalone string.
+     *
+     * Tags and array keys are strings with no key naming them, so the key lists
+     * cannot reach either. What identifies a person by its own shape still can be
+     * found there.
+     *
+     * @param array<mixed> $valuePatterns
+     */
+    public static function maskString(string $value, array $valuePatterns): string
+    {
+        $patterns = self::preparePatterns($valuePatterns);
+
+        if (!$patterns || $value === '' || strlen($value) > self::MAX_STRING_LENGTH) {
+            return $value;
+        }
+
+        return self::maskByValuePatterns($value, $patterns);
+    }
+
+    /**
      * Masks a value whole. Scalars keep their type, so a masked payload stays
      * shaped like the original one.
      */
@@ -202,8 +222,14 @@ class MaskHelper
                 $thisMode = max($mode, self::modeFor($path, $rules));
             }
 
+            // an application-controlled key is data too: a cache key is `otp:<email>`
+            // often enough, and no key names a key
+            $maskedKey = is_string($key)
+                ? self::maskByValuePatterns($key, $rules['valuePatterns'])
+                : $key;
+
             if (is_array($value)) {
-                $result[$key] = $value === []
+                $result[$maskedKey] = $value === []
                     ? $value
                     : self::maskNode(
                         data: $value,
@@ -216,7 +242,7 @@ class MaskHelper
                 continue;
             }
 
-            $result[$key] = $thisMode === self::MODE_NONE
+            $result[$maskedKey] = $thisMode === self::MODE_NONE
                 ? self::maskUnmatchedString($value, $segment, $rules)
                 : self::mask($value, $thisMode);
         }

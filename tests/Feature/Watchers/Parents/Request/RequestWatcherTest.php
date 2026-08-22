@@ -64,8 +64,15 @@ class RequestWatcherTest extends BaseParentWatcherTestCase
 
         self::assertCount(1, $updating);
 
-        // the pattern, not the value bound to it: a tag is never masked
+        // the pattern, not the value bound to it: a tag is never masked. Both traces
+        // carry it - the start trace used to tag the concrete url
+        self::assertSame(['/slogger/reset/{token}'], $creating[0]->tags);
         self::assertSame(['/slogger/reset/{token}'], $updating[0]->tags);
+
+        // and `uri` is the pattern too: it sits at the top level of the trace data,
+        // which the masker leaves alone by design
+        self::assertSame('/slogger/reset/{token}', $creating[0]->data['uri']);
+        self::assertSame('/slogger/reset/{token}', ($updating[0]->data ?? [])['uri']);
 
         $data = $updating[0]->data ?? [];
 
@@ -74,6 +81,13 @@ class RequestWatcherTest extends BaseParentWatcherTestCase
         $masked = app(TraceDataMasker::class)->mask($data);
 
         self::assertSame(MaskHelper::FULL_MASK, $masked['route_parameters']['token']);
+
+        // nothing anywhere in the trace still carries the bound value
+        foreach ([$creating[0]->tags, $updating[0]->tags] as $tags) {
+            self::assertStringNotContainsString('tok-secret', implode(' ', $tags));
+        }
+
+        self::assertStringNotContainsString('tok-secret', json_encode($masked, JSON_THROW_ON_ERROR));
     }
 
     public function testTheTraceIdHeaderReachesTheClient(): void

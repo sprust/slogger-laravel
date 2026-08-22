@@ -58,6 +58,7 @@ class TraceDataMasker
 
         foreach ($traces->iterateCreating() as $trace) {
             $trace->data = $this->mask($trace->data);
+            $trace->tags = $this->maskTags($trace->tags);
 
             $masked->addCreating($trace);
         }
@@ -67,10 +68,35 @@ class TraceDataMasker
                 $trace->data = $this->mask($trace->data);
             }
 
+            if (!is_null($trace->tags)) {
+                $trace->tags = $this->maskTags($trace->tags);
+            }
+
             $masked->addUpdating($trace);
         }
 
         return $masked;
+    }
+
+    /**
+     * Tags are bare strings - a url, a sql fragment, a cache key - with no key naming
+     * them, so the key lists cannot reach them. The value patterns can: what
+     * identifies a person by its own shape is just as recognisable in a tag.
+     *
+     * @param string[] $tags
+     *
+     * @return string[]
+     */
+    public function maskTags(array $tags): array
+    {
+        if (!$tags || !$this->valuePatterns) {
+            return $tags;
+        }
+
+        return array_map(
+            fn(string $tag): string => MaskHelper::maskString($tag, $this->valuePatterns),
+            $tags
+        );
     }
 
     /**

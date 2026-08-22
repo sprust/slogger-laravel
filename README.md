@@ -43,9 +43,13 @@ Masking moved out of the traced application and into the dispatcher job.
     `target.recipients` (and an address left in a string like that is now masked by a
     value pattern anyway);
   - a url's query string is split off into `query` and `query_string`;
-  - **route parameter values are no longer tags.** `/reset/{token}` used to put the
-    token itself in the trace's tags; the values are in `route_parameters` now, where
-    the key list reaches them by parameter name.
+  - **route parameter values are no longer tags, and no longer the `uri`.** A request
+    is tagged and titled with the route pattern - `/reset/{token}` - and the values
+    live in `route_parameters`, where the key list reaches them by parameter name.
+  - the outbound `uri` loses its userinfo, so credentials written into a url do not
+    reach a tag;
+  - values added through `TraceDataComplementer::add()` land under `__additional`
+    rather than at the top level, which is what puts them in the masker's reach.
 
   Anything consuming those fields on the receiving side needs updating.
 - **Laravel 10.17** is the new floor. `src/` needs 10.12 (`JobTimedOut` landed there),
@@ -359,11 +363,13 @@ and a PIN, an OTP and an account number are all short and numeric.
 ```
 
 Both lists are case-insensitive substrings of a key; masking is off only when all three
-lists (`value_patterns` included) are empty.
+lists (`value_patterns` included) are empty. That switch governs the database watcher's
+bindings too, which are the one thing still masked in the traced application.
 A key matches when it *contains* one of the substrings, so `customer_email`, `API_KEY`
 and `lastName` are all matched. A match on a parent key applies to its subtree, so
-`auth` covers `auth.method` too. A key in both lists is masked whole - the stricter
-list wins.
+`context.auth` covers `context.auth.method` too - note that this needs the parent to be
+one level in, since the top level is not matched at all (see below). A key in both lists
+is masked whole - the stricter list wins.
 
 The split is the point. A secret is worthless the moment any of it leaks, so
 `masking.full_keys` replaces the value entirely: `********`, a fixed width, so the length of
@@ -399,10 +405,10 @@ of the string stays readable:
 ```
 
 They are not bound to a key, so unlike the key lists they apply at the top level too,
-and they reach inside JSON strings and query strings along with everything else. A key
-match still wins: a `token` holding an address loses all of it, not just the middle.
-An invalid pattern is dropped rather than raising a warning for every string in every
-trace.
+and they reach inside JSON strings and query strings, into **array keys**, and into a
+trace's **tags** - which nothing else masks. A key match still wins: a `token` holding
+an address loses all of it, not just the middle. An invalid pattern is dropped rather
+than raising a warning for every string in every trace.
 
 The key lists and the patterns cover different things and are meant to be used
 together - `recipient` in `partial_keys` catches a phone number under
@@ -430,9 +436,16 @@ Masked values keep basic types, so a masked payload stays shaped like the origin
 - `int` -> `0`
 - `float` -> `0.0`
 - `string` -> `********`, or two characters at each end for a partial mask
-- arrays/objects -> `********`
+- an object -> `********` (one with `__toString()` is masked as its string)
 
 An empty string is left as it is: a mask there would claim something had been hidden.
+
+**An array is walked, not replaced.** A matching key covers its subtree, so every
+*leaf* under it is masked while the structure and the key names survive:
+`{"token":{"a":"secret","b":2}}` becomes `{"token":{"a":"********","b":0}}`. Keys are
+data too when the application chooses them - a cache key is `otp:<address>` often
+enough - so `value_patterns` are applied to array keys and to tags as well, the two
+places no key list can reach.
 
 ## Guzzle / HTTP Client tracing
 

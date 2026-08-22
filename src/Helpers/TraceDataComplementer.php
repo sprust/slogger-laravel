@@ -38,6 +38,12 @@ class TraceDataComplementer
         $this->maxDepth          = 30;
     }
 
+    /**
+     * Adds a value to every trace this process records. It lands under
+     * `__additional`, one level in, which is where the dispatcher job's key list can
+     * reach it - the top level of a trace's data belongs to the watcher and is never
+     * masked, and this is application data.
+     */
     public function add(string $key, mixed $value): void
     {
         $this->additional[$key] = $value;
@@ -91,12 +97,20 @@ class TraceDataComplementer
 
         $data['__trace'] = $trace;
 
+        if (!$this->additional) {
+            return;
+        }
+
+        $additional = [];
+
         foreach ($this->additional as $key => $value) {
             if ($value instanceof Closure) {
                 $value = $this->app->call($value);
             }
 
-            $data[$key] = $value;
+            $additional[$key] = $value;
         }
+
+        $data['__additional'] = $additional;
     }
 }

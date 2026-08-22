@@ -73,6 +73,42 @@ class WatcherDataReachableByMaskingTest extends BaseWatcherTestCase
         );
     }
 
+    public function testACacheKeyIsMaskedInBothPositionsItAppears(): void
+    {
+        $this->registerWatcher(JobWatcher::class, null);
+        $this->registerWatcher(CacheWatcher::class, null);
+
+        dispatch(static function (): void {
+            Cache::put('otp:john.doe@example.com', '123456', 60);
+        });
+
+        $creating = $this->dispatcher->findCreating(type: 'cache', tag: 'set');
+
+        self::assertCount(1, $creating);
+
+        $masker = $this->getApp()->make(TraceDataMasker::class);
+
+        $masked = $masker->mask($creating[0]->data);
+        $tags   = $masker->maskTags($creating[0]->tags);
+
+        // the same string appears as a value, as an array key, and as a tag. Only
+        // the first was ever masked - a key has no key naming it, and a tag has none
+        // either, so the key lists cannot reach them. A value pattern can
+        self::assertSame('otp:jo****************om', $masked['key']);
+        self::assertSame(['otp:jo****************om'], array_keys($masked['cache']));
+        self::assertSame(['set', 'otp:jo****************om'], $tags);
+    }
+
+    public function testAnAddressInAUrlTagIsMasked(): void
+    {
+        $masker = $this->getApp()->make(TraceDataMasker::class);
+
+        self::assertSame(
+            ['/users/jo****************om/orders'],
+            $masker->maskTags(['/users/john.doe@example.com/orders'])
+        );
+    }
+
     public function testMailAddressesAreReachableByName(): void
     {
         // the mail watcher's own shape, built the way handleMessageSent() builds it

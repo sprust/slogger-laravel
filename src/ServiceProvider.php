@@ -6,6 +6,7 @@ use Illuminate\Config\Repository;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Events\Dispatcher;
+use Illuminate\Support\Facades\Log;
 use SLoggerLaravel\Configs\DispatcherConfig;
 use SLoggerLaravel\Configs\DispatcherQueueConfig;
 use SLoggerLaravel\Configs\GeneralConfig;
@@ -27,6 +28,8 @@ use SLoggerLaravel\Profiling\XHProfProfiler;
 use SLoggerLaravel\Traces\ProcessTraceScopeResolver;
 use SLoggerLaravel\Traces\TraceScopeResolverInterface;
 use SLoggerLaravel\Traces\TraceIdContainer;
+use SLoggerLaravel\Watchers\Children\ModelWatcher;
+use Throwable;
 use SLoggerLaravel\Watchers\WatcherInterface;
 
 class ServiceProvider extends \Illuminate\Support\ServiceProvider
@@ -99,6 +102,8 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
             return;
         }
 
+        $this->warnAboutRetiredMaskingConfig();
+
         $this->registerListeners();
         $this->registerWatchers();
 
@@ -110,6 +115,57 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
                 'slogger-laravel',
             ]
         );
+    }
+
+    /**
+     * A config published before 1.3 still carries the per-watcher masking sections,
+     * which are no longer read. Anything the application added to them - `*ssn*`,
+     * `*iban*`, a model's own `masks` - silently stopped being masked the moment it
+     * upgraded. Say so once, out loud: this is a security regression triggered by a
+     * routine `composer update`, and a README is not where anyone will look for it.
+     *
+     * @throws BindingResolutionException
+     */
+    private function warnAboutRetiredMaskingConfig(): void
+    {
+        $retired = [
+            'slogger.watchers_config.requests.input.headers_masking',
+            'slogger.watchers_config.requests.input.parameters_masking',
+            'slogger.watchers_config.requests.output.headers_masking',
+            'slogger.watchers_config.requests.output.fields_masking',
+        ];
+
+        $found = array_values(
+            array_filter($retired, static fn(string $key): bool => !is_null(config($key)))
+        );
+
+        /** @var array<array{class?: string, config?: array<string, mixed>}> $watcherConfigs */
+        $watcherConfigs = $this->app->make(Repository::class)['slogger.watchers'] ?? [];
+
+        foreach ($watcherConfigs as $watcherConfig) {
+            if (($watcherConfig['class'] ?? null) === ModelWatcher::class
+                && isset($watcherConfig['config']['masks'])
+            ) {
+                $found[] = ModelWatcher::class . ' config.masks';
+            }
+        }
+
+        if (!$found) {
+            return;
+        }
+
+        try {
+            Log::channel($this->app->make(GeneralConfig::class)->getLogChannel())
+                ->warning(
+                    sprintf(
+                        'slogger: these config sections are no longer read and mask nothing: %s. '
+                        . 'Move the keys you added there into masking.full_keys or masking.partial_keys.',
+                        implode(', ', $found)
+                    )
+                );
+        } catch (Throwable) {
+            // a broken log channel must not stop the application from booting
+        }
     }
 
     /**

@@ -72,6 +72,13 @@ class ProcessHelper
             return;
         }
 
+        if ($pgid <= 1) {
+            // posix_kill(-1, ...) is a broadcast to every process the user may
+            // signal. A master running as PID 1 - an ordinary container entrypoint -
+            // has pgid 1, so this is reachable, not theoretical
+            return;
+        }
+
         posix_kill(-$pgid, SIGTERM);
     }
 }

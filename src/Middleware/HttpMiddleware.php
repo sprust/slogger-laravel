@@ -16,7 +16,6 @@ class HttpMiddleware
 
     private ?TraceIdContainer $traceIdContainer = null;
 
-    private ?string $traceId                = null;
     private ?string $headerParentTraceIdKey = null;
 
     public function __construct(GeneralConfig $config)
@@ -42,8 +41,6 @@ class HttpMiddleware
                         : (is_string($parentTraceId) ? $parentTraceId : null)
                 )
             );
-
-            $this->traceId = $this->getLoggerTraceIdContainer()->getParentTraceId();
         }
 
         $response = $next($request);
@@ -61,7 +58,7 @@ class HttpMiddleware
      */
     private function setTraceIdHeader(Response $response): void
     {
-        if (!$this->enabled || is_null($this->traceId)) {
+        if (!$this->enabled) {
             return;
         }
 
@@ -71,7 +68,18 @@ class HttpMiddleware
             return;
         }
 
-        $response->headers->set($headerParentTraceIdKey, $this->traceId);
+        // read it now rather than remembering it from before $next(): the middleware
+        // is a singleton, so a remembered id belongs to whichever request wrote it
+        // last - harmless while a process serves one request at a time, wrong under
+        // Octane and under a coroutine runtime. The container resolves it per unit
+        // of work, which is the whole point of TraceScope
+        $traceId = $this->getLoggerTraceIdContainer()->getParentTraceId();
+
+        if (is_null($traceId)) {
+            return;
+        }
+
+        $response->headers->set($headerParentTraceIdKey, $traceId);
     }
 
     private function getHeaderParentTraceIdKey(): ?string

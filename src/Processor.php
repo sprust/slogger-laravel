@@ -32,6 +32,21 @@ class Processor
     public const INTERRUPTED_TAG = '__interrupted';
 
     /**
+     * Open detached traces, by trace id. They are kept off the stack, so this is the
+     * only way the parent that started them can still close them.
+     *
+     * Process-wide on purpose, unlike the stack: a detached trace exists precisely
+     * because it is closed somewhere other than where it was started. Under a
+     * concurrent runtime the response to an outbound request can be handled in
+     * another coroutine than the one that sent it, and a per-scope map would leave
+     * the sender to sweep a request that in fact succeeded. The trace id is unique,
+     * so one map is enough; who owns what is recorded in `owner_trace_id`.
+     *
+     * @var array<string, array{owner_trace_id: string|null, tags: string[], logged_at: Carbon}>
+     */
+    private array $detachedTraces = [];
+
+    /**
      * Called with the trace id of every detached trace closed by the sweep rather
      * than by its own watcher.
      *
@@ -221,8 +236,6 @@ class Processor
         Carbon $loggedAt,
         ?string $customParentTraceId
     ): string {
-        $this->profiler->start();
-
         $parentTraceId = $this->traceIdContainer->getParentTraceId();
 
         $traceId = $this->dispatchStartTrace(
@@ -241,6 +254,10 @@ class Processor
         ];
 
         $this->traceIdContainer->setParentTraceId($traceId);
+
+        // after the id exists: the profile belongs to this trace, and a nested one
+        // started later must not walk off with it
+        $this->profiler->start($traceId);
 
         return $traceId;
     }
@@ -271,7 +288,7 @@ class Processor
             parentTraceId: $ownerTraceId,
         );
 
-        $this->scope()->detachedTraces[$traceId] = [
+        $this->detachedTraces[$traceId] = [
             'owner_trace_id' => $ownerTraceId,
             'tags'           => $tags,
             'logged_at'      => $loggedAt->clone(),
@@ -338,7 +355,7 @@ class Processor
         ?float $duration,
         Carbon $parentLoggedAt,
     ): void {
-        if (isset($this->scope()->detachedTraces[$traceId])) {
+        if (isset($this->detachedTraces[$traceId])) {
             // the caller mixed up the two APIs; close it the way it was started
             $this->stopDetached(
                 traceId: $traceId,
@@ -390,7 +407,7 @@ class Processor
         $this->dispatchStopTrace(
             traceId: $traceId,
             status: $status,
-            profiling: $this->profiler->stop(),
+            profiling: $this->profiler->stop($traceId),
             tags: $tags,
             data: $data,
             duration: $duration,
@@ -413,7 +430,7 @@ class Processor
         ?float $duration,
         Carbon $parentLoggedAt,
     ): void {
-        if (!isset($this->scope()->detachedTraces[$traceId])) {
+        if (!isset($this->detachedTraces[$traceId])) {
             if (is_null($this->findStackIndex($traceId))) {
                 // already closed
                 return;
@@ -432,7 +449,7 @@ class Processor
             return;
         }
 
-        unset($this->scope()->detachedTraces[$traceId]);
+        unset($this->detachedTraces[$traceId]);
 
         $this->dispatchStopTrace(
             traceId: $traceId,
@@ -550,6 +567,8 @@ class Processor
         foreach (array_reverse($interrupted) as $stackItem) {
             $this->stopInterruptedDetached(ownerTraceId: $stackItem['trace_id']);
 
+            $this->profiler->release($stackItem['trace_id']);
+
             $loggedAt = $stackItem['logged_at'];
 
             $this->dispatchUpdateTrace(
@@ -577,12 +596,12 @@ class Processor
      */
     private function stopInterruptedDetached(?string $ownerTraceId): void
     {
-        foreach ($this->scope()->detachedTraces as $traceId => $detachedTrace) {
+        foreach ($this->detachedTraces as $traceId => $detachedTrace) {
             if ($detachedTrace['owner_trace_id'] !== $ownerTraceId) {
                 continue;
             }
 
-            unset($this->scope()->detachedTraces[$traceId]);
+            unset($this->detachedTraces[$traceId]);
 
             $this->dispatchStopTrace(
                 traceId: $traceId,

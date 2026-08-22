@@ -20,6 +20,11 @@ use Throwable;
 
 class HttpClientWatcher implements WatcherInterface
 {
+    /**
+     * Bodies at or above this are described rather than recorded, in either
+     * direction: telemetry must not double the memory a request needs.
+     */
+    protected const MAX_BODY_BYTES = 1000000;
     protected string $headerTraceIdKey;
     protected ?string $headerParentTraceIdKey;
 
@@ -124,8 +129,11 @@ class HttpClientWatcher implements WatcherInterface
 
         $request = $request->withHeader($this->headerTraceIdKey, $traceId);
 
-        if ($this->headerParentTraceIdKey) {
-            // the called service traces the call as a child of this request
+        if ($this->headerParentTraceIdKey && $this->traceIdContainer->getParentTraceId()) {
+            // the called service traces the call as a child of this request. Only
+            // when this process is tracing something: an untraced call has no tree
+            // to join, and the header would tell a third party nothing but our
+            // internal ids
             $request = $request->withHeader(
                 $this->headerParentTraceIdKey,
                 $traceId
@@ -274,13 +282,7 @@ class HttpClientWatcher implements WatcherInterface
         RequestInterface $request,
         RequestDataFormatters $formatters
     ): array {
-        $body = $request->getBody();
-
-        $body->rewind();
-
-        $parameters = json_decode($body->getContents(), true) ?: [];
-
-        $body->rewind();
+        $parameters = $this->readRequestBody($request);
 
         $url = $this->getRequestPath($request);
 
@@ -292,6 +294,52 @@ class HttpClientWatcher implements WatcherInterface
         }
 
         return $parameters;
+    }
+
+    /**
+     * Reading an outbound body is the one thing tracing does that can change what the
+     * application sends, or how much memory it needs to send it. Both guards below
+     * exist for that reason, and both mirror what the response path already does.
+     *
+     * @return array<int|string, mixed>
+     */
+    protected function readRequestBody(RequestInterface $request): array
+    {
+        $body = $request->getBody();
+
+        if (!$body->isSeekable()) {
+            // reading it would consume the body the client is about to send
+            return [
+                '__skipped' => 'non_seekable_body',
+            ];
+        }
+
+        $size = $body->getSize();
+
+        if (!is_null($size) && $size >= self::MAX_BODY_BYTES) {
+            // an upload must not be copied into memory a second time just to trace it
+            return [
+                '__cleaned' => "--cleaned:big-size-$size--",
+            ];
+        }
+
+        $body->rewind();
+
+        $contents = $body->getContents();
+
+        $body->rewind();
+
+        if (strlen($contents) >= self::MAX_BODY_BYTES) {
+            // getSize() is null for a chunked or generated body, so the cap has to be
+            // re-checked against what was actually read
+            return [
+                '__cleaned' => '--cleaned:big-size--',
+            ];
+        }
+
+        $parameters = json_decode($contents, true);
+
+        return is_array($parameters) ? $parameters : [];
     }
 
     /**
@@ -328,7 +376,7 @@ class HttpClientWatcher implements WatcherInterface
 
         $size = $body->getSize();
 
-        if ($size >= 1000000) { // 1mb
+        if ($size >= self::MAX_BODY_BYTES) {
             return [
                 '__cleaned' => "--cleaned:big-size-$size--",
             ];
@@ -391,11 +439,19 @@ class HttpClientWatcher implements WatcherInterface
     }
 
     /**
-     * The request url with its query string removed.
+     * The request url with everything secret-shaped stripped: the query string,
+     * which travels as data instead, and the userinfo, which is a password sitting
+     * in a url. Both would otherwise end up in a tag, and nothing masks a tag.
+     *
+     * What is left is the path, and a secret bound into a path - `/keys/sk-live-x/
+     * rotate` - still gets through. Nothing here can tell which path segment is a
+     * secret; a value pattern can, if it has a shape worth matching.
      */
     protected function getRequestUrl(RequestInterface $request): string
     {
-        return (string) $request->getUri()->withQuery('');
+        return (string) $request->getUri()
+            ->withQuery('')
+            ->withUserInfo('');
     }
 
     protected function getRequestPath(RequestInterface $request): string
