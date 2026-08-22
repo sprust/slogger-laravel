@@ -205,13 +205,14 @@ class RequestWatcher implements WatcherInterface
         $queryString = $request->getQueryString();
 
         return [
-            'ip_address'   => $request->ip(),
-            'uri'          => $this->prepareUrl($url),
-            'method'       => $request->method(),
-            'action'       => $action,
-            'middlewares'  => $middlewares,
-            'query'        => $request->query->all(),
-            'query_string' => $queryString === '' ? null : $queryString,
+            'ip_address'       => $request->ip(),
+            'uri'              => $this->prepareUrl($url),
+            'method'           => $request->method(),
+            'action'           => $action,
+            'middlewares'      => $middlewares,
+            'query'            => $request->query->all(),
+            'query_string'     => $queryString === '' ? null : $queryString,
+            'route_parameters' => $this->getRouteParameters($request),
         ];
     }
 
@@ -236,6 +237,10 @@ class RequestWatcher implements WatcherInterface
     }
 
     /**
+     * Only the route pattern, never the values bound to it. A tag is not masked, and
+     * `/reset/{token}` binds the token itself - the values travel as data instead, in
+     * `route_parameters`, where the key list reaches them by parameter name.
+     *
      * @return string[]
      */
     protected function getPostTags(Request $request, Response $response): array
@@ -263,8 +268,26 @@ class RequestWatcher implements WatcherInterface
 
         return [
             $this->prepareUrl($route->uri()),
-            ...array_values($route->originalParameters()),
         ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function getRouteParameters(Request $request): array
+    {
+        /**
+         * for support for Laravel 10, 12
+         *
+         * @var Route|object|string|null $route
+         */
+        $route = $request->route();
+
+        if (!$route instanceof Route) {
+            return [];
+        }
+
+        return $route->originalParameters();
     }
 
     protected function prepareUrl(string $url): string

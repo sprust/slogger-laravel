@@ -9,6 +9,8 @@ use SLoggerLaravel\Tests\Feature\BaseTestCase;
 
 class MaskHelperTest extends BaseTestCase
 {
+    private const EMAIL_PATTERN = '/[\\w.+-]+@[\\w-]+\\.[\\w.-]*[\\w-]/u';
+
     public function testMaskValueKeepsWhatCannotHideAnything(): void
     {
         self::assertNull(MaskHelper::maskValue(null));
@@ -148,6 +150,84 @@ class MaskHelperTest extends BaseTestCase
 
         // the mask stays readable: `*` is legal in a query string
         self::assertSame('api_token=' . MaskHelper::FULL_MASK, $masked['query_string']);
+    }
+
+    public function testMaskArrayByKeysMasksAValuePatternWhereverItAppears(): void
+    {
+        $masked = MaskHelper::maskArrayByKeys(
+            [
+                'context' => [
+                    'notifiable' => 'Anonymous:mail,john.doe@example.com',
+                    'note'       => 'nothing to see',
+                ],
+            ],
+            [],
+            [],
+            [self::EMAIL_PATTERN]
+        );
+
+        // masked in place: the string stays recognisable, the address does not survive
+        self::assertSame(
+            'Anonymous:mail,jo****************om',
+            $masked['context']['notifiable']
+        );
+
+        self::assertSame('nothing to see', $masked['context']['note']);
+    }
+
+    public function testValuePatternsApplyAtTheTopLevelToo(): void
+    {
+        // value patterns are not bound to a key, so the depth rule does not hold them back
+        $masked = MaskHelper::maskArrayByKeys(
+            ['notifiable' => 'john.doe@example.com'],
+            [],
+            [],
+            [self::EMAIL_PATTERN]
+        );
+
+        self::assertSame('jo****************om', $masked['notifiable']);
+    }
+
+    public function testValuePatternsReachInsideAJsonString(): void
+    {
+        $masked = MaskHelper::maskArrayByKeys(
+            ['payload' => '{"note":"write to john.doe@example.com"}'],
+            [],
+            [],
+            [self::EMAIL_PATTERN]
+        );
+
+        self::assertSame(
+            '{"note":"write to jo****************om"}',
+            $masked['payload']
+        );
+    }
+
+    public function testAKeyMatchStillWinsOverAValuePattern(): void
+    {
+        // the key says this is a secret; the pattern would only have masked it partially
+        $masked = MaskHelper::maskArrayByKeys(
+            ['context' => ['api_token' => 'john.doe@example.com']],
+            ['token'],
+            [],
+            [self::EMAIL_PATTERN]
+        );
+
+        self::assertSame(MaskHelper::FULL_MASK, $masked['context']['api_token']);
+    }
+
+    public function testAnInvalidValuePatternIsIgnored(): void
+    {
+        // a typo in a configured pattern would otherwise warn for every string in
+        // every trace, from inside the dispatcher job
+        $masked = MaskHelper::maskArrayByKeys(
+            ['context' => ['notifiable' => 'john.doe@example.com']],
+            [],
+            [],
+            ['/unterminated', 42, '', self::EMAIL_PATTERN]
+        );
+
+        self::assertSame('jo****************om', $masked['context']['notifiable']);
     }
 
     public function testMaskArrayByKeysLeavesTheTopLevelAlone(): void

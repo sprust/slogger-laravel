@@ -7,7 +7,6 @@ namespace SLoggerLaravel\Tests\Feature\Watchers\Children\Event;
 use App\Events\SuccessEvent;
 use Closure;
 use SLoggerLaravel\Objects\TraceCreateObject;
-use SLoggerLaravel\Objects\TraceUpdateObject;
 use SLoggerLaravel\Tests\Feature\Watchers\Children\BaseChildWatcherTestCase;
 use SLoggerLaravel\Watchers\Children\EventWatcher;
 
@@ -28,10 +27,9 @@ class EventWatcherTest extends BaseChildWatcherTestCase
         return static fn() => event(new SuccessEvent());
     }
 
-    protected function assertSuccess(
-        TraceCreateObject $creatingTrace,
-        TraceUpdateObject $updatingTrace
-    ): void {
-        // no action
+    protected function assertSuccess(TraceCreateObject $creatingTrace): void
+    {
+        self::assertSame([SuccessEvent::class], $creatingTrace->tags);
+        self::assertArrayHasKey('listeners', $creatingTrace->data);
     }
 }

@@ -25,14 +25,22 @@ class TraceDataMasker
      */
     private readonly array $partialKeys;
 
+    /**
+     * @var string[]
+     */
+    private readonly array $valuePatterns;
+
     private readonly bool $enabled;
 
     public function __construct(MaskingConfig $config)
     {
-        $this->fullKeys    = $config->getFullKeys();
-        $this->partialKeys = $config->getPartialKeys();
+        $this->fullKeys      = $config->getFullKeys();
+        $this->partialKeys   = $config->getPartialKeys();
+        $this->valuePatterns = $config->getValuePatterns();
 
-        $this->enabled = $this->fullKeys !== [] || $this->partialKeys !== [];
+        $this->enabled = $this->fullKeys !== []
+            || $this->partialKeys !== []
+            || $this->valuePatterns !== [];
     }
 
     public function isEnabled(): bool
@@ -80,7 +88,8 @@ class TraceDataMasker
         $masked = MaskHelper::maskArrayByKeys(
             data: $data,
             fullKeys: $this->fullKeys,
-            partialKeys: $this->partialKeys
+            partialKeys: $this->partialKeys,
+            valuePatterns: $this->valuePatterns
         );
 
         return $masked;

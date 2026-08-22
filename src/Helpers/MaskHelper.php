@@ -4,6 +4,9 @@ namespace SLoggerLaravel\Helpers;
 
 use Illuminate\Support\Str;
 
+/**
+ * @phpstan-type MaskingRules array{needles: string[], partialNeedles: string[], valuePatterns: string[]}
+ */
 class MaskHelper
 {
     /**
@@ -35,9 +38,9 @@ class MaskHelper
     private const PARTIAL_MIN_KEPT = 6;
 
     /**
-     * Above this, a string that looks like JSON is left alone rather than decoded.
+     * Above this, a string is left alone rather than decoded or scanned.
      */
-    private const MAX_JSON_LENGTH = 1000000;
+    private const MAX_STRING_LENGTH = 1000000;
 
     /**
      * Keys whose value is a URL query string. Such a value is masked parameter by
@@ -50,38 +53,52 @@ class MaskHelper
     ];
 
     /**
-     * Masks every value whose key contains one of the keys, case-insensitively.
+     * Masks every value whose key contains one of the keys, case-insensitively, and
+     * every occurrence of one of the value patterns wherever it appears.
      *
-     * `$fullKeys` are masked whole, `$partialKeys` keep a couple of characters at
-     * each end: a token is worthless the moment any of it leaks, while an address or a
+     * `$keys` are masked whole, `$partialKeys` keep a couple of characters at each
+     * end: a token is worthless the moment any of it leaks, while an address or a
      * phone number is mostly there to tell two records apart. A key matching both
      * lists is masked whole - the stricter list wins.
+     *
+     * `$valuePatterns` match the value instead of the key, and are masked partially.
+     * Some things identify a person by their own shape, wherever they turn up - an
+     * address in a `notifiable` string, or in the middle of a log message - and no
+     * key name points at those.
      *
      * The top level is left alone: watchers put their own fixed structure there
      * (`connection_name`, `request`, `changes`, ...) and the traced data starts one
      * level in. Matching therefore begins inside that structure, so a top-level key is
-     * neither masked itself nor able to drag its whole subtree in by name.
+     * neither masked itself nor able to drag its whole subtree in by name. Value
+     * patterns are not bound to a key, so they apply at every level.
      *
      * @param array<int|string, mixed> $data
      * @param array<mixed>             $fullKeys
      * @param array<mixed>             $partialKeys
+     * @param array<mixed>             $valuePatterns
      *
      * @return array<int|string, mixed>
      */
-    public static function maskArrayByKeys(array $data, array $fullKeys, array $partialKeys = []): array
-    {
-        $needles        = self::prepareNeedles($fullKeys);
-        $partialNeedles = self::prepareNeedles($partialKeys);
+    public static function maskArrayByKeys(
+        array $data,
+        array $fullKeys,
+        array $partialKeys = [],
+        array $valuePatterns = []
+    ): array {
+        $rules = [
+            'needles'        => self::prepareNeedles($fullKeys),
+            'partialNeedles' => self::prepareNeedles($partialKeys),
+            'valuePatterns'  => self::preparePatterns($valuePatterns),
+        ];
 
-        if (!$needles && !$partialNeedles) {
+        if (!$rules['needles'] && !$rules['partialNeedles'] && !$rules['valuePatterns']) {
             return $data;
         }
 
         return self::maskNode(
             data: $data,
             prefix: '',
-            needles: $needles,
-            partialNeedles: $partialNeedles,
+            rules: $rules,
             mode: self::MODE_NONE,
             depth: 1
         );
@@ -127,22 +144,48 @@ class MaskHelper
     }
 
     /**
+     * Drops anything that is not a usable regular expression. A typo in a configured
+     * pattern would otherwise raise a warning for every string in every trace, from
+     * inside the dispatcher job.
+     *
+     * @param array<mixed> $patterns
+     *
+     * @return string[]
+     */
+    private static function preparePatterns(array $patterns): array
+    {
+        $prepared = [];
+
+        foreach ($patterns as $pattern) {
+            if (!is_string($pattern) || $pattern === '') {
+                continue;
+            }
+
+            if (@preg_match($pattern, '') === false) {
+                continue;
+            }
+
+            $prepared[] = $pattern;
+        }
+
+        return $prepared;
+    }
+
+    /**
      * Walks the data instead of flattening it: a key that itself contains a dot would
      * not survive an Arr::dot()/Arr::set() round trip, and third-party payloads do
      * contain them.
      *
      * @param array<int|string, mixed> $data
-     * @param string[]                 $needles
-     * @param string[]                 $partialNeedles
-     * @param int                      $mode           the mode an ancestor key already imposed
+     * @param MaskingRules             $rules
+     * @param int                      $mode  the mode an ancestor key already imposed
      *
      * @return array<int|string, mixed>
      */
     private static function maskNode(
         array $data,
         string $prefix,
-        array $needles,
-        array $partialNeedles,
+        array $rules,
         int $mode,
         int $depth
     ): array {
@@ -156,7 +199,7 @@ class MaskHelper
                 $thisMode = self::MODE_NONE;
             } else {
                 $path     = $prefix === '' ? $segment : $prefix . '.' . $segment;
-                $thisMode = max($mode, self::modeFor($path, $needles, $partialNeedles));
+                $thisMode = max($mode, self::modeFor($path, $rules));
             }
 
             if (is_array($value)) {
@@ -165,8 +208,7 @@ class MaskHelper
                     : self::maskNode(
                         data: $value,
                         prefix: $path,
-                        needles: $needles,
-                        partialNeedles: $partialNeedles,
+                        rules: $rules,
                         mode: $thisMode,
                         depth: $depth + 1
                     );
@@ -175,7 +217,7 @@ class MaskHelper
             }
 
             $result[$key] = $thisMode === self::MODE_NONE
-                ? self::maskStructuredString($value, $segment, $needles, $partialNeedles)
+                ? self::maskUnmatchedString($value, $segment, $rules)
                 : self::mask($value, $thisMode);
         }
 
@@ -183,28 +225,64 @@ class MaskHelper
     }
 
     /**
-     * A string value can carry a structure of its own, whose keys the enclosing key
-     * says nothing about. Two are looked into: a JSON document and a URL query
-     * string.
+     * No key pointed at this value, so look at the value itself: it may carry a
+     * structure of its own (a JSON document, a URL query string), and it may contain
+     * something that identifies a person by its own shape.
      *
-     * @param string[] $needles
-     * @param string[] $partialNeedles
+     * @param MaskingRules $rules
      */
-    private static function maskStructuredString(
-        mixed $value,
-        string $key,
-        array $needles,
-        array $partialNeedles
-    ): mixed {
-        if (!is_string($value) || $value === '') {
+    private static function maskUnmatchedString(mixed $value, string $key, array $rules): mixed
+    {
+        if (!is_string($value) || $value === '' || strlen($value) > self::MAX_STRING_LENGTH) {
             return $value;
         }
 
         if (in_array(Str::lower($key), self::QUERY_STRING_KEYS, true)) {
-            return self::maskQueryString($value, $needles, $partialNeedles);
+            // its parameters went through this same path, patterns included
+            return self::maskQueryString($value, $rules);
         }
 
-        return self::maskJsonString($value, $needles, $partialNeedles);
+        $masked = self::maskJsonString($value, $rules);
+
+        if ($masked !== $value) {
+            // it was a JSON document and something inside it matched; every string in
+            // it has already been through here
+            return $masked;
+        }
+
+        return self::maskByValuePatterns($value, $rules['valuePatterns']);
+    }
+
+    /**
+     * Masks every occurrence of a value pattern, in place, keeping the rest of the
+     * string readable: `Anonymous:mail,john@example.com` stays recognisable as an
+     * anonymous mail notifiable while the address itself does not survive.
+     *
+     * @param string[] $patterns
+     */
+    private static function maskByValuePatterns(string $value, array $patterns): string
+    {
+        foreach ($patterns as $pattern) {
+            $replaced = @preg_replace_callback(
+                $pattern,
+                static function (array $matches): string {
+                    /** @var string $matched */
+                    $matched = $matches[0];
+
+                    /** @var string $masked */
+                    $masked = self::mask($matched, self::MODE_PARTIAL);
+
+                    return $masked;
+                },
+                $value
+            );
+
+            if (is_string($replaced)) {
+                $value = $replaced;
+            }
+        }
+
+        return $value;
     }
 
     /**
@@ -217,15 +295,10 @@ class MaskHelper
      * too precise for a PHP float loses precision. A document in which nothing matched
      * is returned untouched.
      *
-     * @param string[] $needles
-     * @param string[] $partialNeedles
+     * @param MaskingRules $rules
      */
-    private static function maskJsonString(string $value, array $needles, array $partialNeedles): string
+    private static function maskJsonString(string $value, array $rules): string
     {
-        if (strlen($value) > self::MAX_JSON_LENGTH) {
-            return $value;
-        }
-
         $trimmed = ltrim($value);
 
         if ($trimmed === '' || ($trimmed[0] !== '{' && $trimmed[0] !== '[')) {
@@ -243,8 +316,7 @@ class MaskHelper
         $masked = self::maskNode(
             data: $decoded,
             prefix: '',
-            needles: $needles,
-            partialNeedles: $partialNeedles,
+            rules: $rules,
             mode: self::MODE_NONE,
             depth: 2
         );
@@ -265,10 +337,9 @@ class MaskHelper
      * page and loses the token. Masking it as one value would hide which parameters
      * were sent at all, which is most of what a query string is worth in a trace.
      *
-     * @param string[] $needles
-     * @param string[] $partialNeedles
+     * @param MaskingRules $rules
      */
-    private static function maskQueryString(string $value, array $needles, array $partialNeedles): string
+    private static function maskQueryString(string $value, array $rules): string
     {
         $parameters = [];
 
@@ -282,8 +353,7 @@ class MaskHelper
         $masked = self::maskNode(
             data: $parameters,
             prefix: '',
-            needles: $needles,
-            partialNeedles: $partialNeedles,
+            rules: $rules,
             mode: self::MODE_NONE,
             depth: 2
         );
@@ -301,18 +371,17 @@ class MaskHelper
     }
 
     /**
-     * @param string[] $needles
-     * @param string[] $partialNeedles
+     * @param MaskingRules $rules
      */
-    private static function modeFor(string $key, array $needles, array $partialNeedles): int
+    private static function modeFor(string $key, array $rules): int
     {
         $lowerKey = Str::lower($key);
 
-        if (self::containsAny($lowerKey, $needles)) {
+        if (self::containsAny($lowerKey, $rules['needles'])) {
             return self::MODE_FULL;
         }
 
-        if (self::containsAny($lowerKey, $partialNeedles)) {
+        if (self::containsAny($lowerKey, $rules['partialNeedles'])) {
             return self::MODE_PARTIAL;
         }
 

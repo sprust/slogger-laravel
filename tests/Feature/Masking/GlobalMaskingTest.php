@@ -83,8 +83,11 @@ class GlobalMaskingTest extends BaseWatcherTestCase
 
     public function testEmptyKeyListsTurnMaskingOff(): void
     {
+        // all three of them: value patterns match without any key at all, so leaving
+        // them in place would keep masking addresses
         $this->getApp()['config']->set('slogger.masking.full_keys', []);
         $this->getApp()['config']->set('slogger.masking.partial_keys', []);
+        $this->getApp()['config']->set('slogger.masking.value_patterns', []);
 
         // the masker reads the config once, when it is built
         $this->getApp()->forgetInstance(TraceDataMasker::class);
@@ -96,9 +99,10 @@ class GlobalMaskingTest extends BaseWatcherTestCase
         self::assertSame('customer@example.test', $sent['context']['customer_email']);
     }
 
-    public function testClearingOneListLeavesTheOtherWorking(): void
+    public function testClearingOneListLeavesTheOthersWorking(): void
     {
         $this->getApp()['config']->set('slogger.masking.partial_keys', []);
+        $this->getApp()['config']->set('slogger.masking.value_patterns', []);
 
         $this->getApp()->forgetInstance(TraceDataMasker::class);
 
@@ -113,6 +117,28 @@ class GlobalMaskingTest extends BaseWatcherTestCase
 
         self::assertSame('customer@example.test', $sent['context']['customer_email']);
         self::assertSame(MaskHelper::FULL_MASK, $sent['context']['API_KEY']);
+    }
+
+    public function testAnAddressIsMaskedWhereNoKeyPointsAtIt(): void
+    {
+        $sent = $this->sendThroughJob(
+            [
+                'context' => [
+                    // the key says nothing about what the value holds, and the address
+                    // is only part of the string
+                    'notifiable' => 'Anonymous:mail,customer@example.test',
+                    'note'       => 'invoice sent',
+                ],
+            ]
+        );
+
+        self::assertSame(
+            'Anonymous:mail,cu*****************st',
+            $sent['context']['notifiable']
+        );
+
+        // nothing in it matches: left readable
+        self::assertSame('invoice sent', $sent['context']['note']);
     }
 
     /**

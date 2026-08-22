@@ -27,13 +27,21 @@ readonly class DispatcherProcessState
             return null;
         }
 
-        $contents = file_get_contents($filePath);
+        $contents = @file_get_contents($filePath);
 
         if (!$contents) {
             return null;
         }
 
         $data = json_decode($contents, true);
+
+        if (!is_array($data) || !isset($data['masterPid'], $data['masterCommandName'])) {
+            // a truncated or hand-edited file used to make both `start` and `stop`
+            // fail with "array offset on null" until someone deleted it by hand.
+            // Treat it as no state at all: the worst case is a stale file, and the
+            // next save overwrites it
+            return null;
+        }
 
         return new DispatcherProcessStateDto(
             dispatcher: $data['dispatcher'],
@@ -44,6 +52,11 @@ readonly class DispatcherProcessState
         );
     }
 
+    /**
+     * Writes to a temporary file and renames it into place. `rename()` is atomic
+     * within a filesystem, so a concurrent reader sees either the previous state or
+     * this one, never the half of it that has been flushed so far.
+     */
     public function save(DispatcherProcessStateDto $state): void
     {
         $pidFilePath = $this->makeFilePath();
@@ -56,7 +69,21 @@ readonly class DispatcherProcessState
             'childProcessPids'  => $state->childProcessPids,
         ];
 
-        if (file_put_contents($pidFilePath, json_encode($data, JSON_PRETTY_PRINT)) === false) {
+        $json = json_encode($data, JSON_PRETTY_PRINT);
+
+        if ($json === false) {
+            throw new RuntimeException('Failed to encode dispatcher state.');
+        }
+
+        $temporaryPath = $pidFilePath . '.' . getmypid() . '.tmp';
+
+        if (file_put_contents($temporaryPath, $json, LOCK_EX) === false) {
+            throw new RuntimeException('Failed to write PID to file.');
+        }
+
+        if (!rename($temporaryPath, $pidFilePath)) {
+            @unlink($temporaryPath);
+
             throw new RuntimeException('Failed to write PID to file.');
         }
     }
@@ -87,7 +114,7 @@ readonly class DispatcherProcessState
             return;
         }
 
-        if (!unlink($pidFilePath)) {
+        if (!@unlink($pidFilePath) && file_exists($pidFilePath)) {
             throw new RuntimeException('Failed to remove PID file.');
         }
     }

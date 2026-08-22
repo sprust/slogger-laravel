@@ -7,7 +7,6 @@ namespace SLoggerLaravel\Tests\Feature\Watchers\Children\Log;
 use Closure;
 use Illuminate\Log\LogManager;
 use SLoggerLaravel\Objects\TraceCreateObject;
-use SLoggerLaravel\Objects\TraceUpdateObject;
 use SLoggerLaravel\Tests\Feature\Watchers\Children\BaseChildWatcherTestCase;
 use SLoggerLaravel\Watchers\Children\LogWatcher;
 
@@ -37,10 +36,14 @@ class LogWatcherTest extends BaseChildWatcherTestCase
         };
     }
 
-    protected function assertSuccess(
-        TraceCreateObject $creatingTrace,
-        TraceUpdateObject $updatingTrace
-    ): void {
-        // no action
+    protected function assertSuccess(TraceCreateObject $creatingTrace): void
+    {
+        $data = $creatingTrace->data;
+
+        self::assertSame('info', $data['level']);
+        self::assertSame('test', $data['message']);
+        self::assertSame([], $data['context']);
+
+        self::assertSame(['info'], $creatingTrace->tags);
     }
 }

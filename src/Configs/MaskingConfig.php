@@ -27,6 +27,17 @@ readonly class MaskingConfig
     }
 
     /**
+     * Regular expressions matched against a value rather than a key. What they match
+     * is masked in place, partially.
+     *
+     * @return string[]
+     */
+    public function getValuePatterns(): array
+    {
+        return $this->readKeys('value_patterns');
+    }
+
+    /**
      * A misconfigured list must not take the whole telemetry down with it: masking
      * runs inside the dispatcher job, where a TypeError costs the batch and every
      * retry of it.

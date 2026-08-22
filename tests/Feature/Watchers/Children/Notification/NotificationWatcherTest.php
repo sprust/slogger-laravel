@@ -7,13 +7,29 @@ namespace SLoggerLaravel\Tests\Feature\Watchers\Children\Notification;
 use App\Notifications\TestNotification;
 use Closure;
 use Illuminate\Support\Facades\Notification;
+use SLoggerLaravel\Helpers\TraceDataMasker;
 use SLoggerLaravel\Objects\TraceCreateObject;
-use SLoggerLaravel\Objects\TraceUpdateObject;
 use SLoggerLaravel\Tests\Feature\Watchers\Children\BaseChildWatcherTestCase;
 use SLoggerLaravel\Watchers\Children\NotificationWatcher;
+use SLoggerLaravel\Watchers\Parents\JobWatcher;
 
 class NotificationWatcherTest extends BaseChildWatcherTestCase
 {
+    public function testRecipientsAreMaskedOnTheirWayOut(): void
+    {
+        $this->registerWatcher(JobWatcher::class, null);
+
+        dispatch($this->getSuccessCallback());
+
+        $creating = $this->dispatcher->findCreating(type: 'notification');
+
+        self::assertCount(1, $creating);
+
+        $masked = app(TraceDataMasker::class)->mask($creating[0]->data);
+
+        self::assertSame('to***********st', $masked['target']['recipients']['mail']);
+    }
+
     protected function getTraceType(): string
     {
         return 'notification';
@@ -36,8 +52,16 @@ class NotificationWatcherTest extends BaseChildWatcherTestCase
         };
     }
 
-    protected function assertSuccess(TraceCreateObject $creatingTrace, TraceUpdateObject $updatingTrace): void
+    protected function assertSuccess(TraceCreateObject $creatingTrace): void
     {
-        // no action
+        $data = $creatingTrace->data;
+
+        // the notifiable says what it is; what addresses it lives under `recipients`,
+        // where the key list reaches it
+        self::assertSame('Anonymous', $data['notifiable']);
+        self::assertSame(['mail' => 'to@example.test'], $data['target']['recipients']);
+        self::assertSame('mail', $data['channel']);
+
+        self::assertSame([TestNotification::class], $creatingTrace->tags);
     }
 }

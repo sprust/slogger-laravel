@@ -8,7 +8,6 @@ use Closure;
 use Illuminate\Console\Events\ScheduledTaskFinished;
 use Illuminate\Console\Scheduling\Schedule;
 use SLoggerLaravel\Objects\TraceCreateObject;
-use SLoggerLaravel\Objects\TraceUpdateObject;
 use SLoggerLaravel\Tests\Feature\Watchers\Children\BaseChildWatcherTestCase;
 use SLoggerLaravel\Watchers\Children\ScheduleWatcher;
 
@@ -38,8 +37,12 @@ class ScheduleWatcherTest extends BaseChildWatcherTestCase
         };
     }
 
-    protected function assertSuccess(TraceCreateObject $creatingTrace, TraceUpdateObject $updatingTrace): void
+    protected function assertSuccess(TraceCreateObject $creatingTrace): void
     {
-        // no action
+        $data = $creatingTrace->data;
+
+        self::assertSame('Closure', $data['command']);
+        self::assertSame('Test schedule', $data['description']);
+        self::assertSame('* * * * *', $data['expression']);
     }
 }

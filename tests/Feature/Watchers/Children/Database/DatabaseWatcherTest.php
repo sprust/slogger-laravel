@@ -8,7 +8,6 @@ use Closure;
 use Illuminate\Support\Facades\DB;
 use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Objects\TraceCreateObject;
-use SLoggerLaravel\Objects\TraceUpdateObject;
 use SLoggerLaravel\Tests\Feature\Watchers\Children\BaseChildWatcherTestCase;
 use SLoggerLaravel\Watchers\Children\DatabaseWatcher;
 use SLoggerLaravel\Watchers\Parents\JobWatcher;
@@ -77,10 +76,14 @@ class DatabaseWatcherTest extends BaseChildWatcherTestCase
         );
     }
 
-    protected function assertSuccess(
-        TraceCreateObject $creatingTrace,
-        TraceUpdateObject $updatingTrace
-    ): void {
-        // no action
+    protected function assertSuccess(TraceCreateObject $creatingTrace): void
+    {
+        $data = $creatingTrace->data;
+
+        self::assertSame('SELECT 1', $data['sql']);
+        self::assertSame([], $data['bindings']);
+        self::assertSame('sqlite', $data['connection']);
+
+        self::assertSame(['sqlite', 'SELECT 1'], $creatingTrace->tags);
     }
 }

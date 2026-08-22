@@ -9,10 +9,12 @@ use Closure;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use SLoggerLaravel\Helpers\MaskHelper;
+use SLoggerLaravel\Helpers\TraceDataMasker;
 use SLoggerLaravel\Objects\TraceCreateObject;
-use SLoggerLaravel\Objects\TraceUpdateObject;
 use SLoggerLaravel\Tests\Feature\Watchers\Children\BaseChildWatcherTestCase;
 use SLoggerLaravel\Watchers\Children\ModelWatcher;
+use SLoggerLaravel\Watchers\Parents\JobWatcher;
 
 class ModelWatcherTest extends BaseChildWatcherTestCase
 {
@@ -21,6 +23,25 @@ class ModelWatcherTest extends BaseChildWatcherTestCase
         parent::setUp();
 
         $this->configureDatabase();
+    }
+
+    public function testChangesAreMaskedOnTheirWayOut(): void
+    {
+        $this->registerWatcher(JobWatcher::class, null);
+
+        dispatch($this->getSuccessCallback());
+
+        $creating = $this->dispatcher->findCreating(type: 'model');
+
+        self::assertCount(1, $creating);
+
+        $masked = app(TraceDataMasker::class)->mask($creating[0]->data);
+
+        self::assertSame(MaskHelper::FULL_MASK, $masked['changes']['api_token']);
+        self::assertSame(MaskHelper::FULL_MASK, $masked['changes']['password']);
+
+        // nothing in this key matches either list
+        self::assertSame('Updated', $masked['changes']['name']);
     }
 
     protected function getTraceType(): string
@@ -56,9 +77,18 @@ class ModelWatcherTest extends BaseChildWatcherTestCase
         };
     }
 
-    protected function assertSuccess(TraceCreateObject $creatingTrace, TraceUpdateObject $updatingTrace): void
+    protected function assertSuccess(TraceCreateObject $creatingTrace): void
     {
-        // no action
+        $data = $creatingTrace->data;
+
+        self::assertSame('updated', $data['action']);
+        self::assertSame(TestModel::class, $data['model']);
+
+        // the traced application does not mask; `changes` is one level in, where the
+        // dispatcher job reaches it
+        self::assertSame('updated-token', $data['changes']['api_token']);
+        self::assertSame('updated-password', $data['changes']['password']);
+        self::assertSame('Updated', $data['changes']['name']);
     }
 
     private function configureDatabase(): void

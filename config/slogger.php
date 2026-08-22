@@ -98,10 +98,20 @@ return [
         'partial_keys' => [
             'email',
             'phone',
+            'recipient',
             '_name',
             'lastname',
             'firstname',
             'surname',
+        ],
+
+        // matched against the value instead of the key, and masked in place, keeping
+        // the rest of the string readable. some things identify a person by their own
+        // shape wherever they turn up - an address inside a notifiable string, or in
+        // the middle of a log message - and no key name points at those.
+        // an invalid pattern is ignored, not fatal.
+        'value_patterns' => [
+            'email' => '/[\w.+-]+@[\w-]+\.[\w.-]*[\w-]/u',
         ],
     ],
 

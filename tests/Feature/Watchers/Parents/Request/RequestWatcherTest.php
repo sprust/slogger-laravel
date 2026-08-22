@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace SLoggerLaravel\Tests\Feature\Watchers\Parents\Request;
 
+use App\Events\NestedEvent;
+use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Helpers\TraceDataMasker;
 use SLoggerLaravel\Objects\TraceCreateObject;
@@ -49,6 +51,52 @@ class RequestWatcherTest extends BaseParentWatcherTestCase
         self::assertSame(MaskHelper::FULL_MASK, $masked['query']['api_token']);
     }
 
+    public function testRouteParametersAreCarriedAsDataAndNotAsTags(): void
+    {
+        $this->get(route('slogger.reset', ['token' => 'tok-secret']))
+            ->assertOk();
+
+        $creating = $this->dispatcher->findCreating(type: 'request');
+
+        self::assertCount(1, $creating);
+
+        $updating = $this->dispatcher->findUpdating(traceId: $creating[0]->traceId);
+
+        self::assertCount(1, $updating);
+
+        // the pattern, not the value bound to it: a tag is never masked
+        self::assertSame(['/slogger/reset/{token}'], $updating[0]->tags);
+
+        $data = $updating[0]->data ?? [];
+
+        self::assertSame(['token' => 'tok-secret'], $data['route_parameters']);
+
+        $masked = app(TraceDataMasker::class)->mask($data);
+
+        self::assertSame(MaskHelper::FULL_MASK, $masked['route_parameters']['token']);
+    }
+
+    public function testTheTraceIdHeaderReachesTheClient(): void
+    {
+        $response = $this->get(route('slogger.success'))
+            ->assertOk();
+
+        $headerKey = app(WatchersConfig::class)->requestsHeaderParentTraceIdKey();
+
+        self::assertNotNull($headerKey);
+
+        $creating = $this->dispatcher->findCreating(type: 'request');
+
+        self::assertCount(1, $creating);
+
+        // the response the client gets, not one inspected after a hand-made
+        // terminate(): under FPM terminate() runs after the response was sent
+        self::assertSame(
+            $creating[0]->traceId,
+            $response->headers->get($headerKey)
+        );
+    }
+
     protected function getTraceType(): string
     {
         return 'request';
@@ -69,7 +117,18 @@ class RequestWatcherTest extends BaseParentWatcherTestCase
         TraceCreateObject $creatingTrace,
         TraceUpdateObject $updatingTrace
     ): void {
-        // no action
+        self::assertSame('/slogger/success', $creatingTrace->data['uri']);
+        self::assertSame('GET', $creatingTrace->data['method']);
+        self::assertSame(['/slogger/success'], $creatingTrace->tags);
+
+        $data = $updatingTrace->data ?? [];
+
+        self::assertSame(200, $data['response']['status']);
+        self::assertSame(['ok' => true], $data['response']['data']);
+        self::assertSame([], $data['route_parameters']);
+
+        // the route pattern, never the values bound to it
+        self::assertSame(['/slogger/success'], $updatingTrace->tags);
     }
 
     protected function runFailed(): void
@@ -82,7 +141,9 @@ class RequestWatcherTest extends BaseParentWatcherTestCase
         TraceCreateObject $creatingTrace,
         TraceUpdateObject $updatingTrace
     ): void {
-        // no action
+        self::assertSame('/slogger/failed', $creatingTrace->data['uri']);
+
+        self::assertSame(500, $updatingTrace->data['response']['status'] ?? null);
     }
 
     protected function runWithNestedEvent(): void
@@ -95,6 +156,8 @@ class RequestWatcherTest extends BaseParentWatcherTestCase
         TraceUpdateObject $updatingTrace,
         TraceCreateObject $creatingEventTrace
     ): void {
-        // no action
+        // the event was recorded as a child of the request, not as an orphan
+        self::assertSame($creatingTrace->traceId, $creatingEventTrace->parentTraceId);
+        self::assertSame([NestedEvent::class], $creatingEventTrace->tags);
     }
 }

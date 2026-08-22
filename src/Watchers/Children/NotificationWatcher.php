@@ -14,6 +14,11 @@ use SLoggerLaravel\Watchers\WatcherInterface;
 
 /**
  * Not tested
+ *
+ * An anonymous notifiable is addressed by the very thing that identifies a person - an
+ * address, a phone number - so those are split out of the notifiable's description and
+ * carried under `recipients`, where the key list reaches them. Folding them into one
+ * `Anonymous:...` string put them somewhere nothing could mask.
  */
 class NotificationWatcher implements WatcherInterface
 {
@@ -36,7 +41,10 @@ class NotificationWatcher implements WatcherInterface
             'queued'       => in_array(ShouldQueue::class, class_implements($event->notification)),
             'notifiable'   => $this->formatNotifiable($event->notifiable),
             'channel'      => $event->channel,
-            'response'     => $event->response,
+            'target'       => [
+                'recipients' => $this->getRecipients($event->notifiable),
+            ],
+            'response' => $event->response,
         ];
 
         $this->processor->push(
@@ -49,17 +57,18 @@ class NotificationWatcher implements WatcherInterface
         );
     }
 
+    /**
+     * Identifies the notifiable without carrying anything that addresses it: an
+     * anonymous notifiable's routes go to getRecipients() instead.
+     */
     protected function formatNotifiable(mixed $notifiable): string
     {
         if ($notifiable instanceof Model) {
             return DataFormatter::model($notifiable);
-        } elseif ($notifiable instanceof AnonymousNotifiable) {
-            $routes = array_map(
-                fn($route) => is_array($route) ? implode(',', $route) : $route,
-                $notifiable->routes
-            );
+        }
 
-            return 'Anonymous:' . implode(',', $routes);
+        if ($notifiable instanceof AnonymousNotifiable) {
+            return 'Anonymous';
         }
 
         if (!is_object($notifiable)) {
@@ -67,5 +76,22 @@ class NotificationWatcher implements WatcherInterface
         }
 
         return get_class($notifiable);
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    protected function getRecipients(mixed $notifiable): array
+    {
+        if (!$notifiable instanceof AnonymousNotifiable) {
+            return [];
+        }
+
+        return array_map(
+            fn(mixed $route): string => is_array($route)
+                ? implode(',', $route)
+                : (string) $route,
+            $notifiable->routes
+        );
     }
 }

@@ -9,9 +9,8 @@ use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\Events\RequestHandling;
 use SLoggerLaravel\Traces\TraceIdContainer;
 use Symfony\Component\HttpFoundation\Response;
-use Symfony\Component\HttpKernel\TerminableInterface;
 
-class HttpMiddleware implements TerminableInterface
+class HttpMiddleware
 {
     private bool $enabled;
 
@@ -47,18 +46,32 @@ class HttpMiddleware implements TerminableInterface
             $this->traceId = $this->getLoggerTraceIdContainer()->getParentTraceId();
         }
 
-        return $next($request);
+        $response = $next($request);
+
+        $this->setTraceIdHeader($response);
+
+        return $response;
     }
 
-    public function terminate(\Symfony\Component\HttpFoundation\Request $request, Response $response): void
+    /**
+     * On the response the middleware returns, not in terminate(): under FPM
+     * terminate() runs after the response has already been sent, so a header set
+     * there never reached the client. Cross-service correlation only ever worked in
+     * tests, which inspect the response after calling terminate() by hand.
+     */
+    private function setTraceIdHeader(Response $response): void
     {
-        if (!$this->enabled) {
+        if (!$this->enabled || is_null($this->traceId)) {
             return;
         }
 
-        if ($headerParentTraceIdKey = $this->getHeaderParentTraceIdKey()) {
-            $response->headers->set($headerParentTraceIdKey, $this->traceId);
+        $headerParentTraceIdKey = $this->getHeaderParentTraceIdKey();
+
+        if (!$headerParentTraceIdKey) {
+            return;
         }
+
+        $response->headers->set($headerParentTraceIdKey, $this->traceId);
     }
 
     private function getHeaderParentTraceIdKey(): ?string

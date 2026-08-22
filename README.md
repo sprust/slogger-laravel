@@ -16,7 +16,8 @@ Masking moved out of the traced application and into the dispatcher job.
   means any key you added there stops being masked. **Port your own keys into
   `masking.full_keys`**; the shipped defaults cover the shipped defaults, not `ssn`,
   `iban`, `card` or anything else you added yourself.
-- **Two global lists instead**, under `masking.full_keys` and `masking.partial_keys`. A
+- **Global lists instead**, under `masking.full_keys`, `masking.partial_keys` and
+  `masking.value_patterns` - the last matching the value rather than the key. A
   published config is merged with the package's own now, so the defaults apply without
   republishing; add the section to your config only to change it. A missing list falls
   back to the package's own config file, so a stale config cache cannot leave you with
@@ -34,10 +35,19 @@ Masking moved out of the traced application and into the dispatcher job.
   Give that queue the retention and access rules the data deserves - a separate Redis
   database or queue connection, and no long-lived `failed_jobs` rows for it.
 - **Trace data changed shape** where the old shape put application data out of the
-  masker's reach: cache values are nested under their cache key (`cache.<key>.value`),
-  mail addresses are nested under `message` and carried as `email`/`full_name` pairs
-  instead of address-as-key, and the query string is split off the url into `query` and
-  `query_string`. Anything consuming those fields on the receiving side needs updating.
+  masker's reach, or into a tag, which nothing masks:
+  - cache values are nested under their cache key (`cache.<key>.value`);
+  - mail addresses are nested under `message` and carried as `email`/`full_name` pairs
+    instead of address-as-key;
+  - an anonymous notifiable's routes moved out of the `Anonymous:...` string into
+    `target.recipients` (and an address left in a string like that is now masked by a
+    value pattern anyway);
+  - a url's query string is split off into `query` and `query_string`;
+  - **route parameter values are no longer tags.** `/reset/{token}` used to put the
+    token itself in the trace's tags; the values are in `route_parameters` now, where
+    the key list reaches them by parameter name.
+
+  Anything consuming those fields on the receiving side needs updating.
 - **Laravel 10.17** is the new floor. `src/` needs 10.12 (`JobTimedOut` landed there),
   but 10.17 is the oldest release the test suite can actually be installed against, and
   an untested floor is not a supported one.
@@ -169,7 +179,11 @@ Enables XHProf profiling for HTTP client traces (see Profiling section).
 SLOGGER_REQUESTS_HEADER_PARENT_TRACE_ID_KEY=x-parent-trace-id
 ```
 
-Allows linking child traces to parent requests via a custom header.
+Allows linking child traces to parent requests via a custom header. The middleware
+reads it from the incoming request and sets it on the response it returns, so the
+client actually receives it. (It used to be set in `terminate()`, which under FPM runs
+after the response has already been sent - cross-service correlation only ever worked
+in tests.)
 
 ### Watchers (enable/disable)
 
@@ -197,13 +211,18 @@ Each trace contains:
 - `data` (watcher-specific payload)
 - `duration`, `memory`, `cpu`, `logged_at`
 
+`memory` is the percentage of `memory_limit` in use, and is **null when there is no
+limit** (`memory_limit = -1`, the CLI default) - there is nothing to be a percentage
+of. `cpu` is the one-minute load average as a percentage of the machine's capacity,
+normalised by core count, and can exceed 100 on an overloaded machine.
+
 Watcher data highlights:
-- `request`: url, method, action, headers/params, response (for JSON responses)
+- `request`: url (without the query string), method, action, query/query_string, route_parameters, headers/params, response (for JSON responses)
 - `job`: connection, payload, status (`processed`, `failed`, `released_after_exception`, `timed_out`, `exception_occurred`), exception
 - `event`: listeners, broadcast, optional serialized payload
 - `model`: action, model class, key, changes
 - `mail`: mailable/notification, queued, `message` (from/reply_to/to/cc/bcc as `email`/`full_name` pairs, subject)
-- `notification`: notifiable, channel, queued, response
+- `notification`: notifiable, channel, queued, `target.recipients`, response
 - `cache`: type, key, and `cache.<key>` (value, tags, expiration)
 - `db`: query, bindings (always masked), time
 - `http-client`: method, url, query/query_string, request/response (concurrent requests are traced independently, so `Http::pool()` works)
@@ -328,12 +347,19 @@ and a PIN, an OTP and an account number are all short and numeric.
 
     // a value under a matching key keeps two characters at each end
     'partial_keys' => [
-        'email', 'phone', '_name', 'lastname', 'firstname', 'surname',
+        'email', 'phone', 'recipient', '_name',
+        'lastname', 'firstname', 'surname',
+    ],
+
+    // matched against the value instead of the key, and masked in place
+    'value_patterns' => [
+        'email' => '/[\w.+-]+@[\w-]+\.[\w.-]*[\w-]/u',
     ],
 ],
 ```
 
-Both lists are case-insensitive substrings of a key; two empty lists turn masking off.
+Both lists are case-insensitive substrings of a key; masking is off only when all three
+lists (`value_patterns` included) are empty.
 A key matches when it *contains* one of the substrings, so `customer_email`, `API_KEY`
 and `lastName` are all matched. A match on a parent key applies to its subtree, so
 `auth` covers `auth.method` too. A key in both lists is masked whole - the stricter
@@ -359,6 +385,28 @@ A value under a **`query_string`** key is masked parameter by parameter rather t
 a whole, so `page=2&api_token=secret` keeps the page and loses the token. This is where
 the request watchers put a url's query string: a url is also a tag and a title, and
 nothing masks those.
+
+### Value patterns
+
+Some things identify a person by their own shape, wherever they turn up, and no key
+name points at them: an address inside `Anonymous:mail,john@example.com`, or in the
+middle of a log message. `masking.value_patterns` are regular expressions matched
+against the **value**, and what they match is masked in place - partially, so the rest
+of the string stays readable:
+
+```
+'invoice sent to john.doe@example.com'  ->  'invoice sent to jo****************om'
+```
+
+They are not bound to a key, so unlike the key lists they apply at the top level too,
+and they reach inside JSON strings and query strings along with everything else. A key
+match still wins: a `token` holding an address loses all of it, not just the middle.
+An invalid pattern is dropped rather than raising a warning for every string in every
+trace.
+
+The key lists and the patterns cover different things and are meant to be used
+together - `recipient` in `partial_keys` catches a phone number under
+`target.recipients.vonage`, which no address pattern would ever match.
 
 **The top level of a trace's `data` is never masked.** That level belongs to the
 watcher, not to the application: `connection_name`, `request`, `changes`, `context`,

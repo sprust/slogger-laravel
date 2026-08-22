@@ -6,7 +6,6 @@ namespace SLoggerLaravel\Tests\Feature\Watchers\Children\Dump;
 
 use Closure;
 use SLoggerLaravel\Objects\TraceCreateObject;
-use SLoggerLaravel\Objects\TraceUpdateObject;
 use SLoggerLaravel\Tests\Feature\Watchers\Children\BaseChildWatcherTestCase;
 use SLoggerLaravel\Watchers\Children\DumpWatcher;
 use Symfony\Component\VarDumper\VarDumper;
@@ -28,8 +27,9 @@ class DumpWatcherTest extends BaseChildWatcherTestCase
         return static fn() => VarDumper::dump('');
     }
 
-    protected function assertSuccess(TraceCreateObject $creatingTrace, TraceUpdateObject $updatingTrace): void
+    protected function assertSuccess(TraceCreateObject $creatingTrace): void
     {
-        // no action
+        // `__trace` is injected by the data complementer, so assert the field itself
+        self::assertSame('', $creatingTrace->data['dump']);
     }
 }

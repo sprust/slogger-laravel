@@ -44,22 +44,13 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
             return;
         }
 
+        // every binding lives here, not in boot(): a provider that boots earlier and
+        // resolves Processor, State or TraceIdContainer would get an auto-wired
+        // duplicate outside the singleton, and end up with a second, disconnected
+        // tracing state whose traces silently go nowhere
         $this->app->singleton(TraceDataComplementer::class);
         $this->app->singleton(MaskingConfig::class);
         $this->app->singleton(TraceDataMasker::class);
-    }
-
-    /**
-     * @throws BindingResolutionException
-     */
-    public function boot(): void
-    {
-        $this->registerConsole();
-
-        if (!$this->app->make(GeneralConfig::class)->isEnabled()) {
-            return;
-        }
-
         $this->app->singleton(WatchersConfig::class);
         $this->app->singleton(State::class);
         $this->app->singleton(Processor::class);
@@ -87,6 +78,18 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
                 );
             }
         );
+    }
+
+    /**
+     * @throws BindingResolutionException
+     */
+    public function boot(): void
+    {
+        $this->registerConsole();
+
+        if (!$this->app->make(GeneralConfig::class)->isEnabled()) {
+            return;
+        }
 
         $this->registerListeners();
         $this->registerWatchers();

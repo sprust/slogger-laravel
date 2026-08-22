@@ -18,7 +18,6 @@ use SLoggerLaravel\Guzzle\GuzzleHandlerFactory;
 use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Helpers\TraceDataMasker;
 use SLoggerLaravel\Objects\TraceCreateObject;
-use SLoggerLaravel\Objects\TraceUpdateObject;
 use SLoggerLaravel\RequestPreparer\RequestDataFormatters;
 use SLoggerLaravel\Tests\Feature\Watchers\Children\BaseChildWatcherTestCase;
 use SLoggerLaravel\Watchers\Children\HttpClientWatcher;
@@ -96,15 +95,23 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
             $creating
         );
 
-        $creating = $this->dispatcher->findUpdating(
+        $this->assertSuccess($creating[0]);
+
+        $updating = $this->dispatcher->findUpdating(
             traceId: $creating[0]->traceId,
             status: TraceStatusEnum::Success,
         );
 
         self::assertCount(
             1,
-            $creating
+            $updating
         );
+
+        $updatedData = $updating[0]->data ?? [];
+
+        self::assertSame(200, $updatedData['response']['status_code']);
+        self::assertSame(['ok' => true], $updatedData['response']['body']);
+        self::assertSame(['foo' => 'bar'], $updatedData['request']['payload']);
     }
 
     public function testConcurrentRequestsDoNotInterruptEachOther(): void
@@ -342,9 +349,15 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
         };
     }
 
-    protected function assertSuccess(TraceCreateObject $creatingTrace, TraceUpdateObject $updatingTrace): void
+    protected function assertSuccess(TraceCreateObject $creatingTrace): void
     {
-        // no action
+        $data = $creatingTrace->data;
+
+        // the start of an outbound request knows the url and the method, nothing more
+        self::assertSame('https://example.test/alpha', $data['uri']);
+        self::assertSame('POST', $data['method']);
+        self::assertSame([], $data['query']);
+        self::assertNull($data['query_string']);
     }
 
     /**

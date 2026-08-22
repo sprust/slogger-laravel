@@ -33,6 +33,10 @@ Route::group(
                 ->header('set-cookie', 'session=response-cookie');
         })->name('sensitive');
 
+        // a route that binds a secret into its path: the value must never become a tag
+        Route::get('/reset/{token}', fn(ResponseFactory $factory) => $factory->json(['ok' => true]))
+            ->name('reset');
+
         Route::get('/failed', fn() => abort(500))
             ->name('failed');
         Route::get('/exception', fn() => throw new Exception('Test exception'))

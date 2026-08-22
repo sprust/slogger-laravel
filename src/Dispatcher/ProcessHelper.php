@@ -25,7 +25,7 @@ class ProcessHelper
         }
 
         try {
-            $cmd = file_get_contents("/proc/$pid/cmdline");
+            $cmd = @file_get_contents("/proc/$pid/cmdline");
         } catch (Throwable) {
             return false;
         }
@@ -34,11 +34,22 @@ class ProcessHelper
             return false;
         }
 
-        $processName = trim($cmd, "\0");
+        // /proc/<pid>/cmdline separates the arguments with NUL, while the stored
+        // command name is a space-separated string: trimming only the trailing NULs
+        // left `php\0artisan\0slogger:...` to be searched for `php artisan slogger:...`,
+        // which never matched - so after the master died its workers were neither
+        // findable nor stoppable through the saved state
+        $processName = trim(str_replace("\0", ' ', $cmd));
 
         return str_contains($processName, $commandName);
     }
 
+    /**
+     * SIGTERM, not SIGINT: `queue:work` installs handlers for SIGTERM, SIGQUIT and
+     * SIGUSR2 and leaves SIGINT at its default, which kills the worker outright -
+     * in the middle of whatever job it was running. SIGTERM is the signal it treats
+     * as "finish this job, then stop", and the master handles both.
+     */
     public function sendStopSignal(int $pid): void
     {
         if ($pid <= 0) {
@@ -47,7 +58,7 @@ class ProcessHelper
 
         $pgid = posix_getpgid($pid);
 
-        posix_kill($pid, SIGINT);
+        posix_kill($pid, SIGTERM);
 
         if ($pgid === false || $pgid <= 0) {
             // the target died in between: posix_kill(-$pgid) would become
@@ -57,10 +68,10 @@ class ProcessHelper
 
         if ($pgid === posix_getpgrp()) {
             // children spawned without setsid share the caller's process group:
-            // a group-kill would SIGINT the caller itself and every sibling process
+            // a group-kill would signal the caller itself and every sibling process
             return;
         }
 
-        posix_kill(-$pgid, SIGINT);
+        posix_kill(-$pgid, SIGTERM);
     }
 }
