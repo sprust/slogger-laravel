@@ -66,9 +66,12 @@ Masking moved out of the traced application and into the dispatcher job.
   depth will see the difference.
 
   Anything consuming those fields on the receiving side needs updating.
-- **Laravel 10.17** is the new floor. `src/` needs 10.12 (`JobTimedOut` landed there),
-  but 10.17 is the oldest release the test suite can actually be installed against, and
-  an untested floor is not a supported one.
+- **Laravel 10.26** is the new floor. `src/` needs 10.12 (`JobTimedOut` landed there),
+  but the test suite runs on testbench's workbench, whose earliest release requires
+  10.26 - and an untested floor is not a supported one. 10.17 was claimed for a while
+  and was never true: the suite installs there and 152 of its tests error out, because
+  the testbench that pairs with 10.17 does not know how to discover the workbench
+  config, so the package reads itself as disabled.
 - API changes if you build formatters yourself: `RequestDataFormatter` lost its
   `requestHeaders`, `requestParameters`, `responseHeaders` and `responseFields`
   arguments along with the matching `add*()` methods, and
@@ -79,7 +82,7 @@ Masking moved out of the traced application and into the dispatcher job.
 ## Requirements
 
 - PHP >= 8.2
-- Laravel 10.17+ (tested on 10, 11 and 12)
+- Laravel 10.26+ (tested on 10, 11 and 12)
 - Queue driver for `queue` dispatcher
 - Optional: XHProf extension for profiling
 
