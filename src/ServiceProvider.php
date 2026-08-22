@@ -6,6 +6,7 @@ use Illuminate\Config\Repository;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Events\Dispatcher;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Log;
 use SLoggerLaravel\Configs\DispatcherConfig;
 use SLoggerLaravel\Configs\DispatcherQueueConfig;
@@ -29,6 +30,7 @@ use SLoggerLaravel\Traces\ProcessTraceScopeResolver;
 use SLoggerLaravel\Traces\TraceScopeResolverInterface;
 use SLoggerLaravel\Traces\TraceIdContainer;
 use SLoggerLaravel\Watchers\Children\ModelWatcher;
+use SLoggerLaravel\Watchers\Parents\RequestWatcher;
 use Throwable;
 use SLoggerLaravel\Watchers\WatcherInterface;
 
@@ -56,8 +58,13 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         // the scope resolver decides what "the current unit of work" means, and
         // everything the package keeps per unit follows it - see TraceScope. One
         // process is the answer for FPM, `queue:work` and artisan; an application on
-        // a runtime that interleaves coroutines rebinds this with its own.
-        $this->app->singleton(TraceScopeResolverInterface::class, ProcessTraceScopeResolver::class);
+        // a runtime that interleaves coroutines binds its own.
+        //
+        // singletonIf: an application binding this in its own provider registers
+        // after this one and wins either way, but one bound earlier - in
+        // `bootstrap/app.php`, or by whatever bootstraps the runtime - would be
+        // overwritten by a plain singleton()
+        $this->app->singletonIf(TraceScopeResolverInterface::class, ProcessTraceScopeResolver::class);
 
         $this->app->singleton(TraceDataComplementer::class);
         $this->app->singleton(MaskingConfig::class);
@@ -128,25 +135,36 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
      */
     private function warnAboutRetiredMaskingConfig(): void
     {
+        // these live inside the watcher's own entry in `slogger.watchers`, which is a
+        // list - there is no path to them that config() can take
         $retired = [
-            'slogger.watchers_config.requests.input.headers_masking',
-            'slogger.watchers_config.requests.input.parameters_masking',
-            'slogger.watchers_config.requests.output.headers_masking',
-            'slogger.watchers_config.requests.output.fields_masking',
+            RequestWatcher::class => [
+                'config.input.headers_masking',
+                'config.input.parameters_masking',
+                'config.output.headers_masking',
+                'config.output.fields_masking',
+            ],
+            ModelWatcher::class => [
+                'config.masks',
+            ],
         ];
-
-        $found = array_values(
-            array_filter($retired, static fn(string $key): bool => !is_null(config($key)))
-        );
 
         /** @var array<array{class?: string, config?: array<string, mixed>}> $watcherConfigs */
         $watcherConfigs = $this->app->make(Repository::class)['slogger.watchers'] ?? [];
 
+        $found = [];
+
         foreach ($watcherConfigs as $watcherConfig) {
-            if (($watcherConfig['class'] ?? null) === ModelWatcher::class
-                && isset($watcherConfig['config']['masks'])
-            ) {
-                $found[] = ModelWatcher::class . ' config.masks';
+            $watcherClass = $watcherConfig['class'] ?? null;
+
+            if (!is_string($watcherClass) || !isset($retired[$watcherClass])) {
+                continue;
+            }
+
+            foreach ($retired[$watcherClass] as $path) {
+                if (!is_null(Arr::get($watcherConfig, $path))) {
+                    $found[] = $watcherClass . ' ' . $path;
+                }
             }
         }
 

@@ -42,17 +42,17 @@ class Processor
      * the sender to sweep a request that in fact succeeded. The trace id is unique,
      * so one map is enough; who owns what is recorded in `owner_trace_id`.
      *
-     * @var array<string, array{owner_trace_id: string|null, tags: string[], logged_at: Carbon}>
+     * @var array<string, array{owner_trace_id: string|null, owner_scope_id: int, tags: string[], logged_at: Carbon}>
      */
     private array $detachedTraces = [];
 
     /**
-     * Called with the trace id of every detached trace closed by the sweep rather
-     * than by its own watcher.
+     * Called with the trace id of every trace closed by the sweep rather than by the
+     * watcher that started it - detached or nested alike.
      *
      * @var list<Closure(string): void>
      */
-    private array $detachedTraceInterruptedListeners = [];
+    private array $traceInterruptedListeners = [];
 
     public function __construct(
         private readonly Application $app,
@@ -105,10 +105,11 @@ class Processor
      * @param Closure(string): void $listener
      *
      * @see stopInterruptedDetached()
+     * @see stopInterruptedNested()
      */
-    public function onDetachedTraceInterrupted(Closure $listener): void
+    public function onTraceInterrupted(Closure $listener): void
     {
-        $this->detachedTraceInterruptedListeners[] = $listener;
+        $this->traceInterruptedListeners[] = $listener;
     }
 
     public function registerEvent(string $event, callable $listener): void
@@ -290,6 +291,9 @@ class Processor
 
         $this->detachedTraces[$traceId] = [
             'owner_trace_id' => $ownerTraceId,
+            // which unit of work started it, so an ownerless one is swept by that
+            // unit and not by whichever other one happens to finish first
+            'owner_scope_id' => $this->scope()->ownerId,
             'tags'           => $tags,
             'logged_at'      => $loggedAt->clone(),
         ];
@@ -392,16 +396,22 @@ class Processor
 
         array_pop($scope->tracesStack);
 
+        // whatever this trace was started under: the enclosing trace of this unit of
+        // work, or - for the outermost one in a coroutine - the trace of the
+        // coroutine that spawned it, which this scope inherited and does not own
         $this->traceIdContainer->setParentTraceId(
             parentTraceId: $stackItem['pre_parent_trace_id']
         );
 
-        if (count($scope->tracesStack) == 0) {
-            // detached traces started outside any parent have no owner to sweep them,
-            // so the end of a unit of work is the last chance to close them
+        if ($scope->tracesStack === [] && is_null($scope->parentTraceId)) {
+            // the unit of work is over: nothing is open here and nothing encloses it.
+            // Detached traces started outside any parent have no owner to sweep them,
+            // so this is the last chance to close them.
+            //
+            // The emptiness of the stack alone does not mean that - a coroutine has
+            // its own stack and an inherited parent, and clearing it there would drop
+            // every child trace pushed afterwards, in silence
             $this->stopInterruptedDetached(ownerTraceId: null);
-
-            $this->traceIdContainer->setParentTraceId(null);
         }
 
         $this->dispatchStopTrace(
@@ -569,6 +579,8 @@ class Processor
 
             $this->profiler->release($stackItem['trace_id']);
 
+            $this->notifyTraceInterrupted($stackItem['trace_id']);
+
             $loggedAt = $stackItem['logged_at'];
 
             $this->dispatchUpdateTrace(
@@ -592,12 +604,21 @@ class Processor
 
     /**
      * Closes the detached traces the stopping one had started and never closed. A null
-     * owner closes the ownerless ones, which nothing else can reach.
+     * owner closes the ownerless ones of *this* unit of work, which nothing else can
+     * reach - an outbound call made with no trace open around it.
      */
     private function stopInterruptedDetached(?string $ownerTraceId): void
     {
+        $scopeId = $this->scope()->ownerId;
+
         foreach ($this->detachedTraces as $traceId => $detachedTrace) {
             if ($detachedTrace['owner_trace_id'] !== $ownerTraceId) {
+                continue;
+            }
+
+            if (is_null($ownerTraceId) && $detachedTrace['owner_scope_id'] !== $scopeId) {
+                // ownerless, but started by a different unit of work - which may still
+                // be waiting on it. Only its own unit may declare it interrupted
                 continue;
             }
 
@@ -616,19 +637,20 @@ class Processor
                 parentLoggedAt: $detachedTrace['logged_at'],
             );
 
-            $this->notifyDetachedTraceInterrupted($traceId);
+            $this->notifyTraceInterrupted($traceId);
         }
     }
 
     /**
-     * The watcher that started a detached trace keeps its own bookkeeping for it and
-     * clears it when the trace is closed. A trace swept from here is closed without
-     * the watcher ever hearing about it, so tell it - otherwise a long-lived worker
-     * accumulates one orphaned entry per swept trace.
+     * The watcher that started a trace keeps its own bookkeeping for it and clears it
+     * when the trace is closed. A trace swept from here is closed without the watcher
+     * ever hearing about it, so tell it - otherwise a long-lived worker accumulates
+     * one orphaned entry per swept trace, and a watcher holding a stack pops a stale
+     * entry next time and leaves its own trace open forever.
      */
-    private function notifyDetachedTraceInterrupted(string $traceId): void
+    private function notifyTraceInterrupted(string $traceId): void
     {
-        foreach ($this->detachedTraceInterruptedListeners as $listener) {
+        foreach ($this->traceInterruptedListeners as $listener) {
             try {
                 $listener($traceId);
             } catch (Throwable) {

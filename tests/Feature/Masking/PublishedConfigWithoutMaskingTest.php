@@ -8,6 +8,8 @@ use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Log;
 use SLoggerLaravel\Configs\MaskingConfig;
 use SLoggerLaravel\ServiceProvider;
+use SLoggerLaravel\Watchers\Children\ModelWatcher;
+use SLoggerLaravel\Watchers\Parents\RequestWatcher;
 use SLoggerLaravel\Tests\Feature\BaseTestCase;
 
 /**
@@ -64,26 +66,66 @@ class PublishedConfigWithoutMaskingTest extends BaseTestCase
 
     public function testARetiredMaskingSectionIsReportedOutLoud(): void
     {
-        // an application that added its own keys there stopped masking them on
-        // upgrade; a README is not where anyone will look for that
-        $this->getApp()['config']->set(
-            'slogger.watchers_config.requests.input.parameters_masking',
-            ['*' => ['*ssn*']]
-        );
+        // the shape a real pre-1.3 config has: the sections live inside the watcher's
+        // own entry in the `watchers` list, not under any path config() can address
+        $this->getApp()['config']->set('slogger.watchers', [
+            [
+                'class'   => RequestWatcher::class,
+                'enabled' => true,
+                'config'  => [
+                    'input' => [
+                        'headers_masking'    => ['*' => ['authorization']],
+                        'parameters_masking' => ['*' => ['*ssn*']],
+                    ],
+                    'output' => [
+                        'fields_masking' => ['*' => ['*iban*']],
+                    ],
+                ],
+            ],
+            [
+                'class'   => ModelWatcher::class,
+                'enabled' => true,
+                'config'  => [
+                    'masks' => ['*' => ['*token*']],
+                ],
+            ],
+        ]);
+
+        $reported = null;
 
         Log::shouldReceive('channel')->andReturnSelf();
         Log::shouldReceive('warning')
             ->once()
-            ->withArgs(static function (string $message): bool {
-                return str_contains($message, 'no longer read')
-                    && str_contains($message, 'parameters_masking');
+            ->withArgs(function (string $message) use (&$reported): bool {
+                $reported = $message;
+
+                return true;
             });
 
         (new ServiceProvider($this->getApp()))->boot();
+
+        self::assertIsString($reported);
+
+        // every section an application could have added keys to, not just the one
+        // that happens to be easy to reach
+        foreach (
+            [
+                'config.input.headers_masking',
+                'config.input.parameters_masking',
+                'config.output.fields_masking',
+                'config.masks',
+            ] as $section
+        ) {
+            self::assertStringContainsString($section, $reported);
+        }
+
+        // and not the one that is absent from this config
+        self::assertStringNotContainsString('config.output.headers_masking', $reported);
     }
 
     public function testAConfigWithoutRetiredSectionsSaysNothing(): void
     {
+        // the config this package ships today: the sections are gone from it
         Log::shouldReceive('channel')->never();
 
         (new ServiceProvider($this->getApp()))->boot();

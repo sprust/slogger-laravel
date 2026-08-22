@@ -50,6 +50,11 @@ Masking moved out of the traced application and into the dispatcher job.
     reach a tag;
   - values added through `TraceDataComplementer::add()` land under `__additional`
     rather than at the top level, which is what puts them in the masker's reach.
+- **The outbound parent-trace header changed value.** It used to carry the trace
+  enclosing the call; it now carries the trace of the call itself, so a service you
+  call hangs its trace under that call rather than beside it. Cross-service trees
+  gain a level. Nothing has to be reconfigured, but a receiver that reasons about
+  depth will see the difference.
 
   Anything consuming those fields on the receiving side needs updating.
 - **Laravel 10.17** is the new floor. `src/` needs 10.12 (`JobTimedOut` landed there),
@@ -427,6 +432,23 @@ addresses sit under `message` as `email`/`full_name` pairs.
 The lists are deliberately blunt: they mask `sign` inside `assignee` and `auth` inside
 `author`. Over-masking is the safe direction for telemetry; trim the list if a field you
 need is caught by it.
+
+### What a key list cannot reach
+
+Some fields are free text, and no key name describes what is inside them. The key lists
+do not apply to these; only `value_patterns` do, and only for what has a shape worth
+matching:
+
+| Field | What it holds |
+| --- | --- |
+| `log.message` | whatever was logged |
+| `dump.dump` | whatever was dumped - `dd($user->api_token)` is exactly this |
+| `schedule.output` | the scheduled command's stdout |
+| `db.sql`, and the sql fragment in a `db` trace's tags | the statement, though its values travel as bindings, which are masked |
+
+For those, the controls are the watcher's own: turn the watcher off, or keep secrets
+out of what you log and dump. A trace's **tags** are in the same position - bare
+strings with no key naming them - which is why value patterns apply to them too.
 
 ### Masked values
 

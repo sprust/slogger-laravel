@@ -228,6 +228,13 @@ class MaskHelper
                 ? self::maskByValuePatterns($key, $rules['valuePatterns'])
                 : $key;
 
+            if ($maskedKey !== $key && array_key_exists($maskedKey, $result)) {
+                // two different keys can mask to the same string - `john@a.com` and
+                // `jomn@x.com` both end in `jo******om`. Overwriting would drop an
+                // entry silently, which is worse than an ugly key
+                $maskedKey .= '#' . (count($result) + 1);
+            }
+
             if (is_array($value)) {
                 $result[$maskedKey] = $value === []
                     ? $value
@@ -363,37 +370,59 @@ class MaskHelper
      * page and loses the token. Masking it as one value would hide which parameters
      * were sent at all, which is most of what a query string is worth in a trace.
      *
+     * Split by hand rather than through parse_str()/http_build_query(): that round
+     * trip rewrites the string even where nothing matched. `user.name` comes back as
+     * `user_name` (and then matches `_name`, which the real key never would),
+     * `arr[]=1&arr[]=2` becomes `arr%5B0%5D=1&arr%5B1%5D=2`, a valueless `flag` gains
+     * an `=`, and a repeated parameter loses all but its last value. A trace that
+     * cannot be compared with the request it describes is worth much less.
+     *
      * @param MaskingRules $rules
      */
     private static function maskQueryString(string $value, array $rules): string
     {
-        $parameters = [];
+        $pairs = explode('&', $value);
 
-        parse_str($value, $parameters);
+        $changed = false;
 
-        if (!$parameters) {
-            return $value;
+        foreach ($pairs as $index => $pair) {
+            if ($pair === '') {
+                continue;
+            }
+
+            $separator = strpos($pair, '=');
+
+            if ($separator === false) {
+                // a valueless parameter: nothing to mask, and adding `=` would change
+                // what the request looked like
+                continue;
+            }
+
+            $rawName  = substr($pair, 0, $separator);
+            $rawValue = substr($pair, $separator + 1);
+
+            $name = urldecode($rawName);
+
+            $mode = self::modeFor($name, $rules);
+
+            $decoded = urldecode($rawValue);
+
+            $masked = $mode === self::MODE_NONE
+                ? self::maskByValuePatterns($decoded, $rules['valuePatterns'])
+                : self::mask($decoded, $mode);
+
+            if (!is_string($masked) || $masked === $decoded) {
+                continue;
+            }
+
+            // `*` is legal in a query string, and a readable `token=********` beats
+            // `token=%2A%2A%2A%2A%2A%2A%2A%2A`
+            $pairs[$index] = $rawName . '=' . str_replace('%2A', '*', rawurlencode($masked));
+
+            $changed = true;
         }
 
-        // depth 2: every key here is the application's own
-        $masked = self::maskNode(
-            data: $parameters,
-            prefix: '',
-            rules: $rules,
-            mode: self::MODE_NONE,
-            depth: 2
-        );
-
-        if ($masked === $parameters) {
-            // nothing matched: parse_str is lossy (it mangles keys that are not valid
-            // PHP variable names), so keep the original string
-            return $value;
-        }
-
-        // http_build_query percent-encodes the mask itself, which turns a readable
-        // `token=********` into `token=%2A%2A%2A%2A%2A%2A%2A%2A`; `*` is legal in a
-        // query string, so put it back
-        return str_replace('%2A', '*', http_build_query($masked));
+        return $changed ? implode('&', $pairs) : $value;
     }
 
     /**

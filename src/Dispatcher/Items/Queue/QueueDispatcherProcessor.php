@@ -41,9 +41,21 @@ readonly class QueueDispatcherProcessor implements DispatcherProcessorInterface
         return $processes;
     }
 
+    /**
+     * `exec` is load-bearing.
+     *
+     * `fromShellCommandline()` runs the command through `sh -c`, so the pid Symfony
+     * reports - the pid the master saves and signals - belongs to the shell, not to
+     * the worker it forked. `sh` does not forward signals, and the worker shares the
+     * master's process group, which the group-kill guard skips. The master would
+     * therefore kill the shell, see the process gone, report "worker processes are
+     * stopped", and leave an orphaned `queue:work` draining the queue - one more per
+     * restart. With `exec` the shell replaces itself with the worker, so the pid is
+     * the worker's.
+     */
     public function createProcess(): Process
     {
-        return Process::fromShellCommandline($this->workerCommand)
+        return Process::fromShellCommandline('exec ' . $this->workerCommand)
             ->setTimeout(null);
     }
 }

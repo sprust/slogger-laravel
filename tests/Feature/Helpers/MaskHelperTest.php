@@ -129,6 +129,57 @@ class MaskHelperTest extends BaseTestCase
         self::assertSame(MaskHelper::FULL_MASK, $parameters['api_token']);
     }
 
+    public function testMaskArrayByKeysKeepsTheShapeOfAQueryStringItMasks(): void
+    {
+        $masked = MaskHelper::maskArrayByKeys(
+            ['query_string' => 'user.name=Bob&arr[]=1&arr[]=2&flag&api_token=sk-secret&page=2'],
+            ['token']
+        );
+
+        // only the parameter that matched changed. A parse_str/http_build_query round
+        // trip rewrote the rest: `user.name` became `user_name` - and then matched
+        // `_name`, which the real key never would - `arr[]` became `arr%5B0%5D`, and
+        // the valueless `flag` gained an `=`
+        self::assertSame(
+            'user.name=Bob&arr[]=1&arr[]=2&flag&api_token=' . MaskHelper::FULL_MASK . '&page=2',
+            $masked['query_string']
+        );
+    }
+
+    public function testMaskArrayByKeysKeepsRepeatedQueryParameters(): void
+    {
+        $masked = MaskHelper::maskArrayByKeys(
+            ['query_string' => 'id=1&token=a&id=2&token=b'],
+            ['token']
+        );
+
+        // both of each: the round trip used to keep only the last value of a repeated
+        // parameter
+        self::assertSame(
+            'id=1&token=' . MaskHelper::FULL_MASK . '&id=2&token=' . MaskHelper::FULL_MASK,
+            $masked['query_string']
+        );
+    }
+
+    public function testMaskedKeysThatCollideDoNotSwallowEachOther(): void
+    {
+        $masked = MaskHelper::maskArrayByKeys(
+            [
+                'cache' => [
+                    'john@a.com' => 1,
+                    'jomn@x.com' => 2,
+                ],
+            ],
+            [],
+            [],
+            [self::EMAIL_PATTERN]
+        );
+
+        // both keys mask to the same string; overwriting would drop an entry silently
+        self::assertCount(2, $masked['cache']);
+        self::assertSame([1, 2], array_values($masked['cache']));
+    }
+
     public function testMaskArrayByKeysKeepsAQueryStringWhenNothingMatches(): void
     {
         $data = [

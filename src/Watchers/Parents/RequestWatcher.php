@@ -66,6 +66,15 @@ class RequestWatcher implements WatcherInterface
 
     public function register(?array $config): void
     {
+        // a trace closed by the sweep never comes back here, so its entry would sit
+        // in the stack and be popped by the next finish - which would then close the
+        // wrong trace and leave its own open
+        $this->processor->onTraceInterrupted(
+            function (string $traceId): void {
+                $this->scopeResolver->current()->forgetWatcherItemsFor(self::class, $traceId);
+            }
+        );
+
         $this->parseConfig($config);
 
         $this->processor->registerEvent(RequestHandling::class, [$this, 'handleRequestHandling']);

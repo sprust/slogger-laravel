@@ -28,6 +28,15 @@ class CommandWatcher implements WatcherInterface
 
     public function register(?array $config): void
     {
+        // a trace closed by the sweep never comes back here, so its entry would sit
+        // in the stack and be popped by the next finish - which would then close the
+        // wrong trace and leave its own open
+        $this->processor->onTraceInterrupted(
+            function (string $traceId): void {
+                $this->scopeResolver->current()->forgetWatcherItemsFor(self::class, $traceId);
+            }
+        );
+
         if ($config !== null) {
             $this->exceptedCommands = $config['excepted'] ?? [];
         }
@@ -79,6 +88,7 @@ class CommandWatcher implements WatcherInterface
         $this->scopeResolver->current()->pushWatcherItem(
             self::class,
             [
+                'command'    => $event?->command,
                 'trace_id'   => $traceId,
                 'started_at' => $loggedAt,
             ]
@@ -98,8 +108,15 @@ class CommandWatcher implements WatcherInterface
             return;
         }
 
-        /** @var array{trace_id: string, started_at: Carbon}|null $commandData */
-        $commandData = $this->scopeResolver->current()->popWatcherItem(self::class);
+        $command = $event?->command;
+
+        // this command's own entry, not merely the innermost one: a nested command
+        // that never reported finishing would otherwise be closed in its place
+        /** @var array{command: string|null, trace_id: string, started_at: Carbon}|null $commandData */
+        $commandData = $this->scopeResolver->current()->popWatcherItemMatching(
+            self::class,
+            static fn(mixed $item): bool => is_array($item) && ($item['command'] ?? null) === $command
+        );
 
         if (!$commandData) {
             return;

@@ -49,7 +49,7 @@ class HttpClientWatcher implements WatcherInterface
         // a request whose promise never settles (an abandoned pool, a job killed by
         // the timeout signal) is closed by the processor's sweep, and neither
         // response hook ever runs to clear its entry
-        $this->processor->onDetachedTraceInterrupted(
+        $this->processor->onTraceInterrupted(
             function (string $traceId): void {
                 unset($this->requests[$traceId]);
             }
@@ -129,11 +129,10 @@ class HttpClientWatcher implements WatcherInterface
 
         $request = $request->withHeader($this->headerTraceIdKey, $traceId);
 
-        if ($this->headerParentTraceIdKey && $this->traceIdContainer->getParentTraceId()) {
-            // the called service traces the call as a child of this request. Only
-            // when this process is tracing something: an untraced call has no tree
-            // to join, and the header would tell a third party nothing but our
-            // internal ids
+        if ($this->headerParentTraceIdKey) {
+            // the called service hangs its trace under *this call*, not under whatever
+            // encloses it here: the outbound trace always exists, an enclosing one may
+            // not, and a call traced on both sides should join up either way
             $request = $request->withHeader(
                 $this->headerParentTraceIdKey,
                 $traceId
@@ -376,7 +375,7 @@ class HttpClientWatcher implements WatcherInterface
 
         $size = $body->getSize();
 
-        if ($size >= self::MAX_BODY_BYTES) {
+        if (!is_null($size) && $size >= self::MAX_BODY_BYTES) {
             return [
                 '__cleaned' => "--cleaned:big-size-$size--",
             ];
@@ -394,7 +393,21 @@ class HttpClientWatcher implements WatcherInterface
         $url = $this->getRequestPath($request);
 
         $dataResolver = new DataResolver(
-            fn() => json_decode($body->getContents(), true) ?: []
+            function () use ($body): array {
+                $contents = $body->getContents();
+
+                if (strlen($contents) >= self::MAX_BODY_BYTES) {
+                    // getSize() is null for a chunked or generated body, so the cap
+                    // has to be re-checked against what was actually read
+                    return [
+                        '__cleaned' => '--cleaned:big-size--',
+                    ];
+                }
+
+                $decoded = json_decode($contents, true);
+
+                return is_array($decoded) ? $decoded : [];
+            }
         );
 
         foreach ($formatters->getItems() as $formatter) {

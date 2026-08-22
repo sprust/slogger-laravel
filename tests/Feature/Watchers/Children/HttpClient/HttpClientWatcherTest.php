@@ -16,6 +16,7 @@ use GuzzleHttp\Promise\Utils;
 use GuzzleHttp\Psr7\Response;
 use ReflectionClass;
 use SLoggerLaravel\Enums\TraceStatusEnum;
+use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\Guzzle\GuzzleHandlerFactory;
 use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Helpers\TraceDataMasker;
@@ -339,6 +340,41 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
 
         self::assertCount(1, $updating);
         self::assertSame(['https://example.test/alpha'], $updating[0]->tags);
+    }
+
+    public function testTheOutboundHeaderCarriesTheCallsOwnTraceId(): void
+    {
+        // no enclosing trace on purpose: the header must still go out, because the
+        // call's own trace exists either way
+        $mock = new MockHandler([new Response(200)]);
+
+        $handlerStack = app(GuzzleHandlerFactory::class)->prepareHandler(
+            formatters: new RequestDataFormatters(),
+            handlerStack: HandlerStack::create($mock)
+        );
+
+        $client = new Client([
+            'handler'     => $handlerStack,
+            'http_errors' => false,
+        ]);
+
+        $client->request('get', 'https://example.test/alpha');
+
+        $sent = $mock->getLastRequest();
+
+        self::assertNotNull($sent);
+
+        $creating = $this->dispatcher->findCreating(type: 'http-client');
+
+        self::assertCount(1, $creating);
+
+        $headerKey = app(WatchersConfig::class)->requestsHeaderParentTraceIdKey();
+
+        self::assertNotNull($headerKey);
+
+        // the call's own trace, not the one enclosing it: the callee hangs its trace
+        // under this call, and the header is sent whether or not anything encloses it
+        self::assertSame($creating[0]->traceId, $sent->getHeader($headerKey)[0] ?? null);
     }
 
     public function testCredentialsInAUrlNeverReachATag(): void

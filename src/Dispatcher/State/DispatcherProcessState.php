@@ -35,11 +35,21 @@ readonly class DispatcherProcessState
 
         $data = json_decode($contents, true);
 
-        if (!is_array($data) || !isset($data['masterPid'], $data['masterCommandName'])) {
-            // a truncated or hand-edited file used to make both `start` and `stop`
-            // fail with "array offset on null" until someone deleted it by hand.
-            // Treat it as no state at all: the worst case is a stale file, and the
-            // next save overwrites it
+        if (!is_array($data)
+            || !isset(
+                $data['dispatcher'],
+                $data['masterCommandName'],
+                $data['masterPid'],
+                $data['childCommandName'],
+                $data['childProcessPids'],
+            )
+        ) {
+            // every key the DTO needs, not just the two that are easy to check: a
+            // file written by an older version, or hand-edited, is valid JSON and
+            // still missing one of the others - and that used to be a TypeError that
+            // took down `start`, `stop` and the recovery path alike, until someone
+            // deleted the file by hand. Treat it as no state at all: the worst case
+            // is a stale file, and the next save overwrites it
             return null;
         }
 

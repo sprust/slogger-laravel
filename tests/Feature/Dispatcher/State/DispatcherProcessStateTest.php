@@ -72,6 +72,48 @@ class DispatcherProcessStateTest extends BaseTestCase
         $this->cleanupStateFile();
     }
 
+    public function testAnIncompleteStateFileReadsAsNoState(): void
+    {
+        $file = $this->getApp()->make(LocalStorage::class)
+            ->makePath('dispatcher-state-678ed0bcb2d2c.json');
+
+        // valid JSON, written by an older version with a different shape. Building
+        // the DTO from it used to be a TypeError that took down `start`, `stop` and
+        // the recovery path alike, until someone deleted the file by hand
+        file_put_contents(
+            $file,
+            json_encode(
+                ['masterPid' => 111, 'masterCommandName' => 'slogger:dispatcher:start'],
+                JSON_THROW_ON_ERROR
+            )
+        );
+
+        try {
+            self::assertNull(
+                (new DispatcherProcessState('slogger:dispatcher:start'))->getSaved()
+            );
+        } finally {
+            $this->cleanupStateFile();
+        }
+    }
+
+    public function testAMalformedStateFileReadsAsNoState(): void
+    {
+        $file = $this->getApp()->make(LocalStorage::class)
+            ->makePath('dispatcher-state-678ed0bcb2d2c.json');
+
+        // a write interrupted half way
+        file_put_contents($file, '{"dispatcher":"que');
+
+        try {
+            self::assertNull(
+                (new DispatcherProcessState('slogger:dispatcher:start'))->getSaved()
+            );
+        } finally {
+            $this->cleanupStateFile();
+        }
+    }
+
     private function makeDto(int $masterPid): DispatcherProcessStateDto
     {
         return new DispatcherProcessStateDto(

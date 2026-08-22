@@ -309,6 +309,113 @@ class ConcurrentTracingTest extends BaseWatcherTestCase
         self::assertNull($created[0]->parentTraceId);
     }
 
+    public function testAnInnerTraceClosingDoesNotSilenceTheRestOfTheCoroutine(): void
+    {
+        $processor = $this->getApp()->make(Processor::class);
+
+        $parentTraceId = $processor->startAndGetTraceId(
+            type: 'job',
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now(),
+            customParentTraceId: null,
+        );
+
+        $seen = [];
+
+        $child = $this->resolver->spawn(static function () use ($processor, &$seen): void {
+            $seen['on_entry'] = $processor->isActive();
+
+            // a nested unit inside the coroutine - Artisan::call(), a sync job
+            $nested = $processor->startAndGetTraceId(
+                type: 'nested',
+                tags: [],
+                data: [],
+                loggedAt: Carbon::now(),
+                customParentTraceId: null,
+            );
+
+            $processor->stop(
+                traceId: $nested,
+                status: TraceStatusEnum::Success->value,
+                tags: null,
+                data: null,
+                duration: 1.0,
+                parentLoggedAt: Carbon::now(),
+            );
+
+            // the coroutine's own stack is empty again, but the trace it inherited is
+            // still open: clearing the parent here dropped every child trace after it
+            $seen['after_nested'] = $processor->isActive();
+
+            $processor->push(
+                type: 'database',
+                status: TraceStatusEnum::Success->value,
+                data: [],
+            );
+        });
+
+        $child->start();
+
+        self::assertTrue($seen['on_entry']);
+        self::assertTrue($seen['after_nested']);
+
+        $created = $this->dispatcher->findCreating(type: 'database');
+
+        self::assertCount(1, $created);
+        self::assertSame($parentTraceId, $created[0]->parentTraceId);
+    }
+
+    public function testOneCoroutineDoesNotSweepAnothersOwnerlessDetachedTrace(): void
+    {
+        $processor = $this->getApp()->make(Processor::class);
+
+        $traceId = null;
+
+        // an outbound call made with no trace open around it, still in flight
+        $sender = $this->resolver->spawn(static function () use ($processor, &$traceId): void {
+            $traceId = $processor->startAndGetDetachedTraceId(
+                type: 'http-client',
+                tags: [],
+                data: [],
+                loggedAt: Carbon::now(),
+            );
+
+            \Fiber::suspend();
+        });
+
+        $sender->start();
+
+        // an unrelated coroutine opens and closes its own trace
+        $other = $this->resolver->spawn(static function () use ($processor): void {
+            $own = $processor->startAndGetTraceId(
+                type: 'request',
+                tags: [],
+                data: [],
+                loggedAt: Carbon::now(),
+                customParentTraceId: null,
+            );
+
+            $processor->stop(
+                traceId: $own,
+                status: TraceStatusEnum::Success->value,
+                tags: null,
+                data: null,
+                duration: 1.0,
+                parentLoggedAt: Carbon::now(),
+            );
+        });
+
+        $other->start();
+
+        self::assertIsString($traceId);
+
+        // the sender is still waiting; nobody else may declare its request interrupted
+        self::assertCount(0, $this->dispatcher->findUpdating(traceId: $traceId));
+
+        $sender->resume();
+    }
+
     public function testTheDefaultResolverKeepsOneScopePerProcess(): void
     {
         // nothing changes for FPM, queue:work or an artisan command
@@ -321,7 +428,7 @@ class ConcurrentTracingTest extends BaseWatcherTestCase
     public function testThePackageBindsTheProcessResolverAndKnowsOfNoRuntime(): void
     {
         // the package ships no runtime integration: an application on a concurrent
-        // runtime rebinds this itself, which is what this test's setUp() does
+        // runtime binds this itself, which is what this test's setUp() does
         $app = $this->getApp();
 
         $app->forgetInstance(TraceScopeResolverInterface::class);
@@ -332,5 +439,24 @@ class ConcurrentTracingTest extends BaseWatcherTestCase
             ProcessTraceScopeResolver::class,
             $app->make(TraceScopeResolverInterface::class)
         );
+    }
+
+    public function testAResolverBoundBeforeTheProviderRunsIsNotOverwritten(): void
+    {
+        // a package's providers register before the application's, so a binding made
+        // in a provider wins on its own. One made earlier - in `bootstrap/app.php`,
+        // or by whatever bootstraps a concurrent runtime - would not, and a plain
+        // singleton() here would silently put it back on process-wide state
+        $app = $this->getApp();
+
+        $app->forgetInstance(TraceScopeResolverInterface::class);
+
+        $own = new FakeCoroutineScopeResolver();
+
+        $app->singleton(TraceScopeResolverInterface::class, static fn() => $own);
+
+        (new ServiceProvider($app))->register();
+
+        self::assertSame($own, $app->make(TraceScopeResolverInterface::class));
     }
 }

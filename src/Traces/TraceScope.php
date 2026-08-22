@@ -2,6 +2,7 @@
 
 namespace SLoggerLaravel\Traces;
 
+use Closure;
 use Illuminate\Support\Carbon;
 
 /**
@@ -75,5 +76,57 @@ class TraceScope
         }
 
         return array_pop($this->watcherStacks[$watcherClass]);
+    }
+
+    /**
+     * Takes back the innermost entry the predicate accepts, and drops everything
+     * above it.
+     *
+     * Popping blindly assumes every unit that opened one also closes it. A command
+     * killed mid-run, or one whose finish event never fires, breaks that: the next
+     * finish would take the abandoned entry, close a trace that is not its own, and
+     * leave its own open forever. What sits above the match is abandoned by
+     * definition - the processor sweeps those traces as interrupted.
+     *
+     * @param class-string         $watcherClass
+     * @param Closure(mixed): bool $matches
+     */
+    public function popWatcherItemMatching(string $watcherClass, Closure $matches): mixed
+    {
+        $stack = $this->watcherStacks[$watcherClass] ?? [];
+
+        for ($index = count($stack) - 1; $index >= 0; $index--) {
+            if (!$matches($stack[$index])) {
+                continue;
+            }
+
+            $this->watcherStacks[$watcherClass] = array_slice($stack, 0, $index);
+
+            return $stack[$index];
+        }
+
+        return null;
+    }
+
+    /**
+     * Drops the entries a watcher holds for a trace that was closed without it - by
+     * the sweep, not by the watcher itself. Left in place, the next pop would take a
+     * stale entry and leave the watcher's own trace open forever.
+     *
+     * @param class-string $watcherClass
+     */
+    public function forgetWatcherItemsFor(string $watcherClass, string $traceId): void
+    {
+        if (!($this->watcherStacks[$watcherClass] ?? [])) {
+            return;
+        }
+
+        $this->watcherStacks[$watcherClass] = array_values(
+            array_filter(
+                $this->watcherStacks[$watcherClass],
+                static fn(mixed $item): bool => !is_array($item)
+                    || ($item['trace_id'] ?? null) !== $traceId
+            )
+        );
     }
 }
