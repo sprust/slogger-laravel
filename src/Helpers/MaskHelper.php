@@ -2,7 +2,11 @@
 
 namespace SLoggerLaravel\Helpers;
 
+use DOMDocument;
+use DOMElement;
+use DOMText;
 use Illuminate\Support\Str;
+use Throwable;
 
 /**
  * @phpstan-type MaskingRules array{needles: string[], partialNeedles: string[], valuePatterns: string[]}
@@ -283,6 +287,12 @@ class MaskHelper
             return $masked;
         }
 
+        $masked = self::maskXmlString($value, $rules);
+
+        if ($masked !== $value) {
+            return $masked;
+        }
+
         return self::maskByValuePatterns($value, $rules['valuePatterns']);
     }
 
@@ -363,6 +373,150 @@ class MaskHelper
         $encoded = json_encode($masked, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
         return $encoded === false ? $value : $encoded;
+    }
+
+    /**
+     * The same idea as maskJsonString(), for documents that arrive as XML: a SOAP
+     * envelope, a payment gateway's callback, an `Accept: application/xml` response
+     * body. The key carrying the string says nothing about what is inside it.
+     *
+     * Element names and attribute names are matched the way object keys are, and a
+     * match covers the subtree - `<auth>` masks everything under it. Value patterns
+     * apply to every text node and attribute value, matched or not.
+     *
+     * A document in which nothing matched is returned untouched, byte for byte. One
+     * in which something did is re-serialised, so insignificant whitespace and
+     * attribute quoting may differ from the original - the same trade the JSON path
+     * makes.
+     *
+     * @param MaskingRules $rules
+     */
+    private static function maskXmlString(string $value, array $rules): string
+    {
+        $trimmed = ltrim($value);
+
+        if ($trimmed === '' || $trimmed[0] !== '<' || !class_exists(DOMDocument::class)) {
+            return $value;
+        }
+
+        $document = new DOMDocument();
+
+        $previousErrors = libxml_use_internal_errors(true);
+
+        try {
+            // LIBXML_NONET, and no LIBXML_NOENT: entities are left unexpanded, so a
+            // document that arrived from outside cannot make the dispatcher fetch a
+            // URL or unfold a billion-laughs bomb while masking it
+            $loaded = $document->loadXML($trimmed, LIBXML_NONET | LIBXML_NOWARNING | LIBXML_NOERROR);
+        } catch (Throwable) {
+            $loaded = false;
+        } finally {
+            libxml_clear_errors();
+            libxml_use_internal_errors($previousErrors);
+        }
+
+        if (!$loaded || is_null($document->documentElement)) {
+            return $value;
+        }
+
+        $changed = false;
+
+        self::maskXmlElement(
+            element: $document->documentElement,
+            prefix: '',
+            rules: $rules,
+            mode: self::MODE_NONE,
+            changed: $changed
+        );
+
+        if (!$changed) {
+            return $value;
+        }
+
+        // keep the document's own shape: saveXML() on the whole document would add an
+        // XML declaration to one that never had it
+        $encoded = str_starts_with($trimmed, '<?xml')
+            ? $document->saveXML()
+            : $document->saveXML($document->documentElement);
+
+        return $encoded === false ? $value : $encoded;
+    }
+
+    /**
+     * @param MaskingRules $rules
+     */
+    private static function maskXmlElement(
+        DOMElement $element,
+        string $prefix,
+        array $rules,
+        int $mode,
+        bool &$changed
+    ): void {
+        $name = $element->localName ?: $element->nodeName;
+
+        $path = $prefix === '' ? $name : $prefix . '.' . $name;
+
+        $thisMode = max($mode, self::modeFor($path, $rules));
+
+        foreach (iterator_to_array($element->attributes ?? []) as $attribute) {
+            $attributeName = $attribute->localName ?: $attribute->nodeName;
+
+            $attributeMode = max($thisMode, self::modeFor($path . '.' . $attributeName, $rules));
+
+            $masked = self::maskXmlText($attribute->value, $attributeMode, $rules);
+
+            if ($masked !== $attribute->value) {
+                $attribute->value = $masked;
+
+                $changed = true;
+            }
+        }
+
+        foreach (iterator_to_array($element->childNodes) as $child) {
+            if ($child instanceof DOMElement) {
+                self::maskXmlElement(
+                    element: $child,
+                    prefix: $path,
+                    rules: $rules,
+                    mode: $thisMode,
+                    changed: $changed
+                );
+
+                continue;
+            }
+
+            // DOMCdataSection extends DOMText, so a CDATA block is covered here too
+            if (!$child instanceof DOMText) {
+                continue;
+            }
+
+            if (trim($child->data) === '') {
+                // the indentation between elements, not content
+                continue;
+            }
+
+            $masked = self::maskXmlText($child->data, $thisMode, $rules);
+
+            if ($masked !== $child->data) {
+                $child->data = $masked;
+
+                $changed = true;
+            }
+        }
+    }
+
+    /**
+     * @param MaskingRules $rules
+     */
+    private static function maskXmlText(string $text, int $mode, array $rules): string
+    {
+        if ($mode === self::MODE_NONE) {
+            return self::maskByValuePatterns($text, $rules['valuePatterns']);
+        }
+
+        $masked = self::mask($text, $mode);
+
+        return is_string($masked) ? $masked : $text;
     }
 
     /**

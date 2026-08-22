@@ -18,6 +18,7 @@ use SLoggerLaravel\DataResolver;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Events\RequestHandling;
+use SLoggerLaravel\Helpers\BodyDecoder;
 use SLoggerLaravel\Helpers\TraceHelper;
 use SLoggerLaravel\Middleware\HttpMiddleware;
 use SLoggerLaravel\Processor;
@@ -426,10 +427,13 @@ class RequestWatcher implements WatcherInterface
             ];
         }
 
-        if ($request->acceptsJson()) {
-            $url = $this->getRequestPath($request);
+        $content = $response->getContent();
 
-            $content = $response->getContent();
+        // an XML response is recorded too, and the client asking for XML rather than
+        // JSON is exactly when it arrives: acceptsJson() alone dropped every SOAP and
+        // XML-API response on the floor
+        if ($request->acceptsJson() || (is_string($content) && BodyDecoder::looksLikeXml($content))) {
+            $url = $this->getRequestPath($request);
 
             if ($content === false) {
                 return [];
@@ -442,7 +446,7 @@ class RequestWatcher implements WatcherInterface
             }
 
             $dataResolver = new DataResolver(
-                fn() => json_decode($content, true) ?: []
+                fn() => BodyDecoder::decode($content)
             );
 
             foreach ($this->formatters->getItems() as $formatter) {
@@ -481,7 +485,7 @@ class RequestWatcher implements WatcherInterface
     }
 
     /**
-     * @return array<string, mixed>
+     * @return array<int|string, mixed>
      */
     protected function getRequestParameters(Request $request): array
     {
@@ -500,7 +504,46 @@ class RequestWatcher implements WatcherInterface
             ];
         });
 
-        return array_replace_recursive($request->input(), $files);
+        $parameters = array_replace_recursive($request->input(), $files);
+
+        if ($parameters) {
+            return $parameters;
+        }
+
+        // Laravel parses form and JSON bodies into input(); an XML one it leaves
+        // alone, so without this a SOAP or XML-API request is traced with no body at
+        // all
+        return $this->readXmlRequestBody($request);
+    }
+
+    /**
+     * @return array<int|string, mixed>
+     */
+    protected function readXmlRequestBody(Request $request): array
+    {
+        $length = $request->headers->get('Content-Length');
+
+        if (is_numeric($length) && (int) $length > $this->maxResponseBytes) {
+            return [
+                '__skipped' => 'request_too_large',
+            ];
+        }
+
+        $content = $request->getContent();
+
+        if (!BodyDecoder::looksLikeXml($content)) {
+            return [];
+        }
+
+        if (strlen($content) > $this->maxResponseBytes) {
+            // Content-Length is absent on a chunked request, so the cap has to be
+            // re-checked against what was actually read
+            return [
+                '__skipped' => 'request_too_large',
+            ];
+        }
+
+        return BodyDecoder::decode($content);
     }
 
     /**

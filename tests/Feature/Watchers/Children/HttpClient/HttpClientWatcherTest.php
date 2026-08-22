@@ -18,6 +18,7 @@ use ReflectionClass;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\Guzzle\GuzzleHandlerFactory;
+use SLoggerLaravel\Helpers\BodyDecoder;
 use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Helpers\TraceDataMasker;
 use SLoggerLaravel\Objects\TraceCreateObject;
@@ -375,6 +376,69 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
         // the call's own trace, not the one enclosing it: the callee hangs its trace
         // under this call, and the header is sent whether or not anything encloses it
         self::assertSame($creating[0]->traceId, $sent->getHeader($headerKey)[0] ?? null);
+    }
+
+    public function testAnXmlCallIsRecordedInBothDirections(): void
+    {
+        $this->registerWatcher(JobWatcher::class, null);
+
+        dispatch(static function (): void {
+            $handlerStack = app(GuzzleHandlerFactory::class)->prepareHandler(
+                formatters: new RequestDataFormatters(),
+                handlerStack: HandlerStack::create(
+                    new MockHandler([
+                        new Response(
+                            status: 200,
+                            headers: ['Content-Type' => 'application/xml'],
+                            body: '<result><api_token>sk-live-response</api_token><page>2</page></result>'
+                        ),
+                    ])
+                )
+            );
+
+            $client = new Client([
+                'handler'     => $handlerStack,
+                'http_errors' => false,
+            ]);
+
+            // a SOAP call: neither direction used to reach the trace, because both
+            // bodies were run through json_decode and an XML one gave []
+            $client->request('post', 'https://example.test/soap', [
+                'body' => '<envelope><password>hunter2</password><amount>100</amount></envelope>',
+            ]);
+        });
+
+        $creating = $this->dispatcher->findCreating(type: 'http-client');
+
+        self::assertCount(1, $creating);
+
+        $data = ($this->dispatcher->findUpdating(traceId: $creating[0]->traceId)[0]->data ?? []);
+
+        self::assertStringContainsString(
+            '<password>hunter2</password>',
+            $data['request']['payload'][BodyDecoder::XML_KEY]
+        );
+
+        self::assertStringContainsString(
+            '<api_token>sk-live-response</api_token>',
+            $data['response']['body'][BodyDecoder::XML_KEY]
+        );
+
+        $masked = app(TraceDataMasker::class)->mask($data);
+
+        self::assertStringContainsString(
+            '<password>' . MaskHelper::FULL_MASK . '</password>',
+            $masked['request']['payload'][BodyDecoder::XML_KEY]
+        );
+
+        self::assertStringContainsString(
+            '<api_token>' . MaskHelper::FULL_MASK . '</api_token>',
+            $masked['response']['body'][BodyDecoder::XML_KEY]
+        );
+
+        // and what matched nothing survives in both
+        self::assertStringContainsString('<amount>100</amount>', $masked['request']['payload'][BodyDecoder::XML_KEY]);
+        self::assertStringContainsString('<page>2</page>', $masked['response']['body'][BodyDecoder::XML_KEY]);
     }
 
     public function testCredentialsInAUrlNeverReachATag(): void

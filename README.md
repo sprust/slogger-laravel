@@ -50,6 +50,10 @@ Masking moved out of the traced application and into the dispatcher job.
     reach a tag;
   - values added through `TraceDataComplementer::add()` land under `__additional`
     rather than at the top level, which is what puts them in the masker's reach.
+- **An XML body is now recorded**, under `__xml`, where before it was dropped:
+  both watchers ran every body through `json_decode`, and an XML one gave `[]`. A
+  consumer that assumed a body is always a decoded structure will now also see a
+  single-key array holding the document as a string.
 - **The outbound parent-trace header changed value.** It used to carry the trace
   enclosing the call; it now carries the trace of the call itself, so a service you
   call hangs its trace under that call rather than beside it. Cross-service trees
@@ -226,7 +230,7 @@ of. `cpu` is the one-minute load average as a percentage of the machine's capaci
 normalised by core count, and can exceed 100 on an overloaded machine.
 
 Watcher data highlights:
-- `request`: url (without the query string), method, action, query/query_string, route_parameters, headers/params, response (for JSON responses)
+- `request`: url (without the query string), method, action, query/query_string, route_parameters, headers/params, response (for JSON and XML responses)
 - `job`: connection, payload, status (`processed`, `failed`, `released_after_exception`, `timed_out`, `exception_occurred`), exception
 - `event`: listeners, broadcast, optional serialized payload
 - `model`: action, model class, key, changes
@@ -317,7 +321,21 @@ Patterns use Laravel `Str::is` matching.
 
 ### JSON response size
 
-Large JSON responses are skipped and marked with:
+A body that is not JSON but is XML - a SOAP envelope, an XML API - is carried as the
+document itself, under `__xml`:
+
+```json
+{"__xml": "<order><api_token>********</api_token></order>"}
+```
+
+Not as an array converted from it: that would lose attributes, repeated elements and
+namespaces, and a trace that no longer matches the document it describes is worth
+little. The masker looks inside such a string (see "Masking Rules"), so the document is
+masked in place. This applies in both directions and to both watchers - an incoming
+request body Laravel does not parse into `input()`, an outgoing one, and either
+response.
+
+Large responses are skipped and marked with:
 
 ```json
 {"__skipped": "response_too_large"}
@@ -384,13 +402,27 @@ to tell two records apart, so `masking.partial_keys` keeps two characters at eac
 `partial_keys`**: what is left is enough to correlate records, and for a short value it
 is enough to guess it.
 
-A value that is a **string containing a JSON document** is decoded, masked and encoded
+A value that is a **string containing a document** is parsed, masked and serialised
 back: applications hand whole documents over as strings - an Eloquent `array` cast puts
-one straight into a model's changes - and the key carrying such a string says nothing
-about what is inside it. Only strings that start with `{` or `[` are parsed, and a
-document in which nothing matched is kept byte for byte. A document in which something
-matched is re-encoded, so its escaping is normalised and a number too large or too
-precise for a PHP float loses precision.
+one straight into a model's changes, a SOAP call arrives as one - and the key carrying
+such a string says nothing about what is inside it. Two formats are looked into:
+
+- **JSON**, for strings starting with `{` or `[`. Re-encoding normalises escaping, and
+  a number too large or too precise for a PHP float loses precision.
+- **XML**, for strings starting with `<`. Element and attribute names are matched the
+  way object keys are, a match covers the subtree (`<auth>` masks everything under
+  it), a namespace prefix does not hide a name (`soap:Envelope` matches on
+  `Envelope`), and CDATA is masked in place. Re-serialising may normalise
+  insignificant whitespace and attribute quoting; a document that had no XML
+  declaration does not gain one.
+
+In both cases a document in which **nothing** matched is kept byte for byte, and one
+that cannot be parsed is left alone.
+
+XML entities are never expanded. A document that arrived from outside cannot make the
+dispatcher read a local file or unfold a billion-laughs bomb while it is being masked -
+which matters, because masking runs in a worker over payloads the application did not
+write.
 
 A value under a **`query_string`** key is masked parameter by parameter rather than as
 a whole, so `page=2&api_token=secret` keeps the page and loses the token. This is where

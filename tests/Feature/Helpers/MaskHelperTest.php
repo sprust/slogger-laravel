@@ -109,6 +109,121 @@ class MaskHelperTest extends BaseTestCase
         self::assertSame(MaskHelper::FULL_MASK, $masked['context']['email_token']);
     }
 
+    public function testMaskArrayByKeysLooksInsideXmlDocuments(): void
+    {
+        $masked = MaskHelper::maskArrayByKeys(
+            [
+                'payload' => '<order><customer_email>john.doe@example.com</customer_email>'
+                    . '<api_token>sk-live-secret</api_token><amount>100</amount></order>',
+            ],
+            ['token'],
+            ['email']
+        );
+
+        self::assertSame(
+            '<order><customer_email>jo****************om</customer_email>'
+            . '<api_token>' . MaskHelper::FULL_MASK . '</api_token><amount>100</amount></order>',
+            $masked['payload']
+        );
+    }
+
+    public function testMaskArrayByKeysMasksAnXmlSubtreeAndAttributes(): void
+    {
+        $masked = MaskHelper::maskArrayByKeys(
+            [
+                'payload' => '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">'
+                    . '<auth><username>bob</username><password>hunter2</password></auth>'
+                    . '<order id="42" api_token="sk-live-secret"/></soap:Envelope>',
+            ],
+            ['auth', 'token']
+        );
+
+        // a namespace prefix does not hide the element: `soap:Envelope` matches on
+        // `Envelope`, and `auth` covers everything under it
+        self::assertStringContainsString(
+            '<auth><username>' . MaskHelper::FULL_MASK . '</username>'
+            . '<password>' . MaskHelper::FULL_MASK . '</password></auth>',
+            $masked['payload']
+        );
+
+        // an attribute is matched by its own name, and one that matches nothing stays
+        self::assertStringContainsString('id="42"', $masked['payload']);
+        self::assertStringContainsString('api_token="' . MaskHelper::FULL_MASK . '"', $masked['payload']);
+    }
+
+    public function testMaskArrayByKeysMasksInsideCdata(): void
+    {
+        $masked = MaskHelper::maskArrayByKeys(
+            ['payload' => '<root><secret><![CDATA[very-secret]]></secret><note>keep me</note></root>'],
+            ['secret']
+        );
+
+        self::assertStringContainsString('<![CDATA[' . MaskHelper::FULL_MASK . ']]>', $masked['payload']);
+        self::assertStringContainsString('<note>keep me</note>', $masked['payload']);
+    }
+
+    public function testMaskArrayByKeysKeepsAnXmlDocumentByteForByteWhenNothingMatches(): void
+    {
+        // re-serialising normalises whitespace and quoting, so a document nothing
+        // matched in must not go through it at all
+        $data = [
+            'payload' => "<root>\n  <page>2</page>\n</root>",
+        ];
+
+        self::assertSame($data, MaskHelper::maskArrayByKeys($data, ['token']));
+    }
+
+    public function testMaskArrayByKeysKeepsTheXmlDeclarationOnlyWhenItWasThere(): void
+    {
+        $withDeclaration = MaskHelper::maskArrayByKeys(
+            ['payload' => '<?xml version="1.0" encoding="UTF-8"?><root><token>abc</token></root>'],
+            ['token']
+        );
+
+        self::assertStringStartsWith('<?xml version="1.0" encoding="UTF-8"?>', $withDeclaration['payload']);
+
+        $without = MaskHelper::maskArrayByKeys(
+            ['payload' => '<root><token>abc</token></root>'],
+            ['token']
+        );
+
+        // one that never had a declaration must not gain one
+        self::assertStringStartsWith('<root>', $without['payload']);
+    }
+
+    public function testMaskArrayByKeysLeavesBrokenXmlAlone(): void
+    {
+        $data = ['payload' => '<root><unclosed>'];
+
+        self::assertSame($data, MaskHelper::maskArrayByKeys($data, ['token']));
+    }
+
+    public function testAnXmlDocumentCannotMakeTheMaskerReadAFileOrExpandEntities(): void
+    {
+        $file = tempnam(sys_get_temp_dir(), 'slogger-xxe-');
+
+        self::assertIsString($file);
+
+        file_put_contents($file, 'CONTENTS-OF-A-LOCAL-FILE');
+
+        try {
+            // masking runs in the dispatcher worker over documents that arrived from
+            // outside; entities are never expanded, so neither a file read nor a
+            // billion-laughs expansion is reachable from one
+            $masked = MaskHelper::maskArrayByKeys(
+                [
+                    'payload' => '<?xml version="1.0"?><!DOCTYPE r [<!ENTITY x SYSTEM "file://'
+                        . $file . '">]><r><token>&x;</token></r>',
+                ],
+                ['token']
+            );
+
+            self::assertStringNotContainsString('CONTENTS-OF-A-LOCAL-FILE', $masked['payload']);
+        } finally {
+            unlink($file);
+        }
+    }
+
     public function testMaskArrayByKeysMasksAQueryStringParameterByParameter(): void
     {
         $masked = MaskHelper::maskArrayByKeys(

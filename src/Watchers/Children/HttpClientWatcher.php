@@ -10,6 +10,7 @@ use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\DataResolver;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Guzzle\GuzzleHandlerFactory;
+use SLoggerLaravel\Helpers\BodyDecoder;
 use SLoggerLaravel\Helpers\DataFormatter;
 use SLoggerLaravel\Helpers\TraceHelper;
 use SLoggerLaravel\Processor;
@@ -336,9 +337,7 @@ class HttpClientWatcher implements WatcherInterface
             ];
         }
 
-        $parameters = json_decode($contents, true);
-
-        return is_array($parameters) ? $parameters : [];
+        return BodyDecoder::decode($contents);
     }
 
     /**
@@ -404,9 +403,7 @@ class HttpClientWatcher implements WatcherInterface
                     ];
                 }
 
-                $decoded = json_decode($contents, true);
-
-                return is_array($decoded) ? $decoded : [];
+                return BodyDecoder::decode($contents);
             }
         );
 
