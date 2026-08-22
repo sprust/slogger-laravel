@@ -83,7 +83,7 @@ Masking moved out of the traced application and into the dispatcher job.
 1) Install the package (via Composer in your app):
 
 ```bash
-composer require slogger/slogger-laravel
+composer require slogger/laravel
 ```
 
 2) Publish config:
@@ -237,7 +237,7 @@ Watcher data highlights:
 - `mail`: mailable/notification, queued, `message` (from/reply_to/to/cc/bcc as `email`/`full_name` pairs, subject)
 - `notification`: notifiable, channel, queued, `target.recipients`, response
 - `cache`: type, key, and `cache.<key>` (value, tags, expiration)
-- `db`: query, bindings (always masked), time
+- `db`: query, bindings (masked unless masking is turned off entirely), time
 - `http-client`: method, url, query/query_string, request/response (concurrent requests are traced independently, so `Http::pool()` works)
 - `schedule`: command, description, cron, output
 - `dump`, `log`, `gate`: dump/message/ability info
@@ -321,8 +321,8 @@ Patterns use Laravel `Str::is` matching.
 
 ### JSON response size
 
-A body that is not JSON but is XML - a SOAP envelope, an XML API - is carried as the
-document itself, under `__xml`:
+A body that is not JSON but **parses as XML** - a SOAP envelope, an XML API - is
+carried as the document itself, under `__xml`:
 
 ```json
 {"__xml": "<order><api_token>********</api_token></order>"}
@@ -334,6 +334,18 @@ little. The masker looks inside such a string (see "Masking Rules"), so the docu
 masked in place. This applies in both directions and to both watchers - an incoming
 request body Laravel does not parse into `input()`, an outgoing one, and either
 response.
+
+**Parsing, not guessing.** A body is XML only if it parses as XML and is not an HTML
+page. Well-formed HTML parses as XML too, and an error page - which is what a failing
+endpoint answers with - carries CSRF tokens, inlined keys and, with a debug page
+installed, environment values. The masker cannot read any of that, so recording it
+would be shipping it. A body that is neither JSON nor XML is dropped, as it always was.
+
+A body is also dropped, with `{"__skipped": "body_too_large"}`, above the size the
+masker will read (1 MB), and with `{"__skipped": "non_utf8_body"}` when it is not
+valid UTF-8 - a trace's data is serialised with `json_encode`, and invalid bytes there
+would replace the whole payload of that trace with an encoding error, not just the
+body.
 
 Large responses are skipped and marked with:
 
@@ -409,20 +421,28 @@ such a string says nothing about what is inside it. Two formats are looked into:
 
 - **JSON**, for strings starting with `{` or `[`. Re-encoding normalises escaping, and
   a number too large or too precise for a PHP float loses precision.
-- **XML**, for strings starting with `<`. Element and attribute names are matched the
+- **XML**, for strings that parse as XML. Element and attribute names are matched the
   way object keys are, a match covers the subtree (`<auth>` masks everything under
   it), a namespace prefix does not hide a name (`soap:Envelope` matches on
-  `Envelope`), and CDATA is masked in place. Re-serialising may normalise
-  insignificant whitespace and attribute quoting; a document that had no XML
-  declaration does not gain one.
+  `Envelope`), CDATA is masked in place, and comments and processing instructions get
+  the value patterns. Re-serialising may normalise insignificant whitespace and
+  attribute quoting; a document that had no XML declaration does not gain one.
+- **PHP's own serialisation**, for strings starting with `a:<n>:{`. A session stored
+  in the cache is one of those, holding the CSRF token and the password hash under
+  keys the lists match. Objects are never instantiated while reading one.
 
-In both cases a document in which **nothing** matched is kept byte for byte, and one
-that cannot be parsed is left alone.
+A document in which **nothing** matched is kept byte for byte.
 
-XML entities are never expanded. A document that arrived from outside cannot make the
-dispatcher read a local file or unfold a billion-laughs bomb while it is being masked -
-which matters, because masking runs in a worker over payloads the application did not
-write.
+XML entities are never expanded, so a document that arrived from outside cannot make
+the dispatcher read a local file or unfold a billion-laughs bomb while it is being
+masked - masking runs in a worker over payloads the application did not write. Two
+consequences follow, and both fail **closed**: a document whose values live in an
+internal DTD is masked whole, because masking around `&secret;` while leaving its
+declaration in place reads as protection without being any; and a document carrying
+declarations that does not parse at all is masked whole for the same reason.
+
+Anything else that merely starts with `<` - a fragment of prose, a page - is left
+alone, with the value patterns applied to it as ordinary text.
 
 A value under a **`query_string`** key is masked parameter by parameter rather than as
 a whole, so `page=2&api_token=secret` keeps the page and loses the token. This is where

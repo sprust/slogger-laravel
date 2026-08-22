@@ -113,7 +113,11 @@ class Dispatcher
             throw new RuntimeException($message);
         }
 
-        $childCommandName = $processes[0]->getCommandLine();
+        // without the `exec ` prefix: the shell replaces itself with the worker, so
+        // /proc/<pid>/cmdline holds the worker's argv and nothing else. Saving the
+        // command line verbatim made isPidActive() false for every child - and then a
+        // master that died left workers nothing could find or stop
+        $childCommandName = self::stripExecPrefix($processes[0]->getCommandLine());
 
         foreach ($processes as $process) {
             $process->start();
@@ -214,6 +218,12 @@ class Dispatcher
             if (!$processesCount) {
                 break;
             }
+
+            // isRunning() and readProcessOutput() are both non-blocking, so without
+            // this the master burns a core for the whole ten seconds every time a
+            // worker takes a moment to finish its job - which is the normal case for
+            // a graceful stop, and for every takeover
+            usleep(100000);
         }
 
         foreach ($processes as $process) {
@@ -346,6 +356,14 @@ class Dispatcher
     {
         $this->output->writeln($message);
         $this->logger->info($message);
+    }
+
+    /**
+     * @see QueueDispatcherProcessor::createProcess()
+     */
+    private static function stripExecPrefix(string $commandLine): string
+    {
+        return preg_replace('/^exec\s+/', '', $commandLine, 1) ?? $commandLine;
     }
 
     private function logError(string $message): void

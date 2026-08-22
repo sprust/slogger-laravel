@@ -18,6 +18,35 @@ use SLoggerLaravel\Tests\Feature\BaseTestCase;
  */
 class PublishedConfigWithoutMaskingTest extends BaseTestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        // the warning is said once per process, and these tests boot the provider
+        // repeatedly inside one
+        ServiceProvider::resetRetiredMaskingConfigReport();
+    }
+
+    public function testTheWarningIsSaidOnceNotOnEveryBoot(): void
+    {
+        $this->getApp()['config']->set('slogger.watchers', [
+            [
+                'class'   => ModelWatcher::class,
+                'enabled' => true,
+                'config'  => ['masks' => ['*' => ['*token*']]],
+            ],
+        ]);
+
+        Log::shouldReceive('channel')->andReturnSelf();
+        Log::shouldReceive('warning')->once();
+
+        // an application that upgraded and has not cleaned its config boots this on
+        // every request, job and command
+        (new ServiceProvider($this->getApp()))->boot();
+        (new ServiceProvider($this->getApp()))->boot();
+        (new ServiceProvider($this->getApp()))->boot();
+    }
+
     public function testTheDefaultsSurviveAMissingSection(): void
     {
         $this->forgetMaskingSection();

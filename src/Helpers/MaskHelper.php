@@ -2,8 +2,10 @@
 
 namespace SLoggerLaravel\Helpers;
 
+use DOMComment;
 use DOMDocument;
 use DOMElement;
+use DOMProcessingInstruction;
 use DOMText;
 use Illuminate\Support\Str;
 use Throwable;
@@ -293,6 +295,12 @@ class MaskHelper
             return $masked;
         }
 
+        $masked = self::maskSerializedString($value, $rules);
+
+        if ($masked !== $value) {
+            return $masked;
+        }
+
         return self::maskByValuePatterns($value, $rules['valuePatterns']);
     }
 
@@ -311,6 +319,20 @@ class MaskHelper
                 static function (array $matches): string {
                     /** @var string $matched */
                     $matched = $matches[0];
+
+                    // a pattern with a capture group masks the group and keeps the
+                    // rest: `?api_key=SECRET` should lose the secret, not the name of
+                    // the parameter that gives it away
+                    if (isset($matches[1]) && $matches[1] !== '') {
+                        /** @var string $maskedGroup */
+                        $maskedGroup = self::mask($matches[1], self::MODE_FULL);
+
+                        $position = strpos($matched, $matches[1]);
+
+                        return $position === false
+                            ? $maskedGroup
+                            : substr_replace($matched, $maskedGroup, $position, strlen($matches[1]));
+                    }
 
                     /** @var string $masked */
                     $masked = self::mask($matched, self::MODE_PARTIAL);
@@ -393,7 +415,7 @@ class MaskHelper
      */
     private static function maskXmlString(string $value, array $rules): string
     {
-        $trimmed = ltrim($value);
+        $trimmed = BodyDecoder::trimForParsing($value);
 
         if ($trimmed === '' || $trimmed[0] !== '<' || !class_exists(DOMDocument::class)) {
             return $value;
@@ -416,7 +438,21 @@ class MaskHelper
         }
 
         if (!$loaded || is_null($document->documentElement)) {
-            return $value;
+            // it did not parse, so nothing here can look inside it. That is fine for
+            // a fragment of prose that happens to start with `<`, and not fine for a
+            // document carrying a DTD: libxml refuses an entity bomb outright, and
+            // returning it untouched would ship whatever its declarations hold
+            return stripos($trimmed, '<!DOCTYPE') === 0 || str_contains($trimmed, '<!ENTITY')
+                ? self::FULL_MASK
+                : $value;
+        }
+
+        if (!is_null($document->doctype) && $document->doctype->entities->length > 0) {
+            // an internal DTD defines the values, and an entity reference is not a
+            // text node: masking would walk straight past `&secret;` and leave its
+            // definition in the DTD untouched. Masking the document whole is the only
+            // honest answer - a partial mask here reads as protection and is not
+            return self::FULL_MASK;
         }
 
         $changed = false;
@@ -433,13 +469,21 @@ class MaskHelper
             return $value;
         }
 
-        // keep the document's own shape: saveXML() on the whole document would add an
-        // XML declaration to one that never had it
-        $encoded = str_starts_with($trimmed, '<?xml')
-            ? $document->saveXML()
-            : $document->saveXML($document->documentElement);
+        $encoded = $document->saveXML();
 
-        return $encoded === false ? $value : $encoded;
+        if ($encoded === false) {
+            return $value;
+        }
+
+        // keep the document's own shape. saveXML() always writes a declaration, so
+        // one that never had it must have it taken back off - and `<?xml-stylesheet`
+        // is a processing instruction, not a declaration, which a str_starts_with on
+        // `<?xml` used to mistake for one
+        if (!preg_match('/^<\?xml\s/', $trimmed)) {
+            $encoded = preg_replace('/^<\?xml[^?]*\?>\s*/', '', $encoded, 1) ?? $encoded;
+        }
+
+        return rtrim($encoded, "\n");
     }
 
     /**
@@ -458,7 +502,12 @@ class MaskHelper
 
         $thisMode = max($mode, self::modeFor($path, $rules));
 
-        foreach (iterator_to_array($element->attributes ?? []) as $attribute) {
+        // no iterator_to_array: it materialises a wrapper object per node, and a flat
+        // document with a hundred thousand small elements turns 4 MB of parsed DOM
+        // into tens of MB of PHP objects - enough to kill a worker outright, which is
+        // a fatal the job machinery cannot catch. Changing a node's text does not
+        // change the structure, so a live list is safe to walk
+        foreach ($element->attributes ?? [] as $attribute) {
             $attributeName = $attribute->localName ?: $attribute->nodeName;
 
             $attributeMode = max($thisMode, self::modeFor($path . '.' . $attributeName, $rules));
@@ -472,7 +521,7 @@ class MaskHelper
             }
         }
 
-        foreach (iterator_to_array($element->childNodes) as $child) {
+        foreach ($element->childNodes as $child) {
             if ($child instanceof DOMElement) {
                 self::maskXmlElement(
                     element: $child,
@@ -481,6 +530,21 @@ class MaskHelper
                     mode: $thisMode,
                     changed: $changed
                 );
+
+                continue;
+            }
+
+            // a comment or a processing instruction is not matched by any key, but it
+            // is still text somebody wrote: whether an address in one got masked used
+            // to depend on whether an unrelated element matched elsewhere
+            if ($child instanceof DOMComment || $child instanceof DOMProcessingInstruction) {
+                $masked = self::maskByValuePatterns($child->data, $rules['valuePatterns']);
+
+                if ($masked !== $child->data) {
+                    $child->data = $masked;
+
+                    $changed = true;
+                }
 
                 continue;
             }
@@ -517,6 +581,45 @@ class MaskHelper
         $masked = self::mask($text, $mode);
 
         return is_string($masked) ? $masked : $text;
+    }
+
+    /**
+     * PHP's own serialisation format, which a framework writes without asking: a
+     * session stored in the cache is one `serialize()` blob holding the CSRF token
+     * and the password hash, and it matches neither the JSON nor the XML sniff.
+     *
+     * Objects are never instantiated - `allowed_classes: false` - so unserialising
+     * a payload the application did not write cannot construct anything.
+     *
+     * @param MaskingRules $rules
+     */
+    private static function maskSerializedString(string $value, array $rules): string
+    {
+        if (!preg_match('/^a:\d+:\{/', $value)) {
+            // only arrays: a serialised scalar carries no keys to match on anyway
+            return $value;
+        }
+
+        $decoded = @unserialize($value, ['allowed_classes' => false]);
+
+        if (!is_array($decoded)) {
+            return $value;
+        }
+
+        // depth 2: every key in it is the application's own
+        $masked = self::maskNode(
+            data: $decoded,
+            prefix: '',
+            rules: $rules,
+            mode: self::MODE_NONE,
+            depth: 2
+        );
+
+        if ($masked === $decoded) {
+            return $value;
+        }
+
+        return serialize($masked);
     }
 
     /**

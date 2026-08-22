@@ -109,6 +109,44 @@ class MaskHelperTest extends BaseTestCase
         self::assertSame(MaskHelper::FULL_MASK, $masked['context']['email_token']);
     }
 
+    public function testMaskArrayByKeysLooksInsideSerializedArrays(): void
+    {
+        // a session stored in the cache is one serialize() blob holding the CSRF
+        // token and the password hash, and it looks like neither JSON nor XML
+        $session = serialize([
+            '_token'            => 'X7mQabcdefghijklmnopqrstuvwx',
+            'password_hash_web' => '$2y$12$abcdefghijkl',
+            'locale'            => 'en',
+        ]);
+
+        $masked = MaskHelper::maskArrayByKeys(['value' => $session], ['token', 'pass']);
+
+        $decoded = unserialize($masked['value'], ['allowed_classes' => false]);
+
+        self::assertSame(MaskHelper::FULL_MASK, $decoded['_token']);
+        self::assertSame(MaskHelper::FULL_MASK, $decoded['password_hash_web']);
+        self::assertSame('en', $decoded['locale']);
+    }
+
+    public function testAValuePatternWithAGroupMasksOnlyTheGroup(): void
+    {
+        $pattern = '/[?&][\w.-]*(?:token|key)[\w.-]*=([^&\s]+)/i';
+
+        $masked = MaskHelper::maskArrayByKeys(
+            ['ctx' => ['message' => 'GET https://api.test/v1?api_key=sk_live_SECRET&page=2 failed']],
+            [],
+            [],
+            [$pattern]
+        );
+
+        // the parameter name is what makes the line worth reading; the value is what
+        // makes it dangerous
+        self::assertSame(
+            'GET https://api.test/v1?api_key=' . MaskHelper::FULL_MASK . '&page=2 failed',
+            $masked['ctx']['message']
+        );
+    }
+
     public function testMaskArrayByKeysLooksInsideXmlDocuments(): void
     {
         $masked = MaskHelper::maskArrayByKeys(
@@ -219,9 +257,52 @@ class MaskHelperTest extends BaseTestCase
             );
 
             self::assertStringNotContainsString('CONTENTS-OF-A-LOCAL-FILE', $masked['payload']);
+
+            // and the masker did do its job on a document it can read, so this is not
+            // passing merely because nothing happened
+            self::assertSame(
+                '<r><token>' . MaskHelper::FULL_MASK . '</token></r>',
+                MaskHelper::maskArrayByKeys(['payload' => '<r><token>abc</token></r>'], ['token'])['payload']
+            );
         } finally {
             unlink($file);
         }
+    }
+
+    public function testAnEntityBombDoesNotExpandWhileMasking(): void
+    {
+        $bomb = '<?xml version="1.0"?><!DOCTYPE b ['
+            . '<!ENTITY a "aaaaaaaaaa">'
+            . '<!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">'
+            . '<!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;">'
+            . '<!ENTITY d "&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;">'
+            . ']><r><token>&d;</token></r>';
+
+        $started = microtime(true);
+
+        $masked = MaskHelper::maskArrayByKeys(['payload' => $bomb], ['token']);
+
+        // libxml refuses this outright ("entity reference loop"), so it never parses
+        // - and a document that carries declarations and does not parse is masked
+        // whole rather than passed through, since nothing can look inside it
+        self::assertSame(MaskHelper::FULL_MASK, $masked['payload']);
+
+        // nothing was expanded on the way: the whole point of not setting
+        // LIBXML_NOENT is that this cannot become 10 000 characters, or 10 billion
+        self::assertLessThan(1.0, microtime(true) - $started);
+    }
+
+    public function testADocumentWhoseValuesLiveInItsDtdIsMaskedWhole(): void
+    {
+        // this one does parse. Masking around an entity reference would leave both
+        // `&secret;` and its definition in the DTD untouched, which reads as
+        // protection without being any
+        $masked = MaskHelper::maskArrayByKeys(
+            ['payload' => '<!DOCTYPE r [<!ENTITY s "SUPERSECRET">]><r><token>&s;</token></r>'],
+            ['token']
+        );
+
+        self::assertSame(MaskHelper::FULL_MASK, $masked['payload']);
     }
 
     public function testMaskArrayByKeysMasksAQueryStringParameterByParameter(): void

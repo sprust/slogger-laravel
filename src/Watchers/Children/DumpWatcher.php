@@ -45,10 +45,35 @@ class DumpWatcher implements WatcherInterface
         $this->processor->handleWatcher(fn() => $this->onHandleDump($dump));
     }
 
+    /**
+     * @return array<int|string, mixed>|scalar|null
+     */
+    protected static function prepareDump(mixed $dump): mixed
+    {
+        if (is_scalar($dump) || is_null($dump) || is_array($dump)) {
+            return $dump;
+        }
+
+        if (!is_object($dump)) {
+            return get_debug_type($dump);
+        }
+
+        $encoded = json_encode($dump, JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
+
+        $decoded = $encoded === false ? null : json_decode($encoded, true);
+
+        // an object with no public state json_encodes to `{}`; naming its class says
+        // more than an empty object does
+        return is_array($decoded) && $decoded !== [] ? $decoded : $dump::class;
+    }
+
     protected function onHandleDump(mixed $dump): void
     {
         $data = [
-            'dump' => is_object($dump) ? (print_r($dump, true)) : $dump,
+            // not print_r(): flattening an object into a string destroys the very
+            // structure the masker walks, so `[password] => hunter2` came out intact
+            // where `['password' => 'hunter2']` is masked
+            'dump' => self::prepareDump($dump),
         ];
 
         $this->processor->push(

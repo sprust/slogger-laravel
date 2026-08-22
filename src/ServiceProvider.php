@@ -17,6 +17,7 @@ use SLoggerLaravel\Dispatcher\ApiClients\ApiClientFactory;
 use SLoggerLaravel\Dispatcher\ApiClients\ApiClientInterface;
 use SLoggerLaravel\Dispatcher\Items\DispatcherFactory;
 use SLoggerLaravel\Dispatcher\Items\Memory\MemoryDispatcher;
+use SLoggerLaravel\Dispatcher\Items\Queue\Jobs\SendTracesJob;
 use SLoggerLaravel\Dispatcher\Items\Queue\QueueDispatcher;
 use SLoggerLaravel\Dispatcher\Items\TraceDispatcherInterface;
 use SLoggerLaravel\Dispatcher\StartDispatcherCommand;
@@ -29,6 +30,7 @@ use SLoggerLaravel\Profiling\XHProfProfiler;
 use SLoggerLaravel\Traces\ProcessTraceScopeResolver;
 use SLoggerLaravel\Traces\TraceScopeResolverInterface;
 use SLoggerLaravel\Traces\TraceIdContainer;
+use SLoggerLaravel\Watchers\Children\HttpClientWatcher;
 use SLoggerLaravel\Watchers\Children\ModelWatcher;
 use SLoggerLaravel\Watchers\Parents\RequestWatcher;
 use Throwable;
@@ -36,6 +38,19 @@ use SLoggerLaravel\Watchers\WatcherInterface;
 
 class ServiceProvider extends \Illuminate\Support\ServiceProvider
 {
+    private static bool $retiredMaskingConfigReported = false;
+
+    /**
+     * The warning is said once per process; a test that boots the provider more than
+     * once needs to be able to hear it again.
+     *
+     * @see SendTracesJob::resetDropStats()
+     */
+    public static function resetRetiredMaskingConfigReport(): void
+    {
+        self::$retiredMaskingConfigReported = false;
+    }
+
     /**
      * @throws BindingResolutionException
      */
@@ -74,6 +89,11 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         $this->app->singleton(Processor::class);
         $this->app->singleton(TraceIdContainer::class);
         $this->app->singleton(HttpMiddleware::class);
+
+        // the Guzzle handler factory resolves this watcher too, and a fresh instance
+        // there means the request map it fills, the sweep callback registered on it
+        // and the random header key it generates all belong to different objects
+        $this->app->singleton(HttpClientWatcher::class);
         $this->app->singleton(AbstractProfiling::class, XHProfProfiler::class);
 
         $this->app->singleton(
@@ -135,6 +155,14 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
      */
     private function warnAboutRetiredMaskingConfig(): void
     {
+        // once per process: this is a "go and fix your config" message, and repeating
+        // it for every request, job and command turns it into noise nobody reads
+        if (self::$retiredMaskingConfigReported) {
+            return;
+        }
+
+        self::$retiredMaskingConfigReported = true;
+
         // these live inside the watcher's own entry in `slogger.watchers`, which is a
         // list - there is no path to them that config() can take
         $retired = [

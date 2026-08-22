@@ -6,6 +6,7 @@ use Closure;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\Str;
 use SLoggerLaravel\Configs\WatchersConfig;
+use SLoggerLaravel\Traces\TraceScopeResolverInterface;
 
 class TraceDataComplementer
 {
@@ -24,13 +25,11 @@ class TraceDataComplementer
 
     private readonly int $maxDepth;
 
-    /**
-     * @var array<string, mixed>
-     */
-    private array $additional = [];
-
-    public function __construct(private readonly Application $app, WatchersConfig $watchersConfig)
-    {
+    public function __construct(
+        private readonly Application $app,
+        WatchersConfig $watchersConfig,
+        private readonly TraceScopeResolverInterface $scopeResolver
+    ) {
         $this->basePathVendor    = base_path('vendor' . DIRECTORY_SEPARATOR);
         $this->basePathPackages  = base_path('packages' . DIRECTORY_SEPARATOR);
         $this->excludedClasses   = [self::class, static::class];
@@ -46,7 +45,7 @@ class TraceDataComplementer
      */
     public function add(string $key, mixed $value): void
     {
-        $this->additional[$key] = $value;
+        $this->scopeResolver->current()->additional[$key] = $value;
     }
 
     /**
@@ -97,13 +96,15 @@ class TraceDataComplementer
 
         $data['__trace'] = $trace;
 
-        if (!$this->additional) {
+        $configured = $this->scopeResolver->current()->additional;
+
+        if (!$configured) {
             return;
         }
 
         $additional = [];
 
-        foreach ($this->additional as $key => $value) {
+        foreach ($configured as $key => $value) {
             if ($value instanceof Closure) {
                 $value = $this->app->call($value);
             }

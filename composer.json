@@ -34,7 +34,10 @@
       "psr-4": {
         "SLoggerLaravel\\Tests\\": "tests/",
         "App\\": "workbench/app/"
-      }
+      },
+      "files": [
+        "workbench/app/Support/trace_probe.php"
+      ]
     },
     "extra": {
         "laravel": {

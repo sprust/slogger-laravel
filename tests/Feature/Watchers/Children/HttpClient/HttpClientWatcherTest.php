@@ -569,15 +569,9 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
      */
     private function bindSharedWatcher(): HttpClientWatcher
     {
-        $watcher = app(HttpClientWatcher::class);
-
-        $this->getApp()->instance(HttpClientWatcher::class, $watcher);
-
-        // setUp() registered a different instance, so its sweep callback points at an
-        // object nothing else uses; register the shared one the handler will resolve
-        $watcher->register(null);
-
-        return $watcher;
+        // the watcher is a singleton in production, so this only names the instance
+        // the Guzzle handler will resolve anyway
+        return app(HttpClientWatcher::class);
     }
 
     /**

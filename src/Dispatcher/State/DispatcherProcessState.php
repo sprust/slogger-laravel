@@ -36,20 +36,19 @@ readonly class DispatcherProcessState
         $data = json_decode($contents, true);
 
         if (!is_array($data)
-            || !isset(
-                $data['dispatcher'],
-                $data['masterCommandName'],
-                $data['masterPid'],
-                $data['childCommandName'],
-                $data['childProcessPids'],
-            )
+            || !is_string($data['dispatcher'] ?? null)
+            || !is_string($data['masterCommandName'] ?? null)
+            || !is_int($data['masterPid'] ?? null)
+            || !is_string($data['childCommandName'] ?? null)
+            || !is_array($data['childProcessPids'] ?? null)
+            || array_filter($data['childProcessPids'], static fn(mixed $pid): bool => !is_int($pid))
         ) {
-            // every key the DTO needs, not just the two that are easy to check: a
-            // file written by an older version, or hand-edited, is valid JSON and
-            // still missing one of the others - and that used to be a TypeError that
-            // took down `start`, `stop` and the recovery path alike, until someone
-            // deleted the file by hand. Treat it as no state at all: the worst case
-            // is a stale file, and the next save overwrites it
+            // every key the DTO needs, and of the type it needs: a file written by an
+            // older version, or hand-edited, is valid JSON with a key missing or a pid
+            // written as a string - and either was a TypeError that took down `start`,
+            // `stop` and the recovery path alike, until someone deleted the file by
+            // hand. Treat it as no state at all: the worst case is a stale file, and
+            // the next save overwrites it
             return null;
         }
 

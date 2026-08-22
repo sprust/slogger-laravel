@@ -35,6 +35,11 @@ use Symfony\Component\HttpFoundation\Response;
 class RequestWatcher implements WatcherInterface
 {
     /**
+     * How much of a path survives when there is no route to name it.
+     */
+    private const UNROUTED_PATH_SEGMENTS = 2;
+
+    /**
      * @var string[]
      */
     protected array $onlyPaths = [];
@@ -270,9 +275,28 @@ class RequestWatcher implements WatcherInterface
             return $this->prepareUrl($route);
         }
 
+        // routing has not happened yet - the middleware fires this before $next(), and
+        // a 404 never routes at all - so the path is whatever the caller typed, values
+        // and all. Keep enough of it to tell endpoints apart and drop the rest:
+        // `/reset/tok-secret` becomes `/reset/…`, which is the difference between a
+        // useful tag and a leaked token
         return $this->prepareUrl(
-            str_replace($request->root(), '', $request->url())
+            self::shortenUnroutedPath(str_replace($request->root(), '', $request->url()))
         );
+    }
+
+    /**
+     * Keeps the first two segments of a path and marks the rest as dropped.
+     */
+    protected static function shortenUnroutedPath(string $path): string
+    {
+        $segments = explode('/', trim($path, '/'));
+
+        if (count($segments) <= self::UNROUTED_PATH_SEGMENTS) {
+            return $path;
+        }
+
+        return implode('/', array_slice($segments, 0, self::UNROUTED_PATH_SEGMENTS)) . '/…';
     }
 
     /**
@@ -432,7 +456,7 @@ class RequestWatcher implements WatcherInterface
         // an XML response is recorded too, and the client asking for XML rather than
         // JSON is exactly when it arrives: acceptsJson() alone dropped every SOAP and
         // XML-API response on the floor
-        if ($request->acceptsJson() || (is_string($content) && BodyDecoder::looksLikeXml($content))) {
+        if ($request->acceptsJson() || (is_string($content) && BodyDecoder::isXml($content))) {
             $url = $this->getRequestPath($request);
 
             if ($content === false) {
@@ -506,14 +530,14 @@ class RequestWatcher implements WatcherInterface
 
         $parameters = array_replace_recursive($request->input(), $files);
 
-        if ($parameters) {
-            return $parameters;
-        }
-
         // Laravel parses form and JSON bodies into input(); an XML one it leaves
         // alone, so without this a SOAP or XML-API request is traced with no body at
-        // all
-        return $this->readXmlRequestBody($request);
+        // all. Not conditional on input() being empty: input() merges the query bag,
+        // so a single `?wsdl` - the standard shape of these calls - used to suppress
+        // the body entirely
+        $body = $this->readXmlRequestBody($request);
+
+        return $body ? [...$parameters, ...$body] : $parameters;
     }
 
     /**
@@ -531,7 +555,7 @@ class RequestWatcher implements WatcherInterface
 
         $content = $request->getContent();
 
-        if (!BodyDecoder::looksLikeXml($content)) {
+        if (!BodyDecoder::isXml($content)) {
             return [];
         }
 

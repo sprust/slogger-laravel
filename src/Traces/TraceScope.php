@@ -29,6 +29,18 @@ class TraceScope
     public ?string $preParentTraceId = null;
 
     /**
+     * Values the application asked to be added to every trace of this unit of work.
+     *
+     * Per unit, not per process: these are `user_id`, `tenant`, `request_id` - the
+     * things a request has and the next one does not. Held on the complementer, one
+     * request's value stamped every later request in the same worker, and every
+     * concurrent coroutine besides.
+     *
+     * @var array<string, mixed>
+     */
+    public array $additional = [];
+
+    /**
      * Bookkeeping the parent watchers keep per unit of work: a stack of open
      * commands, of open requests, and so on. Keyed by watcher class.
      *

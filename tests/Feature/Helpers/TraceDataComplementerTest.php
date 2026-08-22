@@ -8,6 +8,7 @@ use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Helpers\TraceDataComplementer;
 use SLoggerLaravel\Helpers\TraceDataMasker;
+use SLoggerLaravel\Traces\TraceScopeResolverInterface;
 use SLoggerLaravel\Tests\Feature\BaseTestCase;
 
 class TraceDataComplementerTest extends BaseTestCase
@@ -18,7 +19,8 @@ class TraceDataComplementerTest extends BaseTestCase
 
         $complementer = new TraceDataComplementer(
             app: $this->getApp(),
-            watchersConfig: new WatchersConfig()
+            watchersConfig: new WatchersConfig(),
+            scopeResolver: $this->getApp()->make(TraceScopeResolverInterface::class)
         );
 
         $complementer->add('foo', 'bar');
@@ -47,7 +49,8 @@ class TraceDataComplementerTest extends BaseTestCase
     {
         $complementer = new TraceDataComplementer(
             app: $this->getApp(),
-            watchersConfig: new WatchersConfig()
+            watchersConfig: new WatchersConfig(),
+            scopeResolver: $this->getApp()->make(TraceScopeResolverInterface::class)
         );
 
         $complementer->add('customer_email', 'john.doe@example.com');
@@ -65,23 +68,30 @@ class TraceDataComplementerTest extends BaseTestCase
 
     public function testInjectRespectsExcludedFileMasks(): void
     {
+        // a frame is recorded by class where it has one, and every frame from a test
+        // method does - so an assertion looking for `file` never ran, and deleting
+        // excluded_file_masks support entirely left this test green. Going through a
+        // plain function gives a frame that carries `file`, which is what the masks
+        // are matched against
+        $before = slogger_probe_trace($this->makeComplementer());
+
+        self::assertContains(__FILE__, array_column($before, 'file'), 'this file should be in the trace to begin with');
+
+        // now exclude the file it lives in
         config()->set('slogger.data_completer.excluded_file_masks', [__FILE__]);
 
-        $complementer = new TraceDataComplementer(
+        $after = slogger_probe_trace($this->makeComplementer());
+
+        self::assertNotContains(__FILE__, array_column($after, 'file'));
+        self::assertNotEmpty($after, 'excluding one file must not empty the whole trace');
+    }
+
+    private function makeComplementer(): TraceDataComplementer
+    {
+        return new TraceDataComplementer(
             app: $this->getApp(),
-            watchersConfig: new WatchersConfig()
+            watchersConfig: new WatchersConfig(),
+            scopeResolver: $this->getApp()->make(TraceScopeResolverInterface::class)
         );
-
-        $data = [];
-
-        $complementer->inject($data);
-
-        $trace = $data['__trace'] ?? [];
-
-        foreach ($trace as $item) {
-            if (isset($item['file'])) {
-                self::assertNotSame(__FILE__, $item['file']);
-            }
-        }
     }
 }

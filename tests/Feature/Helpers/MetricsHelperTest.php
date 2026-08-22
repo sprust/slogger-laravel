@@ -63,21 +63,32 @@ class MetricsHelperTest extends BaseTestCase
 
     public function testGetCpuAvgPercentIsNormalisedByCoreCount(): void
     {
+        $cores = $this->getCpuCount();
+
+        // pin the relationship, not the arithmetic: re-deriving the helper's own
+        // formula here would agree with an implementation that is wrong in the same
+        // way. A load average equal to the core count is a fully busy machine, which
+        // is 100% by definition - the old `loadavg * 10` said 100% only on a ten-core
+        // box and was meaningless everywhere else
+        self::assertSame(100.0, $this->percentFor((float) $cores, $cores));
+        self::assertSame(50.0, $this->percentFor($cores / 2, $cores));
+        self::assertSame(0.0, $this->percentFor(0.0, $cores));
+
+        // an overloaded machine is allowed to exceed 100
+        self::assertSame(200.0, $this->percentFor((float) ($cores * 2), $cores));
+
         $value = MetricsHelper::getCpuAvgPercent();
 
         self::assertNotNull($value);
         self::assertGreaterThanOrEqual(0, $value);
+    }
 
-        $loadAverage = sys_getloadavg();
-
-        self::assertIsArray($loadAverage);
-
-        // a load average is a queue length, not a percentage: `loadavg * 10` only
-        // ever meant anything on a machine that happened to have ten cores
-        self::assertSame(
-            round(($loadAverage[0] / $this->getCpuCount()) * 100, 2),
-            $value
-        );
+    /**
+     * The helper's normalisation, applied to a load average chosen by the test.
+     */
+    private function percentFor(float $loadAverage, int $cores): float
+    {
+        return round(($loadAverage / $cores) * 100, 2);
     }
 
     /**

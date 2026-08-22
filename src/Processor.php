@@ -32,6 +32,13 @@ class Processor
     public const INTERRUPTED_TAG = '__interrupted';
 
     /**
+     * After this, an ownerless detached trace is swept by whoever notices it, not
+     * only by the unit of work that started it. Long enough that a request still in
+     * flight is never taken for an abandoned one.
+     */
+    public const DETACHED_TRACE_TTL_SECONDS = 300;
+
+    /**
      * Open detached traces, by trace id. They are kept off the stack, so this is the
      * only way the parent that started them can still close them.
      *
@@ -386,7 +393,7 @@ class Processor
         // fails a job from the SIGALRM handler, i.e. in the middle of whatever the job
         // was doing. Close the interrupted children, otherwise they would hang
         // in the "started" status forever
-        $this->stopInterruptedNested(parentIndex: $index, parentTraceId: $traceId);
+        $this->stopInterruptedNested(parentIndex: $index);
 
         $this->stopInterruptedDetached(ownerTraceId: $traceId);
 
@@ -404,6 +411,10 @@ class Processor
         );
 
         if ($scope->tracesStack === [] && is_null($scope->parentTraceId)) {
+            // and not as its own pre-parent either: an orphan event recorded after
+            // this would otherwise be filed as a child of a trace already closed
+            $this->traceIdContainer->reset();
+
             // the unit of work is over: nothing is open here and nothing encloses it.
             // Detached traces started outside any parent have no owner to sweep them,
             // so this is the last chance to close them.
@@ -566,7 +577,7 @@ class Processor
      * untouched - an update replaces it, and what they collected on start is the only
      * thing left to tell what they were doing when they got interrupted.
      */
-    private function stopInterruptedNested(int $parentIndex, string $parentTraceId): void
+    private function stopInterruptedNested(int $parentIndex): void
     {
         $scope = $this->scope();
 
@@ -617,9 +628,14 @@ class Processor
             }
 
             if (is_null($ownerTraceId) && $detachedTrace['owner_scope_id'] !== $scopeId) {
-                // ownerless, but started by a different unit of work - which may still
-                // be waiting on it. Only its own unit may declare it interrupted
-                continue;
+                // ownerless, and started by a different unit of work - which may still
+                // be waiting on it, so only its own unit may declare it interrupted.
+                // Unless that unit is gone: a coroutine that died holding one would
+                // otherwise leave the trace `started` forever and the entry here for
+                // as long as the process lives
+                if (!$detachedTrace['logged_at']->clone()->addSeconds(self::DETACHED_TRACE_TTL_SECONDS)->isPast()) {
+                    continue;
+                }
             }
 
             unset($this->detachedTraces[$traceId]);

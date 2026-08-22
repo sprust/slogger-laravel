@@ -52,7 +52,6 @@ return [
         ],
     ],
 
-    // not implemented at the moment
     'profiling' => [
         'enabled' => env('SLOGGER_PROFILING_ENABLED', false),
     ],
@@ -69,7 +68,7 @@ return [
 
     // global data masking. it is applied by the dispatcher job, right before a batch
     // is sent - never in the traced application, which must not pay for masking a
-    // payload. two empty lists turn masking off.
+    // payload. masking is off only when all three lists below are empty.
     'masking' => [
         // case-insensitive substrings of a trace data key. the top level of a trace's
         // data is the watcher's own structure and is never masked; matching starts
@@ -88,6 +87,13 @@ return [
             'credential',
             'sign',
             'cookie',
+            'session',
+            'otp',
+            'cvv',
+            'iban',
+            'card_number',
+            'recovery',
+            'ssn',
         ],
 
         // a value under a matching key keeps two characters at each end, so two
@@ -104,11 +110,22 @@ return [
         ],
 
         // matched against the value instead of the key, and masked in place, keeping
-        // the rest of the string readable. some things identify a person by their own
-        // shape wherever they turn up - an address inside a notifiable string, or in
-        // the middle of a log message - and no key name points at those.
+        // the rest of the string readable. some things identify a person or a secret
+        // by their own shape wherever they turn up - an address inside a notifiable
+        // string, a key inside an exception message - and no key name points at those.
         // an invalid pattern is ignored, not fatal.
+        //
+        // order matters: the first pattern to match a stretch of text wins, so the
+        // narrow ones come before the broad one. a pattern with a capture group masks
+        // the group and keeps the rest.
         'value_patterns' => [
+            // credentials written into a url's authority: https://user:secret@host
+            'url_credentials' => '/\/\/[^\/\s:@]+:([^\/\s@]+)@/',
+
+            // a secret written into a url, wherever that url turns up: a Location
+            // header, an exception message, a log line
+            'url_secret' => '/[?&][\w.-]*(?:token|key|secret|pass|auth|code|sig)[\w.-]*=([^&\s"\'<>]+)/i',
+
             'email' => '/[\w.+-]+@[\w-]+\.[\w.-]*[\w-]/u',
         ],
     ],
@@ -180,6 +197,11 @@ return [
                     'hidden_paths' => [
                         '*',
                     ],
+
+                    // stop recording a response body above this many bytes. capped by
+                    // what the masker will read, so a larger value records nothing
+                    // rather than something unmasked.
+                    'max_content_length' => 1048576,
                 ],
             ],
         ],
