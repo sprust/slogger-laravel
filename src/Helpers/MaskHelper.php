@@ -2,12 +2,14 @@
 
 namespace SLoggerLaravel\Helpers;
 
+use Closure;
 use DOMComment;
 use DOMDocument;
 use DOMElement;
 use DOMProcessingInstruction;
 use DOMText;
 use Illuminate\Support\Str;
+use Stringable;
 use Throwable;
 
 /**
@@ -103,7 +105,6 @@ class MaskHelper
 
         return self::maskNode(
             data: $data,
-            prefix: '',
             rules: $rules,
             mode: self::MODE_NONE,
             depth: 1
@@ -210,7 +211,6 @@ class MaskHelper
      */
     private static function maskNode(
         array $data,
-        string $prefix,
         array $rules,
         int $mode,
         int $depth
@@ -220,13 +220,12 @@ class MaskHelper
         foreach ($data as $key => $value) {
             $segment = (string) $key;
 
-            if ($depth === 1) {
-                $path     = '';
-                $thisMode = self::MODE_NONE;
-            } else {
-                $path     = $prefix === '' ? $segment : $prefix . '.' . $segment;
-                $thisMode = max($mode, self::modeFor($path, $rules));
-            }
+            // the key itself, not the path it sits on: a match on a parent already
+            // covers the subtree through `$mode`, and matching the joined path made
+            // whether a field was masked depend on what happened to be above it
+            $thisMode = $depth === 1
+                ? self::MODE_NONE
+                : max($mode, self::modeFor($segment, $rules));
 
             // an application-controlled key is data too: a cache key is `otp:<email>`
             // often enough, and no key names a key
@@ -241,12 +240,31 @@ class MaskHelper
                 $maskedKey .= '#' . (count($result) + 1);
             }
 
+            // an object is walked as what it will be serialised into. Left alone it
+            // went straight past the masker and out through json_encode, which unfolds
+            // an Eloquent model through toArray() and a DTO through its public
+            // properties - so `Log::info('x', ['user' => $user])` shipped the token
+            // and the password hash in full
+            if (is_object($value) && !$value instanceof Closure) {
+                if ($value instanceof Stringable || method_exists($value, '__toString')) {
+                    // its string form is what it means to a reader, and what the
+                    // value patterns can search. Left as an object it serialised to
+                    // `{}` - neither masked nor useful
+                    $value = (string) $value;
+                } else {
+                    $unfolded = self::unfoldObject($value);
+
+                    if (!is_null($unfolded)) {
+                        $value = $unfolded;
+                    }
+                }
+            }
+
             if (is_array($value)) {
                 $result[$maskedKey] = $value === []
                     ? $value
                     : self::maskNode(
                         data: $value,
-                        prefix: $path,
                         rules: $rules,
                         mode: $thisMode,
                         depth: $depth + 1
@@ -261,6 +279,29 @@ class MaskHelper
         }
 
         return $result;
+    }
+
+    /**
+     * What `json_encode` would make of an object, so the masker sees the same shape
+     * the receiver will.
+     *
+     * Null when there is nothing to walk - an object with no public state, one that
+     * cannot be encoded - in which case the caller leaves it alone and `mask()` or
+     * the encoder deal with it as before.
+     *
+     * @return array<int|string, mixed>|null
+     */
+    private static function unfoldObject(object $value): ?array
+    {
+        $encoded = json_encode($value, JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
+
+        if ($encoded === false) {
+            return null;
+        }
+
+        $decoded = json_decode($encoded, true);
+
+        return is_array($decoded) && $decoded !== [] ? $decoded : null;
     }
 
     /**
@@ -405,7 +446,6 @@ class MaskHelper
         // the trace data it sits in, whose top level belongs to the watcher
         $masked = self::maskNode(
             data: $decoded,
-            prefix: '',
             rules: $rules,
             mode: self::MODE_NONE,
             depth: 2
@@ -467,9 +507,15 @@ class MaskHelper
             // a fragment of prose that happens to start with `<`, and not fine for a
             // document carrying a DTD: libxml refuses an entity bomb outright, and
             // returning it untouched would ship whatever its declarations hold
-            return stripos($trimmed, '<!DOCTYPE') !== false || stripos($trimmed, '<!ENTITY') !== false
-                ? self::FULL_MASK
-                : $value;
+            // only when the document declares things of its own. An internal subset
+            // (`<!DOCTYPE r [ … ]>`) or an `<!ENTITY` is where an unparseable
+            // document can be hiding values; a bare `<!DOCTYPE html>` declares
+            // nothing, and masking every page that carries one - an HTML mail body,
+            // a stored template, a captured error page - is destruction, not caution
+            return preg_match('/<!DOCTYPE[^>\[]*\[/i', $trimmed) === 1
+                || stripos($trimmed, '<!ENTITY') !== false
+                    ? self::FULL_MASK
+                    : $value;
         }
 
         if (!is_null($document->doctype) && $document->doctype->entities->length > 0) {
@@ -484,7 +530,6 @@ class MaskHelper
 
         self::maskXmlElement(
             element: $document->documentElement,
-            prefix: '',
             rules: $rules,
             mode: self::MODE_NONE,
             changed: $changed
@@ -516,16 +561,13 @@ class MaskHelper
      */
     private static function maskXmlElement(
         DOMElement $element,
-        string $prefix,
         array $rules,
         int $mode,
         bool &$changed
     ): void {
         $name = $element->localName ?: $element->nodeName;
 
-        $path = $prefix === '' ? $name : $prefix . '.' . $name;
-
-        $thisMode = max($mode, self::modeFor($path, $rules));
+        $thisMode = max($mode, self::modeFor($name, $rules));
 
         // no iterator_to_array: it materialises a wrapper object per node, and a flat
         // document with a hundred thousand small elements turns 4 MB of parsed DOM
@@ -535,7 +577,7 @@ class MaskHelper
         foreach ($element->attributes ?? [] as $attribute) {
             $attributeName = $attribute->localName ?: $attribute->nodeName;
 
-            $attributeMode = max($thisMode, self::modeFor($path . '.' . $attributeName, $rules));
+            $attributeMode = max($thisMode, self::modeFor($attributeName, $rules));
 
             $masked = self::maskXmlText($attribute->value, $attributeMode, $rules);
 
@@ -550,7 +592,6 @@ class MaskHelper
             if ($child instanceof DOMElement) {
                 self::maskXmlElement(
                     element: $child,
-                    prefix: $path,
                     rules: $rules,
                     mode: $thisMode,
                     changed: $changed
@@ -634,7 +675,6 @@ class MaskHelper
         // depth 2: every key in it is the application's own
         $masked = self::maskNode(
             data: $decoded,
-            prefix: '',
             rules: $rules,
             mode: self::MODE_NONE,
             depth: 2
@@ -714,11 +754,11 @@ class MaskHelper
     {
         $lowerKey = Str::lower($key);
 
-        if (self::containsAny($lowerKey, $rules['needles'])) {
+        if (self::matchesAny($lowerKey, $rules['needles'])) {
             return self::MODE_FULL;
         }
 
-        if (self::containsAny($lowerKey, $rules['partialNeedles'])) {
+        if (self::matchesAny($lowerKey, $rules['partialNeedles'])) {
             return self::MODE_PARTIAL;
         }
 
@@ -726,17 +766,19 @@ class MaskHelper
     }
 
     /**
+     * Whole-key matching with `*` wildcards, not substring search.
+     *
+     * A substring rule cannot be narrowed: `auth` also matched `author`, `pass`
+     * matched `passengers` and `compass`, and each of those took the whole value -
+     * and, through inheritance, its whole subtree. With masks the caller decides:
+     * `authorization` matches only itself, `*token*` matches `api_token` and
+     * `access_token`, `otp*` matches `otp_code` and not `crypto`.
+     *
      * @param string[] $needles
      */
-    private static function containsAny(string $lowerKey, array $needles): bool
+    private static function matchesAny(string $lowerKey, array $needles): bool
     {
-        foreach ($needles as $needle) {
-            if (str_contains($lowerKey, $needle)) {
-                return true;
-            }
-        }
-
-        return false;
+        return $needles !== [] && Str::is($needles, $lowerKey);
     }
 
     private static function mask(mixed $value, int $mode): mixed

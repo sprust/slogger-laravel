@@ -13,6 +13,23 @@ use SLoggerLaravel\Tests\Feature\BaseTestCase;
  */
 class BodyDecoderTest extends BaseTestCase
 {
+    public function testXhtmlIsAPageEvenWhenItsContentTypeSaysXml(): void
+    {
+        // `application/xhtml+xml` passes the `+xml` suffix check, so the content type
+        // does not settle this one - the root element does. Without that guard an
+        // XHTML page would be recorded whole, CSRF token and all
+        $page = '<html xmlns="http://www.w3.org/1999/xhtml"><body>'
+            . '<input name="_token" value="CSRF-SECRET"/></body></html>';
+
+        self::assertSame([], BodyDecoder::decode($page, 'application/xhtml+xml'));
+
+        // and a doctype naming html, on a document rooted elsewhere
+        self::assertSame(
+            [],
+            BodyDecoder::decode('<!DOCTYPE html><page><a>1</a></page>', 'application/xml')
+        );
+    }
+
     public function testAPageIsNotAPayload(): void
     {
         // well-formed HTML parses as XML. An error page - what a failing endpoint

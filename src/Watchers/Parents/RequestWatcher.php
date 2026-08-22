@@ -403,6 +403,17 @@ class RequestWatcher implements WatcherInterface
 
         $uri = $this->getRequestPath($request);
 
+        foreach ($this->formatters->getItems() as $formatter) {
+            if ($formatter->hidesRequestParameters($uri)) {
+                // before reading anything: the body would be read, and an XML one
+                // parsed, only to be replaced by this. The response side is lazy
+                // through DataResolver; this side had no such excuse
+                return [
+                    '__cleaned' => null,
+                ];
+            }
+        }
+
         $parameters = $this->getRequestParameters($request);
 
         foreach ($this->formatters->getItems() as $formatter) {

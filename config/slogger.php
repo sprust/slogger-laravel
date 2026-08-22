@@ -72,45 +72,58 @@ return [
     // is sent - never in the traced application, which must not pay for masking a
     // payload. masking is off only when all three lists below are empty.
     'masking' => [
-        // case-insensitive substrings of a trace data key. the top level of a trace's
-        // data is the watcher's own structure and is never masked; matching starts
-        // one level in, where the traced data actually is.
+        // masks matched against a trace data key. the top level of a trace's data is
+        // the watcher's own structure and is never matched; matching starts one level
+        // in, where the traced data actually is.
         //
         // a value under a matching key is replaced whole - nothing of it survives.
+        //
+        // masks, not substrings: `authorization` matches only itself, `*token*`
+        // matches `api_token` and `access_token`, `otp*` matches `otp_code` and not
+        // `crypto`. Matching is against the key alone, case-insensitively; a match on
+        // a key covers everything under it.
         'full_keys' => [
-            'token',
-            'pass',
             'auth',
-            'secret',
-            'private',
-            'apikey',
-            'api_key',
-            'api-key',
-            'credential',
-            // not bare `sign`: it matches design, assign, campaign, signal - and a
-            // match takes the whole value with it
-            'signature',
-            'signed',
-            'cookie',
+            'authorization',
+            'proxy-authorization',
+            'www-authenticate',
+            '*token*',
+            '*password*',
+            '*passwd*',
+            'passphrase',
+            '*secret*',
+            '*api_key*',
+            '*apikey*',
+            '*api-key*',
+            '*credential*',
+            '*cookie*',
+            '*signature*',
+            '*private_key*',
             'session',
-            'otp',
+            '*session_id*',
+            'otp*',
             'cvv',
+            'cvc',
             'iban',
-            'card_number',
-            'recovery',
+            '*card_number*',
             'ssn',
+            '*recovery_code*',
         ],
 
         // a value under a matching key keeps two characters at each end, so two
         // records still look different. these identify a person rather than
         // authenticate one - never put a secret here.
         'partial_keys' => [
-            'email',
-            'phone',
-            'recipient',
-            '_name',
-            'lastname',
-            'firstname',
+            '*email*',
+            '*phone*',
+            '*recipient*',
+            'username',
+            'first_name',
+            'last_name',
+            'full_name',
+            'middle_name',
+            '*firstname*',
+            '*lastname*',
             'surname',
         ],
 

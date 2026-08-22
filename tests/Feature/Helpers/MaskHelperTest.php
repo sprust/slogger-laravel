@@ -91,7 +91,7 @@ class MaskHelperTest extends BaseTestCase
             ],
         ];
 
-        $masked = MaskHelper::maskArrayByKeys($data, ['token'], ['email']);
+        $masked = MaskHelper::maskArrayByKeys($data, ['*token*'], ['*email*']);
 
         self::assertSame(MaskHelper::FULL_MASK, $masked['context']['api_token']);
         self::assertSame('jo****************om', $masked['context']['email']);
@@ -101,8 +101,8 @@ class MaskHelperTest extends BaseTestCase
     {
         $masked = MaskHelper::maskArrayByKeys(
             ['context' => ['email_token' => 'tok-abcdefghij']],
-            ['token'],
-            ['email']
+            ['*token*'],
+            ['*email*']
         );
 
         // the stricter list wins; a partial mask on a token is not a mask
@@ -119,7 +119,7 @@ class MaskHelperTest extends BaseTestCase
             'locale'            => 'en',
         ]);
 
-        $masked = MaskHelper::maskArrayByKeys(['value' => $session], ['token', 'pass']);
+        $masked = MaskHelper::maskArrayByKeys(['value' => $session], ['*token*', '*password*']);
 
         $decoded = unserialize($masked['value'], ['allowed_classes' => false]);
 
@@ -180,8 +180,8 @@ class MaskHelperTest extends BaseTestCase
                 'payload' => '<order><customer_email>john.doe@example.com</customer_email>'
                     . '<api_token>sk-live-secret</api_token><amount>100</amount></order>',
             ],
-            ['token'],
-            ['email']
+            ['*token*'],
+            ['*email*']
         );
 
         self::assertSame(
@@ -199,7 +199,7 @@ class MaskHelperTest extends BaseTestCase
                     . '<auth><username>bob</username><password>hunter2</password></auth>'
                     . '<order id="42" api_token="sk-live-secret"/></soap:Envelope>',
             ],
-            ['auth', 'token']
+            ['auth', '*token*']
         );
 
         // a namespace prefix does not hide the element: `soap:Envelope` matches on
@@ -219,7 +219,7 @@ class MaskHelperTest extends BaseTestCase
     {
         $masked = MaskHelper::maskArrayByKeys(
             ['payload' => '<root><secret><![CDATA[very-secret]]></secret><note>keep me</note></root>'],
-            ['secret']
+            ['*secret*']
         );
 
         self::assertStringContainsString('<![CDATA[' . MaskHelper::FULL_MASK . ']]>', $masked['payload']);
@@ -234,21 +234,21 @@ class MaskHelperTest extends BaseTestCase
             'payload' => "<root>\n  <page>2</page>\n</root>",
         ];
 
-        self::assertSame($data, MaskHelper::maskArrayByKeys($data, ['token']));
+        self::assertSame($data, MaskHelper::maskArrayByKeys($data, ['*token*']));
     }
 
     public function testMaskArrayByKeysKeepsTheXmlDeclarationOnlyWhenItWasThere(): void
     {
         $withDeclaration = MaskHelper::maskArrayByKeys(
             ['payload' => '<?xml version="1.0" encoding="UTF-8"?><root><token>abc</token></root>'],
-            ['token']
+            ['*token*']
         );
 
         self::assertStringStartsWith('<?xml version="1.0" encoding="UTF-8"?>', $withDeclaration['payload']);
 
         $without = MaskHelper::maskArrayByKeys(
             ['payload' => '<root><token>abc</token></root>'],
-            ['token']
+            ['*token*']
         );
 
         // one that never had a declaration must not gain one
@@ -261,22 +261,35 @@ class MaskHelperTest extends BaseTestCase
         // it - and then the document does not start with `<` and is never masked
         $masked = MaskHelper::maskArrayByKeys(
             ['payload' => "\xEF\xBB\xBF<r><token>abc</token></r>"],
-            ['token']
+            ['*token*']
         );
 
         self::assertStringContainsString('<token>' . MaskHelper::FULL_MASK . '</token>', $masked['payload']);
     }
 
-    public function testADoctypeAfterTheDeclarationIsNotMissed(): void
+    public function testAnUnparseableDocumentDeclaringItsOwnValuesIsMaskedWhole(): void
     {
         // a real document with a DTD starts with `<?xml`, so a check anchored at byte
-        // zero never fired
+        // zero never fired. What matters is an internal subset - that is where an
+        // unparseable document can be hiding values
         $masked = MaskHelper::maskArrayByKeys(
-            ['payload' => '<?xml version="1.0"?><!DOCTYPE r SYSTEM "http://elsewhere/x.dtd"><r><a>&e;</a>'],
-            ['token']
+            ['payload' => '<?xml version="1.0"?><!DOCTYPE r [<!ENTITY s "SECRET">]><r><a>&s;</a>'],
+            ['*token*']
         );
 
         self::assertSame(MaskHelper::FULL_MASK, $masked['payload']);
+    }
+
+    public function testAnOrdinaryPageIsNotDestroyedByTheDtdRule(): void
+    {
+        // an HTML mail body, a stored template, a captured error page: markup that
+        // does not parse as XML and declares nothing of its own. Masking it whole is
+        // destruction, not caution
+        $page = "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"></head><body><h1>Order</h1><br></body></html>";
+
+        $masked = MaskHelper::maskArrayByKeys(['payload' => $page], ['*token*']);
+
+        self::assertSame($page, $masked['payload']);
     }
 
     public function testABareSignDoesNotSwallowOrdinaryWords(): void
@@ -304,7 +317,7 @@ class MaskHelperTest extends BaseTestCase
     {
         $data = ['payload' => '<root><unclosed>'];
 
-        self::assertSame($data, MaskHelper::maskArrayByKeys($data, ['token']));
+        self::assertSame($data, MaskHelper::maskArrayByKeys($data, ['*token*']));
     }
 
     public function testAnXmlDocumentCannotMakeTheMaskerReadAFileOrExpandEntities(): void
@@ -324,7 +337,7 @@ class MaskHelperTest extends BaseTestCase
                     'payload' => '<?xml version="1.0"?><!DOCTYPE r [<!ENTITY x SYSTEM "file://'
                         . $file . '">]><r><token>&x;</token></r>',
                 ],
-                ['token']
+                ['*token*']
             );
 
             self::assertStringNotContainsString('CONTENTS-OF-A-LOCAL-FILE', $masked['payload']);
@@ -333,7 +346,7 @@ class MaskHelperTest extends BaseTestCase
             // passing merely because nothing happened
             self::assertSame(
                 '<r><token>' . MaskHelper::FULL_MASK . '</token></r>',
-                MaskHelper::maskArrayByKeys(['payload' => '<r><token>abc</token></r>'], ['token'])['payload']
+                MaskHelper::maskArrayByKeys(['payload' => '<r><token>abc</token></r>'], ['*token*'])['payload']
             );
         } finally {
             unlink($file);
@@ -351,7 +364,7 @@ class MaskHelperTest extends BaseTestCase
 
         $started = microtime(true);
 
-        $masked = MaskHelper::maskArrayByKeys(['payload' => $bomb], ['token']);
+        $masked = MaskHelper::maskArrayByKeys(['payload' => $bomb], ['*token*']);
 
         // libxml refuses this outright ("entity reference loop"), so it never parses
         // - and a document that carries declarations and does not parse is masked
@@ -370,7 +383,7 @@ class MaskHelperTest extends BaseTestCase
         // protection without being any
         $masked = MaskHelper::maskArrayByKeys(
             ['payload' => '<!DOCTYPE r [<!ENTITY s "SUPERSECRET">]><r><token>&s;</token></r>'],
-            ['token']
+            ['*token*']
         );
 
         self::assertSame(MaskHelper::FULL_MASK, $masked['payload']);
@@ -383,7 +396,7 @@ class MaskHelperTest extends BaseTestCase
                 'uri'          => '/api/orders',
                 'query_string' => 'page=2&api_token=tok-secret&sort=asc',
             ],
-            ['token']
+            ['*token*']
         );
 
         $parameters = [];
@@ -400,7 +413,7 @@ class MaskHelperTest extends BaseTestCase
     {
         $masked = MaskHelper::maskArrayByKeys(
             ['query_string' => 'user.name=Bob&arr[]=1&arr[]=2&flag&api_token=sk-secret&page=2'],
-            ['token']
+            ['*token*']
         );
 
         // only the parameter that matched changed. A parse_str/http_build_query round
@@ -417,7 +430,7 @@ class MaskHelperTest extends BaseTestCase
     {
         $masked = MaskHelper::maskArrayByKeys(
             ['query_string' => 'id=1&token=a&id=2&token=b'],
-            ['token']
+            ['*token*']
         );
 
         // both of each: the round trip used to keep only the last value of a repeated
@@ -454,7 +467,7 @@ class MaskHelperTest extends BaseTestCase
         ];
 
         // parse_str is lossy, so an untouched query string must come back byte for byte
-        self::assertSame($data, MaskHelper::maskArrayByKeys($data, ['token']));
+        self::assertSame($data, MaskHelper::maskArrayByKeys($data, ['*token*']));
     }
 
     public function testMaskArrayByKeysMasksAQueryStringAtTheTopLevelToo(): void
@@ -463,7 +476,7 @@ class MaskHelperTest extends BaseTestCase
         // and the top level is where the depth rule would otherwise skip it
         $masked = MaskHelper::maskArrayByKeys(
             ['query_string' => 'api_token=tok-secret'],
-            ['token']
+            ['*token*']
         );
 
         // the mask stays readable: `*` is legal in a query string
@@ -526,7 +539,7 @@ class MaskHelperTest extends BaseTestCase
         // the key says this is a secret; the pattern would only have masked it partially
         $masked = MaskHelper::maskArrayByKeys(
             ['context' => ['api_token' => 'john.doe@example.com']],
-            ['token'],
+            ['*token*'],
             [],
             [self::EMAIL_PATTERN]
         );
@@ -548,6 +561,182 @@ class MaskHelperTest extends BaseTestCase
         self::assertSame('jo****************om', $masked['context']['notifiable']);
     }
 
+    /**
+     * An object walked past the masker untouched and was then unfolded by
+     * `json_encode` on its way out - an Eloquent model through `toArray()`, a DTO
+     * through its public properties. `Log::info('x', ['user' => $user])` is as
+     * ordinary as Laravel gets, and it shipped the token and the password hash.
+     */
+    public function testAnObjectIsMaskedAsWhatItSerialisesInto(): void
+    {
+        $dto = new class {
+            public string $email     = 'john@example.com';
+            public string $api_token = 'sk-live-SECRET';
+            public string $password  = 'hunter2';
+            public int $id           = 7;
+        };
+
+        $masked = MaskHelper::maskArrayByKeys(
+            ['context' => ['dto' => $dto]],
+            ['*token*', '*password*'],
+            ['*email*']
+        );
+
+        self::assertSame(MaskHelper::FULL_MASK, $masked['context']['dto']['api_token']);
+        self::assertSame(MaskHelper::FULL_MASK, $masked['context']['dto']['password']);
+        self::assertSame('jo************om', $masked['context']['dto']['email']);
+
+        // and what matched nothing is still there
+        self::assertSame(7, $masked['context']['dto']['id']);
+
+        // nothing of the secret survives anywhere in the payload
+        self::assertStringNotContainsString(
+            'sk-live-SECRET',
+            json_encode($masked, JSON_THROW_ON_ERROR)
+        );
+    }
+
+    public function testAnObjectWithAStringFormIsMaskedAsThatString(): void
+    {
+        $stringable = new class {
+            public function __toString(): string
+            {
+                return 'contact john@example.com';
+            }
+        };
+
+        $patterns = (require __DIR__ . '/../../../config/slogger.php')['masking']['value_patterns'];
+
+        // left as an object it serialised to `{}`: neither masked nor useful
+        $masked = MaskHelper::maskArrayByKeys(
+            ['context' => ['note' => $stringable]],
+            [],
+            [],
+            $patterns
+        );
+
+        self::assertSame('contact jo************om', $masked['context']['note']);
+
+        // and under a key that matches, nothing of it survives
+        $secret = MaskHelper::maskArrayByKeys(
+            ['context' => ['api_token' => $stringable]],
+            ['*token*']
+        );
+
+        self::assertSame(MaskHelper::FULL_MASK, $secret['context']['api_token']);
+    }
+
+    public function testAnObjectThatCannotBeUnfoldedIsLeftForTheEncoder(): void
+    {
+        $cyclic            = new \stdClass();
+        $cyclic->self      = $cyclic;
+        $cyclic->api_token = 'sk-live-CYCLE';
+
+        $masked = MaskHelper::maskArrayByKeys(['context' => ['c' => $cyclic]], ['*token*']);
+
+        // the cycle is dropped by the encoder, and what could be reached is masked
+        self::assertSame(MaskHelper::FULL_MASK, $masked['context']['c']['api_token']);
+    }
+
+    /**
+     * Keys are matched as masks, not searched as substrings. A substring rule cannot
+     * be narrowed - `auth` also matched `author`, `pass` matched `passengers` and
+     * `compass` - and each match took the whole value, and its whole subtree with it.
+     */
+    public function testAKeyIsMatchedAsAMaskNotAsASubstring(): void
+    {
+        $data = ['ctx' => [
+            'authorization' => 'Bearer x',
+            'auth'          => 'basic',
+            'author'        => 'Leo',
+            'authored_by'   => 'ed',
+            'api_token'     => 'sk-1',
+            'tokenizer'     => 'greedy',
+            'passengers'    => 4,
+            'compass'       => 'NNE',
+            'user_password' => 'p',
+        ]];
+
+        $masked = MaskHelper::maskArrayByKeys($data, ['auth', 'authorization', '*token*', '*password*']);
+
+        // an exact mask matches only itself
+        self::assertSame(MaskHelper::FULL_MASK, $masked['ctx']['authorization']);
+        self::assertSame(MaskHelper::FULL_MASK, $masked['ctx']['auth']);
+        self::assertSame('Leo', $masked['ctx']['author']);
+        self::assertSame('ed', $masked['ctx']['authored_by']);
+
+        // a wildcard matches what the caller asked it to
+        self::assertSame(MaskHelper::FULL_MASK, $masked['ctx']['api_token']);
+        self::assertSame(MaskHelper::FULL_MASK, $masked['ctx']['tokenizer']);
+        self::assertSame(MaskHelper::FULL_MASK, $masked['ctx']['user_password']);
+
+        // and what nobody asked for keeps its value and its type
+        self::assertSame(4, $masked['ctx']['passengers']);
+        self::assertSame('NNE', $masked['ctx']['compass']);
+    }
+
+    public function testTheShippedDefaultsDoNotEatOrdinaryFields(): void
+    {
+        $masking = (require __DIR__ . '/../../../config/slogger.php')['masking'];
+
+        $data = ['ctx' => [
+            'author'        => 'Leo',
+            'authorized'    => true,
+            'passengers'    => 4,
+            'compass'       => 'NNE',
+            'bypass_cache'  => false,
+            'private_notes' => 'a note',
+            'session_count' => 12,
+            'signed_at'     => '2026-01-02',
+            'assigned_to'   => 'bob',
+            'designer'      => 'Ivan',
+            'crypto_rate'   => 3.5,
+            'filename'      => 'a.pdf',
+        ]];
+
+        self::assertSame(
+            $data,
+            MaskHelper::maskArrayByKeys(
+                $data,
+                $masking['full_keys'],
+                $masking['partial_keys'],
+                $masking['value_patterns']
+            )
+        );
+    }
+
+    public function testTheShippedDefaultsStillCatchWhatTheyAreFor(): void
+    {
+        $masking = (require __DIR__ . '/../../../config/slogger.php')['masking'];
+
+        $masked = MaskHelper::maskArrayByKeys(
+            ['ctx' => [
+                'authorization'  => 'Bearer sk-live',
+                'api_token'      => 'sk-1',
+                'access_token'   => 'at-1',
+                'user_password'  => 'p',
+                'set-cookie'     => 's=1',
+                'x-xsrf-token'   => 't',
+                'api_key'        => 'k',
+                'otp_code'       => '123456',
+                'card_number'    => '4111111111111111',
+                'customer_email' => 'john@example.com',
+            ]],
+            $masking['full_keys'],
+            $masking['partial_keys'],
+            $masking['value_patterns']
+        );
+
+        foreach (
+            ['authorization', 'api_token', 'access_token', 'user_password',
+                'set-cookie', 'x-xsrf-token', 'api_key', 'otp_code', 'card_number'] as $key
+        ) {
+            self::assertSame(MaskHelper::FULL_MASK, $masked['ctx'][$key], $key);
+        }
+
+        self::assertSame('jo************om', $masked['ctx']['customer_email']);
+    }
+
     public function testMaskArrayByKeysLeavesTheTopLevelAlone(): void
     {
         $data = [
@@ -562,7 +751,7 @@ class MaskHelperTest extends BaseTestCase
             ],
         ];
 
-        $masked = MaskHelper::maskArrayByKeys($data, ['_name', 'token', 'email']);
+        $masked = MaskHelper::maskArrayByKeys($data, ['*_name*', '*token*', '*email*']);
 
         self::assertSame('redis', $masked['connection_name']);
         self::assertSame(3, $masked['token_count']);
@@ -584,7 +773,7 @@ class MaskHelperTest extends BaseTestCase
             ],
         ];
 
-        $masked = MaskHelper::maskArrayByKeys($data, ['api_key', 'lastname', 'phone']);
+        $masked = MaskHelper::maskArrayByKeys($data, ['*api_key*', '*lastname*', '*phone*']);
 
         self::assertNotSame('key-1', $masked['context']['API_KEY']);
         self::assertNotSame('Ivanov', $masked['context']['user']['lastName']);
@@ -624,7 +813,7 @@ class MaskHelperTest extends BaseTestCase
             ],
         ];
 
-        $masked = MaskHelper::maskArrayByKeys($data, ['email']);
+        $masked = MaskHelper::maskArrayByKeys($data, ['*email*']);
 
         // flattening and rebuilding would turn `user.city` into a nested array
         self::assertSame('Berlin', $masked['response']['body']['user.city'] ?? null);
@@ -643,14 +832,14 @@ class MaskHelperTest extends BaseTestCase
         ];
 
         // neither key may swallow the other
-        self::assertSame($data, MaskHelper::maskArrayByKeys($data, ['token']));
+        self::assertSame($data, MaskHelper::maskArrayByKeys($data, ['*token*']));
     }
 
     public function testMaskArrayByKeysMasksListsElementWise(): void
     {
         $masked = MaskHelper::maskArrayByKeys(
             ['context' => ['phones' => ['+70000000001', '+70000000002']]],
-            ['phone']
+            ['*phone*']
         );
 
         self::assertCount(2, $masked['context']['phones']);
@@ -678,7 +867,7 @@ class MaskHelperTest extends BaseTestCase
                     'meta' => '{"customer_email":"c@d.test","order_id":43}',
                 ],
             ],
-            ['email']
+            ['*email*']
         );
 
         $decoded = json_decode($masked['changes']['meta'], true);
@@ -696,7 +885,7 @@ class MaskHelperTest extends BaseTestCase
                     'outer' => '{"inner":"{\"token\":\"t-1\"}"}',
                 ],
             ],
-            ['token']
+            ['*token*']
         );
 
         self::assertStringNotContainsString('t-1', $masked['context']['outer']);
@@ -706,7 +895,7 @@ class MaskHelperTest extends BaseTestCase
     {
         $json = '{ "order_id" : 43, "url": "a\/b", "ru": "\u0410" }';
 
-        $masked = MaskHelper::maskArrayByKeys(['changes' => ['meta' => $json]], ['email']);
+        $masked = MaskHelper::maskArrayByKeys(['changes' => ['meta' => $json]], ['*email*']);
 
         // re-encoding would drop the spacing, the escaped slash and the escaped
         // character, so an untouched document is left exactly as it came in
@@ -729,7 +918,7 @@ class MaskHelperTest extends BaseTestCase
     {
         $masked = MaskHelper::maskArrayByKeys(
             ['context' => ['auth_payload' => '{"a":1}']],
-            ['auth']
+            ['auth*']
         );
 
         // the key itself is flagged, so the value is masked as a value, not parsed

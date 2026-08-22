@@ -13,15 +13,19 @@ Masking moved out of the traced application and into the dispatcher job.
 - **Per-watcher masking is gone.** `input.headers_masking`, `input.parameters_masking`,
   `output.headers_masking`, `output.fields_masking` and the model watcher's `masks` are
   no longer read. Leftovers in a published config are ignored, not an error - which
-  means any key you added there stops being masked. **Port your own keys into
-  `masking.full_keys`**; the shipped defaults cover the shipped defaults, not `ssn`,
-  `iban`, `card` or anything else you added yourself.
+  means any key you added there stops being masked. **Check your own keys against
+  `masking.full_keys`** and port over what the shipped list does not already cover -
+  it covers the shipped defaults plus `ssn`, `iban` and `card_number`, not whatever
+  else you added yourself.
+- **Keys are masks, not substrings.** `authorization` matches only `authorization`;
+  write `*token*` to match `api_token`. If you ported keys from the old per-watcher
+  lists, they were `Str::is` patterns there too - `*token*`, `*password*` - so they
+  carry over unchanged.
 - **Global lists instead**, under `masking.full_keys`, `masking.partial_keys` and
-  `masking.value_patterns` - the last matching the value rather than the key. A
-  published config is merged with the package's own now, so the defaults apply without
-  republishing; add the section to your config only to change it. A missing list falls
-  back to the package's own config file, so a stale config cache cannot leave you with
-  no masking at all.
+  `masking.value_patterns` - the last matching the value rather than the key. A list
+  missing from your published config falls back to the package's own config file, so
+  the defaults apply without republishing and a stale config cache cannot leave you
+  with no masking at all. Add a section to your config only to change it.
 - **A masked secret keeps nothing.** A value under a `masking.full_keys` key becomes
   `********` - the previous release left the first and last third of every string
   readable, which for a token or a password is not a mask. Values under
@@ -381,14 +385,15 @@ and a PIN, an OTP and an account number are all short and numeric.
 'masking' => [
     // a value under a matching key is replaced whole - nothing of it survives
     'full_keys' => [
-        'token', 'pass', 'auth', 'secret', 'private', 'apikey',
-        'api_key', 'api-key', 'credential', 'sign', 'cookie',
+        'auth', 'authorization', '*token*', '*password*', '*secret*',
+        '*api_key*', '*apikey*', '*credential*', '*cookie*', '*signature*',
+        'session', 'otp*', 'cvv', 'iban', '*card_number*', 'ssn',
     ],
 
     // a value under a matching key keeps two characters at each end
     'partial_keys' => [
-        'email', 'phone', 'recipient', '_name',
-        'lastname', 'firstname', 'surname',
+        '*email*', '*phone*', '*recipient*', 'username',
+        'first_name', 'last_name', 'full_name', '*lastname*', 'surname',
     ],
 
     // matched against the value instead of the key, and masked in place
@@ -398,14 +403,27 @@ and a PIN, an OTP and an account number are all short and numeric.
 ],
 ```
 
-Both lists are case-insensitive substrings of a key; masking is off only when all three
-lists (`value_patterns` included) are empty. That switch governs the database watcher's
-bindings too, which are the one thing still masked in the traced application.
-A key matches when it *contains* one of the substrings, so `customer_email`, `API_KEY`
-and `lastName` are all matched. A match on a parent key applies to its subtree, so
-`context.auth` covers `context.auth.method` too - note that this needs the parent to be
-one level in, since the top level is not matched at all (see below). A key in both lists
-is masked whole - the stricter list wins.
+Both lists are **masks matched against the whole key**, case-insensitively, with `*`
+as a wildcard:
+
+| Mask | Matches | Does not match |
+| --- | --- | --- |
+| `authorization` | `authorization`, `Authorization` | `authorization_code` |
+| `*token*` | `api_token`, `access_token`, `tokenizer` | `stock` |
+| `otp*` | `otp`, `otp_code` | `crypto` |
+
+Not a substring search. A substring rule cannot be narrowed once it is too broad:
+`auth` also matched `author`, `pass` matched `passengers` and `compass`, and each
+match took the whole value - and, through inheritance, the whole subtree under it.
+With masks, the breadth is the caller's choice.
+
+A match on a parent key applies to its subtree, so `auth` covers `auth.method` too -
+that needs the parent to be one level in, since the top level is not matched at all
+(see below). A key in both lists is masked whole: the stricter list wins.
+
+Masking is off only when all three lists (`value_patterns` included) are empty. That
+switch governs the database watcher's bindings too, which are the one thing still
+masked in the traced application.
 
 The split is the point. A secret is worthless the moment any of it leaks, so
 `masking.full_keys` replaces the value entirely: `********`, a fixed width, so the length of
@@ -482,9 +500,10 @@ were reshaped so this rule holds for them too: a cache value sits under its cach
 (`cache.<key>.value`, so the key itself is what the list matches against), and mail
 addresses sit under `message` as `email`/`full_name` pairs.
 
-The lists are deliberately blunt: they mask `sign` inside `assignee` and `auth` inside
-`author`. Over-masking is the safe direction for telemetry; trim the list if a field you
-need is caught by it.
+Widen a mask when the shipped list misses something of yours - `*ssn*` instead of
+`ssn`, `*iban*` instead of `iban` - and narrow one when it catches a field you need.
+Over-masking is the safe direction for telemetry, but it is a choice you make per mask
+rather than one the package makes for you.
 
 ### What a key list cannot reach
 

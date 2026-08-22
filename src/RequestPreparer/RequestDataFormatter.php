@@ -115,6 +115,18 @@ class RequestDataFormatter
         return $this->hideAllRequestParameters;
     }
 
+    /**
+     * Whether this formatter would discard the parameters of that url outright.
+     *
+     * Asked before the body is read: reading and parsing a request body only to
+     * replace it with `__cleaned` costs the traced application the whole cost of
+     * doing so, and with the shipped `hidden_paths => ['*']` that is every request.
+     */
+    public function hidesRequestParameters(string $url): bool
+    {
+        return $this->hideAllRequestParameters && $this->is($url);
+    }
+
     protected function is(string $url): bool
     {
         return Str::is($this->urlPatterns, trim($url, '/'));
