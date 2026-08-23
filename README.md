@@ -4,7 +4,7 @@
 
 SLogger Laravel is a tracing/observability package for Laravel apps. It records request/command/job/event/etc. traces and delivers them to a remote backend via configurable dispatchers.
 
-This README documents installation, configuration, watchers, masking, dispatchers, profiling, and usage patterns.
+This README documents installation, configuration, watchers, masking, dispatchers, and usage patterns.
 
 ## Upgrading to 2.0
 
@@ -83,13 +83,19 @@ Masking moved out of the traced application and into the dispatcher job.
   `MaskHelper::maskArrayByList()`/`maskArrayByPatterns()` are gone.
   `MaskHelper::maskValue()` now masks a string whole; `maskValuePartially()` is the
   one that keeps a couple of characters.
+- API changes if you extend the core: `Processor::stopDetached()` is gone - `stop()`
+  closes a parent trace whichever way it was started - and so are
+  `Processor::handleSeparateTracing()` and `Processor::registerWatcher()`, which the
+  service provider now does itself. `DispatcherProcessorInterface` gained
+  `getChildCommandName()`: the master saves that name and looks its children up by it,
+  so it has to be what the process table will show.
 
 ## Requirements
 
 - PHP >= 8.2
+- `ext-pcntl` and `ext-posix` - the dispatcher supervises worker processes
 - Laravel 10.26+ (tested on 10, 11 and 12)
 - Queue driver for `queue` dispatcher
-- Optional: XHProf extension for profiling
 
 ## Installation
 
@@ -191,14 +197,6 @@ Send retries are fixed by design: 5 attempts with backoff of 5/10/30/60 seconds 
 After the attempts are exhausted the batch is **dropped** with a rate-limited warning in the
 SLogger log channel — telemetry never fills the `failed_jobs` storage.
 
-### Profiling
-
-```dotenv
-SLOGGER_PROFILING_ENABLED=true
-```
-
-Enables XHProf profiling for HTTP client traces (see Profiling section).
-
 ### Request parent trace header
 
 ```dotenv
@@ -249,10 +247,11 @@ Watcher data highlights:
 - `model`: action, model class, key, changes
 - `mail`: mailable/notification, queued, `message` (from/reply_to/to/cc/bcc as `email`/`full_name` pairs, subject)
 - `notification`: notifiable, channel, queued, `recipients`, response
-- `cache`: type, key, and `cache.<key>` (value, tags, expiration)
+- `cache`: type, key, and `cache.<key>` (value, tags, expiration). A value too long for
+  the masker to read is recorded as `__skipped` instead
 - `db`: query, how many bindings it had (`bindings_count`), time. The bindings themselves only with masking turned off entirely
 - `http-client`: method, url, query/query_string, request/response (concurrent requests are traced independently, so `Http::pool()` works)
-- `schedule`: command, description, cron, output
+- `schedule`: command, description, cron, output (read up to the masker's limit)
 - `dump`, `log`, `gate`: dump/message/ability info
 
 A queue worker fails a timed out job from its `SIGALRM` handler, i.e. in the middle of
@@ -535,8 +534,12 @@ back: applications hand whole documents over as strings - an Eloquent `array` ca
 one straight into a model's changes, a SOAP call arrives as one - and the key carrying
 such a string says nothing about what is inside it. Two formats are looked into:
 
-- **JSON**, for strings starting with `{` or `[`. Re-encoding normalises escaping, and
-  a number too large or too precise for a PHP float loses precision.
+- **JSON**, for strings that open and close like a document - `{`…`}` or `[`…`]`, so a
+  line of prose beginning with `{` is still prose. Re-encoding normalises escaping, and
+  a number too large or too precise for a PHP float loses precision. One that opens
+  like a document and cannot be read as one - NDJSON, a raw control character, deeper
+  than `json_decode` goes - is masked **whole**: nothing has read it, so nothing can
+  vouch for it.
 - **XML**, for strings that parse as XML. Element and attribute names are matched the
   way object keys are, a match covers the subtree (`<auth>` masks everything under
   it), a namespace prefix does not hide a name (`soap:Envelope` matches on
@@ -546,11 +549,21 @@ such a string says nothing about what is inside it. Two formats are looked into:
 - **PHP's own serialisation**, for strings starting with `a:<n>:{`. A session stored
   in the cache is one of those, holding the CSRF token and the password hash under
   keys the lists match. Objects are never instantiated while reading one, and a blob
-  that holds a serialised object is not taken apart at all: without its class it
-  cannot be read or put back together as what it was, so such a blob is left to the
-  value patterns, which read it as the plain string it is.
+  holding a serialised object or a back-reference is not taken apart at all - the first
+  cannot be put back together without its class, the second unserialises into an array
+  that contains itself. Both are left to the value patterns, which read them as the
+  plain strings they are.
 
 A document in which **nothing** matched is kept byte for byte.
+
+Whatever the shape, the walk stops at a fixed depth and masks what is left whole. It is
+a backstop rather than a limit anyone should meet: running out of memory is a fatal
+error, and a fatal error in the dispatcher job takes the worker with it.
+
+**A trace the masker cannot read is replaced, not dropped and not shipped.** Its `data`
+becomes a single `__mask_error` key naming what went wrong. Masking is deterministic, so
+letting the exception out would cost the whole batch and every one of its retries - the
+traces around the broken one included.
 
 XML entities are never expanded, so a document that arrived from outside cannot make
 the dispatcher read a local file or unfold a billion-laughs bomb while it is being
@@ -592,7 +605,7 @@ together - `recipient` in `partial_keys` catches a phone number under
 
 **The top level of a trace's `data` is never masked.** That level belongs to the
 watcher, not to the application: `connection_name`, `request`, `changes`, `context`,
-`bindings` and so on are a fixed structure, and the traced data starts one level in.
+`bindings_count` and so on are a fixed structure, and the traced data starts one level in.
 Matching therefore begins inside it - `context.customer_email` and
 `job.data.customer_email` are masked, while `connection_name` is left readable even
 though it contains `_name`. Watchers whose own top level used to hold application data
@@ -681,6 +694,11 @@ php artisan slogger:dispatcher:start
 - Orphan traces are sent immediately.
 - On shutdown, remaining traces are flushed.
 
+The master keeps every worker slot filled. One that keeps dying on boot is replaced
+with a growing delay rather than once a second, and a slot counts as settled only once
+its worker has stayed up a minute. Starting a second dispatcher takes over from the
+first: it stops the running one, then starts its own fleet.
+
 Stop the dispatcher:
 
 ```bash
@@ -693,39 +711,18 @@ Stores traces in memory only. Intended for tests/local development.
 
 ## Storage
 
-SLogger does not persist traces locally. The only local file is the dispatcher state file in:
+SLogger does not persist traces locally. The only local files are the dispatcher state
+file and the lock beside it:
 
 ```text
 storage/slogger/dispatcher-state-*.json
+storage/slogger/dispatcher-state-*.json.lock
 ```
 
 You may want to ignore the folder:
 
 ```gitignore
 storage/slogger/*
-```
-
-## Profiling (XHProf)
-
-Only for HTTP client tracing.
-
-1) Install extension:
-
-```bash
-pecl install xhprof
-```
-
-2) Enable in `php.ini`:
-
-```ini
-[xhprof]
-extension=xhprof.so
-```
-
-3) Enable:
-
-```dotenv
-SLOGGER_PROFILING_ENABLED=true
 ```
 
 ## Testing
