@@ -15,13 +15,16 @@ use Symfony\Component\Console\Input\InputInterface;
 class CommandWatcher implements WatcherInterface
 {
     /**
-     * @var array<array{trace_id: string, started_at: Carbon}>
-     */
-    protected array $commands = [];
-    /**
      * @var string[]
      */
     protected array $exceptedCommands = [];
+
+    /**
+     * Commands started and not yet finished, outermost first.
+     *
+     * @var list<array{trace_id: string, command: string|null, started_at: Carbon}>
+     */
+    protected array $commands = [];
 
     public function __construct(
         protected readonly Processor $processor,
@@ -30,6 +33,19 @@ class CommandWatcher implements WatcherInterface
 
     public function register(?array $config): void
     {
+        // a swept trace never comes back here; its entry would be taken by the next
+        // finish, closing the wrong trace
+        $this->processor->onTraceInterrupted(
+            function (string $traceId): void {
+                $this->commands = array_values(
+                    array_filter(
+                        $this->commands,
+                        static fn(array $command): bool => $command['trace_id'] !== $traceId
+                    )
+                );
+            }
+        );
+
         if ($config !== null) {
             $this->exceptedCommands = $config['excepted'] ?? [];
         }
@@ -38,26 +54,21 @@ class CommandWatcher implements WatcherInterface
         $this->processor->registerEvent(CommandFinished::class, [$this, 'handleCommandFinished']);
     }
 
-    public function handleCommandStarting(?CommandStarting $event): void
+    public function handleCommandStarting(CommandStarting $event): void
     {
-        if (in_array($event?->command, $this->exceptedCommands, strict: true)) {
+        if (in_array($event->command, $this->exceptedCommands, strict: true)) {
             return;
         }
 
-        /**
-         * for support for Laravel 10, 12
-         *
-         * @var InputInterface|null $input
-         */
-        $input = $event?->input;
+        $input = $event->input;
 
         $data = [
             'command' => $this->makeCommandView(
-                command: $event?->command,
+                command: $event->command,
                 input: $input
             ),
-            'arguments' => $input?->getArguments(),
-            'options'   => $input?->getOptions(),
+            'arguments' => $input->getArguments(),
+            'options'   => $input->getOptions(),
         ];
 
         $loggedAt = Carbon::now();
@@ -66,7 +77,7 @@ class CommandWatcher implements WatcherInterface
             type: TraceTypeEnum::Command->value,
             tags: [
                 $this->makeCommandView(
-                    command: $event?->command,
+                    command: $event->command,
                     input: $input
                 ),
             ],
@@ -77,24 +88,22 @@ class CommandWatcher implements WatcherInterface
 
         $this->commands[] = [
             'trace_id'   => $traceId,
+            'command'    => $event->command,
             'started_at' => $loggedAt,
         ];
     }
 
-    public function handleCommandFinished(?CommandFinished $event): void
+    // already wrapped by registerEvent(): the watcher firewall is not something
+    // this has to arrange for itself
+    public function handleCommandFinished(CommandFinished $event): void
     {
-        $this->processor->handleWatcher(fn() => $this->onHandleCommandFinished($event));
-    }
-
-    protected function onHandleCommandFinished(?CommandFinished $event): void
-    {
-        // the start of an excepted command is not traced, so its finish must not pop
+        // the start of an excepted command is not traced, so its finish must not take
         // the entry of the command that is running it
-        if (in_array($event?->command, $this->exceptedCommands, strict: true)) {
+        if (in_array($event->command, $this->exceptedCommands, strict: true)) {
             return;
         }
 
-        $commandData = array_pop($this->commands);
+        $commandData = $this->takeCommand($event->command);
 
         if (!$commandData) {
             return;
@@ -105,26 +114,21 @@ class CommandWatcher implements WatcherInterface
         /** @var Carbon $startedAt */
         $startedAt = $commandData['started_at'];
 
-        /**
-         * for support for Laravel 10, 12
-         *
-         * @var InputInterface|null $input
-         */
-        $input = $event?->input;
+        $input = $event->input;
 
         $data = [
             'command' => $this->makeCommandView(
-                command: $event?->command,
+                command: $event->command,
                 input: $input
             ),
-            'exit_code' => $event?->exitCode,
-            'arguments' => $input?->getArguments(),
-            'options'   => $input?->getOptions(),
+            'exit_code' => $event->exitCode,
+            'arguments' => $input->getArguments(),
+            'options'   => $input->getOptions(),
         ];
 
         $this->processor->stop(
             traceId: $traceId,
-            status: $event?->exitCode
+            status: $event->exitCode
                 ? TraceStatusEnum::Failed->value
                 : TraceStatusEnum::Success->value,
             tags: null,
@@ -134,9 +138,37 @@ class CommandWatcher implements WatcherInterface
         );
     }
 
-    protected function makeCommandView(?string $command, ?InputInterface $input): string
+    /**
+     * This command's own entry, not merely the innermost one: a nested command that
+     * never reported finishing would otherwise be closed in its place. What sits
+     * above the match is abandoned, and the processor sweeps those traces.
+     *
+     * @return array{trace_id: string, command: string|null, started_at: Carbon}|null
+     */
+    protected function takeCommand(?string $command): ?array
     {
-        $command = $command ?? $input?->getArguments()['command'] ?? 'unknown';
+        for ($index = count($this->commands) - 1; $index >= 0; $index--) {
+            if ($this->commands[$index]['command'] !== $command) {
+                continue;
+            }
+
+            $found = $this->commands[$index];
+
+            $this->commands = array_slice($this->commands, 0, $index);
+
+            return $found;
+        }
+
+        return null;
+    }
+
+    /**
+     * `$command` is nullable on Laravel 10 and a plain string from 11 on, so the
+     * fallback stays: a command with no name of its own is a real shape there.
+     */
+    protected function makeCommandView(?string $command, InputInterface $input): string
+    {
+        $command ??= $input->getArguments()['command'] ?? 'unknown';
 
         if (!is_string($command)) {
             return 'unknown';

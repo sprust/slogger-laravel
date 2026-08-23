@@ -10,8 +10,6 @@ use SLoggerLaravel\Watchers\WatcherInterface;
 use Symfony\Component\Mime\Address;
 
 /**
- * Not tested
- *
  * Addresses are nested under `message` and carried as `email`/`full_name` pairs: the
  * dispatcher job matches key names, so an address has to sit in a value under a key
  * that says what it is. The previous shape - the address as the key, the name as the
@@ -64,7 +62,11 @@ class MailWatcher implements WatcherInterface
     }
 
     /**
-     * @param array<string, string>|Address[]|null $addresses
+     * Symfony's Mime addresses, which is what every supported Laravel version hands
+     * over: the `[address => name]` shape came from Swift Mailer, dropped in Laravel
+     * 6, and the branch reading it had not been reachable for years.
+     *
+     * @param Address[]|null $addresses
      *
      * @return list<array{email: string, full_name: string}>|null
      */
@@ -75,21 +77,13 @@ class MailWatcher implements WatcherInterface
         }
 
         return array_values(
-            collect($addresses)
-                ->map(function ($address, $key) {
-                    if ($address instanceof Address) {
-                        return [
-                            'email'     => $address->getAddress(),
-                            'full_name' => $address->getName(),
-                        ];
-                    }
-
-                    return [
-                        'email'     => (string) $key,
-                        'full_name' => (string) $address,
-                    ];
-                })
-                ->all()
+            array_map(
+                static fn(Address $address): array => [
+                    'email'     => $address->getAddress(),
+                    'full_name' => $address->getName(),
+                ],
+                $addresses
+            )
         );
     }
 }

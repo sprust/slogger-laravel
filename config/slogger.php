@@ -54,7 +54,6 @@ return [
         ],
     ],
 
-    // not implemented at the moment
     'profiling' => [
         'enabled' => env('SLOGGER_PROFILING_ENABLED', false),
     ],
@@ -71,46 +70,134 @@ return [
 
     // global data masking. it is applied by the dispatcher job, right before a batch
     // is sent - never in the traced application, which must not pay for masking a
-    // payload. two empty lists turn masking off.
+    // payload. masking is off only when all three lists below are empty.
     'masking' => [
-        // case-insensitive substrings of a trace data key. the top level of a trace's
-        // data is the watcher's own structure and is never masked; matching starts
-        // one level in, where the traced data actually is.
+        // masks matched against a trace data key. the top level of a trace's data is
+        // the watcher's own structure and is never matched; matching starts one level
+        // in, where the traced data actually is.
         //
         // a value under a matching key is replaced whole - nothing of it survives.
+        //
+        // a mask is matched against the whole key and against each of its word
+        // components (`db_pass`, `x-auth-user`, `apiToken` split on `_`, `-`, `.`,
+        // `:` and camelCase). so `pass` covers `db_pass` and not `passengers`, and
+        // `*token*` covers `api_token` and `tokenizer`. case-insensitive; a match on
+        // a key covers everything under it.
         'full_keys' => [
-            'token',
-            'pass',
+            // a word here matches a whole key or one of its components, so `auth`
+            // covers `basic_auth`, `x-auth-user` and `php-auth-pw` - and not `author`
             'auth',
+            'authentication',
+            'authorization',
+            'oauth',
+            'token',
+            'password',
+            'passwd',
+            'pass',
+            'passcode',
+            'passphrase',
+            'pw',
             'secret',
-            'private',
             'apikey',
-            'api_key',
-            'api-key',
             'credential',
-            'sign',
+            'credentials',
             'cookie',
+            'cookies',
+            'signature',
+            // not bare `signed`: it would take `signed_at` and `signed_by` too
+            'signed_payload',
+            'signed_request',
+            'signed_url',
+            'private',
+            'privatekey',
+            'session',
+            'sessionid',
+            'otp',
+            'cvv',
+            'cvc',
+            'pin',
+            'iban',
+            'ssn',
+            'recovery',
+
+            // and a wildcard matches the whole key, for names that are one word
+            '*token*',
+            '*password*',
+            '*secret*',
+            '*api_key*',
+            '*apikey*',
+            '*api-key*',
+            '*credential*',
+            '*cookie*',
+            '*signature*',
+            '*session_id*',
+            '*card_number*',
+            '*recovery_code*',
         ],
 
         // a value under a matching key keeps two characters at each end, so two
         // records still look different. these identify a person rather than
         // authenticate one - never put a secret here.
+        //
+        // a bare `name` is not one of them, however common it is as a person's: it is
+        // matched as a word component too, and most of what a trace is made of is
+        // named by one - `job.name` holds a job class, `listeners[].name` a listener
+        // class, an uploaded file's `name` its filename, and in a `{"name": ...,
+        // "value": ...}` pair `name` names the value rather than being one. so the
+        // person's name is spelled out instead.
         'partial_keys' => [
             'email',
             'phone',
             'recipient',
-            '_name',
-            'lastname',
-            'firstname',
+            'username',
+            'user_name',
+            'nickname',
             'surname',
+            'firstname',
+            'first_name',
+            'lastname',
+            'last_name',
+            'middlename',
+            'middle_name',
+            'fullname',
+            'full_name',
+
+            '*email*',
+            '*phone*',
+            '*recipient*',
+            '*firstname*',
+            '*first_name*',
+            '*lastname*',
+            '*last_name*',
         ],
 
         // matched against the value instead of the key, and masked in place, keeping
-        // the rest of the string readable. some things identify a person by their own
-        // shape wherever they turn up - an address inside a notifiable string, or in
-        // the middle of a log message - and no key name points at those.
+        // the rest of the string readable. some things identify a person or a secret
+        // by their own shape wherever they turn up - an address inside a notifiable
+        // string, a key inside an exception message - and no key name points at those.
         // an invalid pattern is ignored, not fatal.
+        //
+        // order matters: the first pattern to match a stretch of text wins, so the
+        // narrow ones come before the broad one. a pattern with a capture group masks
+        // the group and keeps the rest.
         'value_patterns' => [
+            // a password written into a url's authority: postgres://app:secret@db.
+            // a scheme is required, so `//assets:v2@2x.png` in a path is left alone,
+            // and the group runs to the last `@` of the authority, so a password
+            // containing one goes whole rather than in part
+            'url_credentials' => '/\b[a-z][a-z0-9+.-]*:\/\/[^\/\s:@]+:([^\/\s]+)@/i',
+
+            // a secret written into a url, wherever that url turns up: a Location
+            // header, an exception message, a log line
+            // the parameter name is matched as a word, not as a substring: an
+            // unbounded alternation took `?author=`, `?design=`, `?monkey=` and
+            // `?country_code=` with it
+            'url_secret' => '/[?&](?:[\w.-]*[_-])?(?:token|apikey|api_key|api-key|secret|password|passwd|auth|authorization|signature|credential|session|sessionid)(?:[_-][\w.-]*)?=([^&\s"\'<>]+)/i',
+
+            // an oauth authorization code, matched as a whole parameter name only:
+            // with affixes allowed it would also take `country_code` and `zip_code`
+            'url_oauth_code' => '/[?&]code=([^&\s"\'<>]+)/i',
+
             'email' => '/[\w.+-]+@[\w-]+\.[\w.-]*[\w-]/u',
         ],
     ],
@@ -170,6 +257,11 @@ return [
                     'hidden_paths' => [
                         '*',
                     ],
+
+                    // stop recording request parameters above this many bytes in
+                    // total. capped by what the masker will read, so a larger value
+                    // records nothing rather than something unmasked.
+                    'max_content_length' => 1000000,
                 ],
 
                 'output' => [
@@ -182,6 +274,11 @@ return [
                     'hidden_paths' => [
                         '*',
                     ],
+
+                    // stop recording a response body above this many bytes. capped by
+                    // what the masker will read, so a larger value records nothing
+                    // rather than something unmasked.
+                    'max_content_length' => 1000000,
                 ],
             ],
         ],

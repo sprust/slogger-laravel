@@ -7,11 +7,11 @@ use SLoggerLaravel\LocalStorage;
 
 readonly class DispatcherProcessState
 {
-    private string $staticUid;
+    /** Part of the state file's name, so two packages cannot collide. */
+    private const STATIC_UID = '678ed0bcb2d2c';
 
     public function __construct(private string $masterCommandName)
     {
-        $this->staticUid = "678ed0bcb2d2c";
     }
 
     public function getMasterCommandName(): string
@@ -35,11 +35,17 @@ readonly class DispatcherProcessState
 
         $data = json_decode($contents, true);
 
-        if (!is_array($data) || !isset($data['masterPid'], $data['masterCommandName'])) {
-            // a truncated or hand-edited file used to make both `start` and `stop`
-            // fail with "array offset on null" until someone deleted it by hand.
-            // Treat it as no state at all: the worst case is a stale file, and the
-            // next save overwrites it
+        if (!is_array($data)
+            || !is_string($data['dispatcher'] ?? null)
+            || !is_string($data['masterCommandName'] ?? null)
+            || !is_int($data['masterPid'] ?? null)
+            || !is_string($data['childCommandName'] ?? null)
+            || !is_array($data['childProcessPids'] ?? null)
+            || array_filter($data['childProcessPids'], static fn(mixed $pid): bool => !is_int($pid))
+        ) {
+            // every key the DTO needs, of the type it needs: a hand-edited file is
+            // valid JSON that used to be a TypeError taking down start and stop
+            // alike. Treated as no state at all - the next save overwrites it
             return null;
         }
 
@@ -53,9 +59,8 @@ readonly class DispatcherProcessState
     }
 
     /**
-     * Writes to a temporary file and renames it into place. `rename()` is atomic
-     * within a filesystem, so a concurrent reader sees either the previous state or
-     * this one, never the half of it that has been flushed so far.
+     * Temporary file plus rename: atomic within a filesystem, so a reader sees either
+     * the previous state or this one, never half of it.
      */
     public function save(DispatcherProcessStateDto $state): void
     {
@@ -75,9 +80,10 @@ readonly class DispatcherProcessState
             throw new RuntimeException('Failed to encode dispatcher state.');
         }
 
+        // named after this process, so nobody else writes to it and no lock is needed
         $temporaryPath = $pidFilePath . '.' . getmypid() . '.tmp';
 
-        if (file_put_contents($temporaryPath, $json, LOCK_EX) === false) {
+        if (file_put_contents($temporaryPath, $json) === false) {
             throw new RuntimeException('Failed to write PID to file.');
         }
 
@@ -89,11 +95,8 @@ readonly class DispatcherProcessState
     }
 
     /**
-     * Purges the state file only when it still belongs to the given master.
-     *
-     * During takeover the new master overwrites the state file while the old
-     * master is still shutting down: an unconditional purge from the old master
-     * would delete the new master's state and make it unmanageable.
+     * During takeover the new master saves its state while the old one is still
+     * shutting down: an unconditional purge would delete the new master's.
      */
     public function purgeIfOwnedBy(int $masterPid): void
     {
@@ -121,6 +124,6 @@ readonly class DispatcherProcessState
 
     private function makeFilePath(): string
     {
-        return app(LocalStorage::class)->makePath("dispatcher-state-$this->staticUid.json");
+        return app(LocalStorage::class)->makePath('dispatcher-state-' . self::STATIC_UID . '.json');
     }
 }

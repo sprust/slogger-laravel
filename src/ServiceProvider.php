@@ -25,6 +25,7 @@ use SLoggerLaravel\Middleware\HttpMiddleware;
 use SLoggerLaravel\Profiling\AbstractProfiling;
 use SLoggerLaravel\Profiling\XHProfProfiler;
 use SLoggerLaravel\Traces\TraceIdContainer;
+use SLoggerLaravel\Watchers\Children\HttpClientWatcher;
 use SLoggerLaravel\Watchers\WatcherInterface;
 
 class ServiceProvider extends \Illuminate\Support\ServiceProvider
@@ -34,20 +35,14 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
      */
     public function register(): void
     {
-        // a published config replaces this package's own, so without the merge an
-        // application that published one before a key existed silently runs without it
-        $this->mergeConfigFrom(__DIR__ . '/../config/slogger.php', 'slogger');
-
         $this->app->singleton(GeneralConfig::class);
 
         if (!$this->app->make(GeneralConfig::class)->isEnabled()) {
             return;
         }
 
-        // every binding lives here, not in boot(): a provider that boots earlier and
-        // resolves Processor, State or TraceIdContainer would get an auto-wired
-        // duplicate outside the singleton, and end up with a second, disconnected
-        // tracing state whose traces silently go nowhere
+        // here, not in boot(): a provider booting earlier would resolve an auto-wired
+        // Processor outside the singleton and trace into nowhere
         $this->app->singleton(TraceDataComplementer::class);
         $this->app->singleton(MaskingConfig::class);
         $this->app->singleton(TraceDataMasker::class);
@@ -56,6 +51,10 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         $this->app->singleton(Processor::class);
         $this->app->singleton(TraceIdContainer::class);
         $this->app->singleton(HttpMiddleware::class);
+
+        // the Guzzle handler factory resolves this too, and a fresh instance there
+        // would have its own request map, sweep callback and header key
+        $this->app->singleton(HttpClientWatcher::class);
         $this->app->singleton(AbstractProfiling::class, XHProfProfiler::class);
 
         $this->app->singleton(
@@ -125,7 +124,7 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
      */
     private function registerWatchers(): void
     {
-        $processor = $this->app->make(Processor::class);
+        $state = $this->app->make(State::class);
 
         /** @var array{enabled: bool, class: class-string<WatcherInterface>, config?: array<string, mixed>}[] $watcherConfigs */
         $watcherConfigs = $this->app->make(Repository::class)['slogger.watchers'] ?? [];
@@ -135,10 +134,17 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
                 continue;
             }
 
-            $processor->registerWatcher(
-                watcherClass: $watcherConfig['class'],
-                config: $watcherConfig['config'] ?? null,
-            );
+            $watcherClass = $watcherConfig['class'];
+
+            /** @var WatcherInterface $watcher */
+            $watcher = $this->app->make($watcherClass);
+
+            // the one instance, for good: a watcher keeps what it has open on itself
+            $this->app->instance($watcherClass, $watcher);
+
+            $watcher->register($watcherConfig['config'] ?? null);
+
+            $state->addEnabledWatcher($watcherClass);
         }
     }
 

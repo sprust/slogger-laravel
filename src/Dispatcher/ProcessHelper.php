@@ -3,7 +3,6 @@
 namespace SLoggerLaravel\Dispatcher;
 
 use RuntimeException;
-use Throwable;
 
 class ProcessHelper
 {
@@ -24,35 +23,36 @@ class ProcessHelper
             return false;
         }
 
-        try {
-            $cmd = @file_get_contents("/proc/$pid/cmdline");
-        } catch (Throwable) {
-            return false;
-        }
+        // @: a vanished /proc entry is an ordinary answer, and Laravel's error
+        // handler would turn the warning into an exception
+        $cmd = @file_get_contents("/proc/$pid/cmdline");
 
         if (!$cmd) {
             return false;
         }
 
-        // /proc/<pid>/cmdline separates the arguments with NUL, while the stored
-        // command name is a space-separated string: trimming only the trailing NULs
-        // left `php\0artisan\0slogger:...` to be searched for `php artisan slogger:...`,
-        // which never matched - so after the master died its workers were neither
-        // findable nor stoppable through the saved state
+        // /proc/<pid>/cmdline is NUL-separated, the saved command name is not:
+        // without this nothing ever matched, and a dead master left unstoppable
+        // workers behind
         $processName = trim(str_replace("\0", ' ', $cmd));
 
         return str_contains($processName, $commandName);
     }
 
     /**
-     * SIGTERM, not SIGINT: `queue:work` installs handlers for SIGTERM, SIGQUIT and
-     * SIGUSR2 and leaves SIGINT at its default, which kills the worker outright -
-     * in the middle of whatever job it was running. SIGTERM is the signal it treats
-     * as "finish this job, then stop", and the master handles both.
+     * SIGTERM, not SIGINT: `queue:work` leaves SIGINT at its default, which kills the
+     * worker mid-job. SIGTERM is the one it reads as "finish this job, then stop".
      */
     public function sendStopSignal(int $pid): void
     {
         if ($pid <= 0) {
+            return;
+        }
+
+        if ($pid === $this->getCurrentPid()) {
+            // a state file outliving its master names a pid the kernel may hand out
+            // again - to this process, whose command line matches. The new master
+            // would SIGTERM itself before starting anything
             return;
         }
 
@@ -61,14 +61,18 @@ class ProcessHelper
         posix_kill($pid, SIGTERM);
 
         if ($pgid === false || $pgid <= 0) {
-            // the target died in between: posix_kill(-$pgid) would become
-            // posix_kill(0, ...) and signal the caller's own process group
+            // the target died in between: posix_kill(-false) is posix_kill(0), which
+            // signals the caller's own group
             return;
         }
 
         if ($pgid === posix_getpgrp()) {
-            // children spawned without setsid share the caller's process group:
-            // a group-kill would signal the caller itself and every sibling process
+            // children spawned without setsid share the caller's group
+            return;
+        }
+
+        if ($pgid <= 1) {
+            // posix_kill(-1) is a broadcast; a master running as PID 1 has pgid 1
             return;
         }
 

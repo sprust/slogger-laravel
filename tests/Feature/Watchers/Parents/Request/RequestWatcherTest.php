@@ -26,8 +26,7 @@ class RequestWatcherTest extends BaseParentWatcherTestCase
 
         $data = $creating[0]->data;
 
-        // nothing masks a url, and it is a tag as well - so the query string is split
-        // off and carried where the dispatcher job can reach it
+        // nothing masks a url, so the query string is carried as data instead
         self::assertStringNotContainsString('tok-secret', $data['uri']);
         self::assertStringNotContainsString('tok-secret', implode(' ', $creating[0]->tags));
 
@@ -65,7 +64,12 @@ class RequestWatcherTest extends BaseParentWatcherTestCase
         self::assertCount(1, $updating);
 
         // the pattern, not the value bound to it: a tag is never masked
+        self::assertSame(['/slogger/reset/{token}'], $creating[0]->tags);
         self::assertSame(['/slogger/reset/{token}'], $updating[0]->tags);
+
+        // and `uri` too: it sits at the top level, which the masker leaves alone
+        self::assertSame('/slogger/reset/{token}', $creating[0]->data['uri']);
+        self::assertSame('/slogger/reset/{token}', ($updating[0]->data ?? [])['uri']);
 
         $data = $updating[0]->data ?? [];
 
@@ -74,6 +78,13 @@ class RequestWatcherTest extends BaseParentWatcherTestCase
         $masked = app(TraceDataMasker::class)->mask($data);
 
         self::assertSame(MaskHelper::FULL_MASK, $masked['route_parameters']['token']);
+
+        // nothing anywhere in the trace still carries the bound value
+        foreach ([$creating[0]->tags, $updating[0]->tags] as $tags) {
+            self::assertStringNotContainsString('tok-secret', implode(' ', $tags));
+        }
+
+        self::assertStringNotContainsString('tok-secret', json_encode($masked, JSON_THROW_ON_ERROR));
     }
 
     public function testTheTraceIdHeaderReachesTheClient(): void
@@ -89,12 +100,42 @@ class RequestWatcherTest extends BaseParentWatcherTestCase
 
         self::assertCount(1, $creating);
 
-        // the response the client gets, not one inspected after a hand-made
-        // terminate(): under FPM terminate() runs after the response was sent
+        // the response the client gets: under FPM terminate() runs after it is sent
         self::assertSame(
             $creating[0]->traceId,
             $response->headers->get($headerKey)
         );
+    }
+
+    public function testAnUnroutedPathKeepsOnlyItsFirstSegment(): void
+    {
+        // routing has not happened when RequestHandling fires, and a 404 never routes
+        $shorten = (new \ReflectionClass(RequestWatcher::class))->getMethod('shortenUnroutedPath');
+
+        // the canonical secret-in-path shapes: a password reset, an email verify
+        self::assertSame('/reset/…', $shorten->invoke(null, '/reset/tok-secret'));
+        self::assertSame('/verify/…', $shorten->invoke(null, '/verify/abc'));
+        self::assertSame('/reset/…', $shorten->invoke(null, '/reset/tok-secret/confirm'));
+
+        // nothing to hide in a single segment
+        self::assertSame('/health', $shorten->invoke(null, '/health'));
+        self::assertSame('/', $shorten->invoke(null, '/'));
+    }
+
+    public function testAnUnroutedRequestKeepsTheTagsItsStartTraceCarried(): void
+    {
+        $watcher = $this->getApp()->make(RequestWatcher::class);
+
+        $method = (new \ReflectionClass(RequestWatcher::class))->getMethod('getPostTags');
+
+        $tags = $method->invoke(
+            $watcher,
+            \Illuminate\Http\Request::create('/nowhere/at/all'),
+            new \Symfony\Component\HttpFoundation\Response()
+        );
+
+        // null leaves them alone; [] would leave a 404 untagged
+        self::assertNull($tags);
     }
 
     protected function getTraceType(): string

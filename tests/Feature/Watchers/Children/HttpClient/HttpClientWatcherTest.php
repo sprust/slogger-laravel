@@ -9,19 +9,23 @@ use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Psr7\NoSeekStream;
 use GuzzleHttp\Psr7\Request;
+use GuzzleHttp\Psr7\Utils as Psr7Utils;
 use GuzzleHttp\Promise\Utils;
 use GuzzleHttp\Psr7\Response;
 use ReflectionClass;
 use SLoggerLaravel\Enums\TraceStatusEnum;
+use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\Guzzle\GuzzleHandlerFactory;
+use SLoggerLaravel\Helpers\BodyDecoder;
 use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Helpers\TraceDataMasker;
 use SLoggerLaravel\Objects\TraceCreateObject;
+use SLoggerLaravel\Processor;
 use SLoggerLaravel\RequestPreparer\RequestDataFormatters;
 use SLoggerLaravel\Tests\Feature\Watchers\Children\BaseChildWatcherTestCase;
 use SLoggerLaravel\Watchers\Children\HttpClientWatcher;
-use SLoggerLaravel\Processor;
 use SLoggerLaravel\Watchers\Parents\JobWatcher;
 use Throwable;
 
@@ -35,9 +39,8 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
 
         dispatch($this->getSuccessCallback());
 
-        // every tracked request must be released once its trace is stopped,
-        // otherwise long-running workers leak one entry per outbound request.
-        self::assertSame([], $this->getTrackedRequests($watcher));
+        // otherwise a long-running worker leaks one entry per outbound request
+        self::assertSame(0, $this->countTrackedRequests($watcher));
     }
 
     public function testDoesNotLeakTrackedRequestsOnFailure(): void
@@ -68,7 +71,7 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
             }
         });
 
-        self::assertSame([], $this->getTrackedRequests($watcher));
+        self::assertSame(0, $this->countTrackedRequests($watcher));
     }
 
     public function testParentIsJob(): void
@@ -126,8 +129,8 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
 
             $formatters = new RequestDataFormatters();
 
-            // `Http::pool()` starts several requests before any of them answers, and
-            // they answer in whatever order the remote services happen to reply
+            // `Http::pool()` starts several before any answers, and they answer in
+            // whatever order the remote services reply
             $alpha = $watcher->handleRequest(new Request('POST', 'https://example.test/alpha'));
             $beta  = $watcher->handleRequest(new Request('POST', 'https://example.test/beta'));
 
@@ -188,9 +191,8 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
             $client->requestAsync('GET', 'https://example.test/beta'),
         ];
 
-        // both requests are in flight. tracing must not have finished either of them
-        // yet - waiting inside the middleware used to complete each request before the
-        // next one was even started, turning Http::pool() into a serial loop
+        // both are in flight: waiting inside the middleware completed each request
+        // before the next was started, turning Http::pool() into a serial loop
         self::assertCount(2, $this->dispatcher->findCreating(type: 'http-client'));
         self::assertCount(0, $this->dispatcher->findUpdating());
 
@@ -198,7 +200,7 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
 
         self::assertCount(2, $this->dispatcher->findUpdating());
 
-        self::assertSame([], $this->getTrackedRequests($watcher));
+        self::assertSame(0, $this->countTrackedRequests($watcher));
     }
 
     public function testDoesNotLeakTrackedRequestsSweptByTheProcessor(): void
@@ -218,8 +220,8 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
                 'http_errors' => false,
             ]);
 
-            // started and never waited for: the promise never settles, so neither
-            // response hook ever runs and the processor's sweep closes the trace
+            // never waited for: the promise never settles, so no response hook runs
+            // and the sweep closes the trace
             $client->requestAsync('GET', 'https://example.test/alpha');
         });
 
@@ -230,7 +232,77 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
         );
 
         // and it told the watcher, which would otherwise keep the entry forever
-        self::assertSame([], $this->getTrackedRequests($watcher));
+        self::assertSame(0, $this->countTrackedRequests($watcher));
+    }
+
+    public function testANonSeekableRequestBodyDoesNotBreakTheTrace(): void
+    {
+        $this->registerWatcher(JobWatcher::class, null);
+
+        dispatch(static function (): void {
+            $handlerStack = app(GuzzleHandlerFactory::class)->prepareHandler(
+                formatters: new RequestDataFormatters(),
+                handlerStack: HandlerStack::create(new MockHandler([new Response(200)]))
+            );
+
+            $client = new Client([
+                'handler'     => $handlerStack,
+                'http_errors' => false,
+            ]);
+
+            // an upload from a pipe: rewind() throws, and the trace died with it
+            $client->request('POST', 'https://example.test/upload', [
+                'body' => new NoSeekStream(Psr7Utils::streamFor('{"payload":"x"}')),
+            ]);
+        });
+
+        $creating = $this->dispatcher->findCreating(type: 'http-client');
+
+        self::assertCount(1, $creating);
+
+        $updating = $this->dispatcher->findUpdating(traceId: $creating[0]->traceId);
+
+        self::assertCount(1, $updating);
+
+        self::assertSame(TraceStatusEnum::Success->value, $updating[0]->status);
+        self::assertNotContains(Processor::INTERRUPTED_TAG, $updating[0]->tags ?? []);
+
+        self::assertSame(
+            ['__skipped' => 'non_seekable_body'],
+            ($updating[0]->data ?? [])['request']['payload']
+        );
+    }
+
+    public function testALargeRequestBodyIsDescribedRatherThanCopied(): void
+    {
+        $this->registerWatcher(JobWatcher::class, null);
+
+        dispatch(static function (): void {
+            $handlerStack = app(GuzzleHandlerFactory::class)->prepareHandler(
+                formatters: new RequestDataFormatters(),
+                handlerStack: HandlerStack::create(new MockHandler([new Response(200)]))
+            );
+
+            $client = new Client([
+                'handler'     => $handlerStack,
+                'http_errors' => false,
+            ]);
+
+            // telemetry must not double the memory an upload needs
+            $client->request('POST', 'https://example.test/upload', [
+                'body' => str_repeat('a', 1000000 + 1),
+            ]);
+        });
+
+        $creating = $this->dispatcher->findCreating(type: 'http-client');
+
+        self::assertCount(1, $creating);
+
+        $updating = $this->dispatcher->findUpdating(traceId: $creating[0]->traceId);
+
+        $payload = ($updating[0]->data ?? [])['request']['payload'];
+
+        self::assertArrayHasKey('__cleaned', $payload);
     }
 
     public function testTheQueryStringIsCarriedAsDataAndNotAsATag(): void
@@ -266,6 +338,132 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
 
         self::assertCount(1, $updating);
         self::assertSame(['https://example.test/alpha'], $updating[0]->tags);
+    }
+
+    public function testTheOutboundHeaderCarriesTheCallsOwnTraceId(): void
+    {
+        // no enclosing trace on purpose: the call's own trace exists either way
+        $mock = new MockHandler([new Response(200)]);
+
+        $handlerStack = app(GuzzleHandlerFactory::class)->prepareHandler(
+            formatters: new RequestDataFormatters(),
+            handlerStack: HandlerStack::create($mock)
+        );
+
+        $client = new Client([
+            'handler'     => $handlerStack,
+            'http_errors' => false,
+        ]);
+
+        $client->request('get', 'https://example.test/alpha');
+
+        $sent = $mock->getLastRequest();
+
+        self::assertNotNull($sent);
+
+        $creating = $this->dispatcher->findCreating(type: 'http-client');
+
+        self::assertCount(1, $creating);
+
+        $headerKey = app(WatchersConfig::class)->requestsHeaderParentTraceIdKey();
+
+        self::assertNotNull($headerKey);
+
+        // the call's own trace, not the enclosing one: the callee hangs under this
+        // call
+        self::assertSame($creating[0]->traceId, $sent->getHeader($headerKey)[0] ?? null);
+    }
+
+    public function testAnXmlCallIsRecordedInBothDirections(): void
+    {
+        $this->registerWatcher(JobWatcher::class, null);
+
+        dispatch(static function (): void {
+            $handlerStack = app(GuzzleHandlerFactory::class)->prepareHandler(
+                formatters: new RequestDataFormatters(),
+                handlerStack: HandlerStack::create(
+                    new MockHandler([
+                        new Response(
+                            status: 200,
+                            headers: ['Content-Type' => 'application/xml'],
+                            body: '<result><api_token>sk-live-response</api_token><page>2</page></result>'
+                        ),
+                    ])
+                )
+            );
+
+            $client = new Client([
+                'handler'     => $handlerStack,
+                'http_errors' => false,
+            ]);
+
+            // a SOAP call: both bodies went through json_decode, and XML gave []
+            $client->request('post', 'https://example.test/soap', [
+                'headers' => ['Content-Type' => 'application/xml'],
+                'body'    => '<envelope><password>hunter2</password><amount>100</amount></envelope>',
+            ]);
+        });
+
+        $creating = $this->dispatcher->findCreating(type: 'http-client');
+
+        self::assertCount(1, $creating);
+
+        $data = ($this->dispatcher->findUpdating(traceId: $creating[0]->traceId)[0]->data ?? []);
+
+        self::assertStringContainsString(
+            '<password>hunter2</password>',
+            $data['request']['payload'][BodyDecoder::XML_KEY]
+        );
+
+        self::assertStringContainsString(
+            '<api_token>sk-live-response</api_token>',
+            $data['response']['body'][BodyDecoder::XML_KEY]
+        );
+
+        $masked = app(TraceDataMasker::class)->mask($data);
+
+        self::assertStringContainsString(
+            '<password>' . MaskHelper::FULL_MASK . '</password>',
+            $masked['request']['payload'][BodyDecoder::XML_KEY]
+        );
+
+        self::assertStringContainsString(
+            '<api_token>' . MaskHelper::FULL_MASK . '</api_token>',
+            $masked['response']['body'][BodyDecoder::XML_KEY]
+        );
+
+        // and what matched nothing survives in both
+        self::assertStringContainsString('<amount>100</amount>', $masked['request']['payload'][BodyDecoder::XML_KEY]);
+        self::assertStringContainsString('<page>2</page>', $masked['response']['body'][BodyDecoder::XML_KEY]);
+    }
+
+    public function testCredentialsInAUrlNeverReachATag(): void
+    {
+        $this->registerWatcher(JobWatcher::class, null);
+
+        dispatch(static function (): void {
+            $handlerStack = app(GuzzleHandlerFactory::class)->prepareHandler(
+                formatters: new RequestDataFormatters(),
+                handlerStack: HandlerStack::create(new MockHandler([new Response(200)]))
+            );
+
+            $client = new Client([
+                'handler'     => $handlerStack,
+                'http_errors' => false,
+            ]);
+
+            $client->request('get', 'https://alice:hunter2@example.test/v1/me');
+        });
+
+        $creating = $this->dispatcher->findCreating(type: 'http-client');
+
+        self::assertCount(1, $creating);
+
+        $updating = $this->dispatcher->findUpdating(traceId: $creating[0]->traceId);
+
+        // a tag is never masked, so the password must not be in the url at all
+        self::assertSame(['https://example.test/v1/me'], $updating[0]->tags);
+        self::assertSame('https://example.test/v1/me', $creating[0]->data['uri']);
     }
 
     public function testTheQueryStringIsMaskedOnTheWayOut(): void
@@ -367,28 +565,18 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
      */
     private function bindSharedWatcher(): HttpClientWatcher
     {
-        $watcher = app(HttpClientWatcher::class);
-
-        $this->getApp()->instance(HttpClientWatcher::class, $watcher);
-
-        // setUp() registered a different instance, so its sweep callback points at an
-        // object nothing else uses; register the shared one the handler will resolve
-        $watcher->register(null);
-
-        return $watcher;
+        // a singleton in production, so this only names the instance the Guzzle
+        // handler resolves anyway
+        return app(HttpClientWatcher::class);
     }
 
-    /**
-     * @return array<string, array{trace_id: string, started_at: mixed}>
-     */
-    private function getTrackedRequests(HttpClientWatcher $watcher): array
+    private function countTrackedRequests(HttpClientWatcher $watcher): int
     {
         $property = (new ReflectionClass($watcher))->getProperty('requests');
-        $property->setAccessible(true);
 
-        /** @var array<string, array{trace_id: string, started_at: mixed}> $requests */
+        /** @var array<string, mixed> $requests */
         $requests = $property->getValue($watcher);
 
-        return $requests;
+        return count($requests);
     }
 }

@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace SLoggerLaravel\Tests\Feature\Helpers;
 
 use SLoggerLaravel\Configs\WatchersConfig;
+use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Helpers\TraceDataComplementer;
+use SLoggerLaravel\Helpers\TraceDataMasker;
 use SLoggerLaravel\Tests\Feature\BaseTestCase;
 
 class TraceDataComplementerTest extends BaseTestCase
@@ -35,29 +37,57 @@ class TraceDataComplementerTest extends BaseTestCase
             self::assertTrue(isset($item['class']) || isset($item['file']));
         }
 
-        self::assertSame('bar', $data['foo']);
-        self::assertSame('ok', $data['calc']);
+        // one level in, not at the top: the top level of a trace's data belongs to
+        // the watcher and is never masked, and this is application data
+        self::assertSame('bar', $data[TraceDataComplementer::ADDITIONAL_KEY]['foo']);
+        self::assertSame('ok', $data[TraceDataComplementer::ADDITIONAL_KEY]['calc']);
     }
 
-    public function testInjectRespectsExcludedFileMasks(): void
+    public function testAdditionalDataIsReachableByTheMasker(): void
     {
-        config()->set('slogger.data_completer.excluded_file_masks', [__FILE__]);
-
         $complementer = new TraceDataComplementer(
             app: $this->getApp(),
             watchersConfig: new WatchersConfig()
         );
 
+        $complementer->add('customer_email', 'john.doe@example.com');
+        $complementer->add('api_token', 'tok-secret');
+
         $data = [];
 
         $complementer->inject($data);
 
-        $trace = $data['__trace'] ?? [];
+        $masked = app(TraceDataMasker::class)->mask($data);
 
-        foreach ($trace as $item) {
-            if (isset($item['file'])) {
-                self::assertNotSame(__FILE__, $item['file']);
-            }
-        }
+        self::assertSame('jo****************om', $masked[TraceDataComplementer::ADDITIONAL_KEY]['customer_email']);
+        self::assertSame(MaskHelper::FULL_MASK, $masked[TraceDataComplementer::ADDITIONAL_KEY]['api_token']);
+    }
+
+    public function testInjectRespectsExcludedFileMasks(): void
+    {
+        // a frame is recorded by class where it has one, and every frame from a test
+        // method does - so an assertion looking for `file` never ran, and deleting
+        // excluded_file_masks support entirely left this test green. Going through a
+        // plain function gives a frame that carries `file`, which is what the masks
+        // are matched against
+        $before = slogger_probe_trace($this->makeComplementer());
+
+        self::assertContains(__FILE__, array_column($before, 'file'), 'this file should be in the trace to begin with');
+
+        // now exclude the file it lives in
+        config()->set('slogger.data_completer.excluded_file_masks', [__FILE__]);
+
+        $after = slogger_probe_trace($this->makeComplementer());
+
+        self::assertNotContains(__FILE__, array_column($after, 'file'));
+        self::assertNotEmpty($after, 'excluding one file must not empty the whole trace');
+    }
+
+    private function makeComplementer(): TraceDataComplementer
+    {
+        return new TraceDataComplementer(
+            app: $this->getApp(),
+            watchersConfig: new WatchersConfig()
+        );
     }
 }

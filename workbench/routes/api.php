@@ -2,6 +2,7 @@
 
 use App\Events\NestedEvent;
 use Illuminate\Contracts\Routing\ResponseFactory;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use SLoggerLaravel\Middleware\HttpMiddleware;
 
@@ -36,6 +37,21 @@ Route::group(
         // a route that binds a secret into its path: the value must never become a tag
         Route::get('/reset/{token}', fn(ResponseFactory $factory) => $factory->json(['ok' => true]))
             ->name('reset');
+
+        // a SOAP-ish endpoint: an XML body in, an XML body out
+        Route::post('/xml', function (Request $request, ResponseFactory $factory) {
+            return $factory
+                ->make(
+                    '<response><api_token>sk-live-response</api_token><page>2</page></response>',
+                    200,
+                    ['Content-Type' => 'application/xml']
+                );
+        })->name('xml');
+
+        // a response as big as the caller asks for, to be measured against the cap
+        Route::get('/big', fn(Request $request, ResponseFactory $factory) => $factory->json(
+            ['blob' => str_repeat('a', (int) $request->query('bytes', '100'))]
+        ))->name('big');
 
         Route::get('/failed', fn() => abort(500))
             ->name('failed');

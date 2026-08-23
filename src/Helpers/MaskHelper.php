@@ -2,49 +2,37 @@
 
 namespace SLoggerLaravel\Helpers;
 
+use Closure;
+use DOMComment;
+use DOMDocument;
+use DOMElement;
+use DOMProcessingInstruction;
+use DOMText;
 use Illuminate\Support\Str;
+use Stringable;
+use Throwable;
 
-/**
- * @phpstan-type MaskingRules array{needles: string[], partialNeedles: string[], valuePatterns: string[]}
- */
 class MaskHelper
 {
     /**
-     * A fully masked string. Fixed width on purpose: the length of a secret is
-     * itself worth hiding.
+     * Fixed width on purpose: the length of a secret is itself worth hiding.
      */
     public const FULL_MASK = '********';
 
     /**
-     * Nothing matched.
+     * Above this a string is left alone rather than decoded or scanned - so nothing
+     * above it may be recorded in the first place. One number for the package.
      */
-    private const MODE_NONE = 0;
+    public const MAX_READABLE_BYTES = 1000000;
 
     /**
-     * Enough is left to tell two values apart; the value itself is not recoverable.
-     */
-    private const MODE_PARTIAL = 1;
-
-    /**
-     * Nothing of the value survives.
-     */
-    private const MODE_FULL = 2;
-
-    /**
-     * Characters kept at each end by a partial mask, and the shortest string that
-     * keeps any: below it a partial mask is a full one.
+     * Characters kept at each end, and the shortest string that keeps any.
      */
     private const PARTIAL_VISIBLE  = 2;
     private const PARTIAL_MIN_KEPT = 6;
 
     /**
-     * Above this, a string is left alone rather than decoded or scanned.
-     */
-    private const MAX_STRING_LENGTH = 1000000;
-
-    /**
-     * Keys whose value is a URL query string. Such a value is masked parameter by
-     * parameter instead of as a whole, so the shape of the request stays readable.
+     * Masked parameter by parameter, so the shape of the request stays readable.
      *
      * @var string[]
      */
@@ -53,24 +41,12 @@ class MaskHelper
     ];
 
     /**
-     * Masks every value whose key contains one of the keys, case-insensitively, and
-     * every occurrence of one of the value patterns wherever it appears.
+     * `$fullKeys` are masked whole, `$partialKeys` keep a couple of characters at each
+     * end, and a key in both is masked whole. `$valuePatterns` match the value instead
+     * - an address in a log message has no key naming it.
      *
-     * `$keys` are masked whole, `$partialKeys` keep a couple of characters at each
-     * end: a token is worthless the moment any of it leaks, while an address or a
-     * phone number is mostly there to tell two records apart. A key matching both
-     * lists is masked whole - the stricter list wins.
-     *
-     * `$valuePatterns` match the value instead of the key, and are masked partially.
-     * Some things identify a person by their own shape, wherever they turn up - an
-     * address in a `notifiable` string, or in the middle of a log message - and no
-     * key name points at those.
-     *
-     * The top level is left alone: watchers put their own fixed structure there
-     * (`connection_name`, `request`, `changes`, ...) and the traced data starts one
-     * level in. Matching therefore begins inside that structure, so a top-level key is
-     * neither masked itself nor able to drag its whole subtree in by name. Value
-     * patterns are not bound to a key, so they apply at every level.
+     * The top level is the watcher's own structure and is never matched; the traced
+     * data starts one level in. Value patterns apply at every level.
      *
      * @param array<int|string, mixed> $data
      * @param array<mixed>             $fullKeys
@@ -85,107 +61,90 @@ class MaskHelper
         array $partialKeys = [],
         array $valuePatterns = []
     ): array {
-        $rules = [
-            'needles'        => self::prepareNeedles($fullKeys),
-            'partialNeedles' => self::prepareNeedles($partialKeys),
-            'valuePatterns'  => self::preparePatterns($valuePatterns),
-        ];
+        return self::maskArrayByRules(
+            $data,
+            new MaskingRules($fullKeys, $partialKeys, $valuePatterns)
+        );
+    }
 
-        if (!$rules['needles'] && !$rules['partialNeedles'] && !$rules['valuePatterns']) {
+    /**
+     * The same with the lists already compiled - how anything masking more than one
+     * trace should call it.
+     *
+     * @param array<int|string, mixed> $data
+     *
+     * @return array<int|string, mixed>
+     */
+    public static function maskArrayByRules(array $data, MaskingRules $rules): array
+    {
+        if ($rules->isEmpty()) {
             return $data;
         }
 
         return self::maskNode(
             data: $data,
-            prefix: '',
             rules: $rules,
-            mode: self::MODE_NONE,
+            mode: MaskingRules::MODE_NONE,
             depth: 1
         );
     }
 
     /**
-     * Masks a value whole. Scalars keep their type, so a masked payload stays
-     * shaped like the original one.
+     * For a standalone string - a tag, an array key - which no key list can reach.
+     *
+     * @param array<mixed> $valuePatterns
+     */
+    public static function maskString(string $value, array $valuePatterns): string
+    {
+        return self::maskStringByRules($value, new MaskingRules(valuePatterns: $valuePatterns));
+    }
+
+    /**
+     * The same, with the patterns already compiled.
+     */
+    public static function maskStringByRules(string $value, MaskingRules $rules): string
+    {
+        if (!$rules->valuePatterns || $value === '') {
+            return $value;
+        }
+
+        if (strlen($value) > self::MAX_READABLE_BYTES) {
+            // nothing has read it, so nothing can vouch for it
+            return self::FULL_MASK;
+        }
+
+        return self::maskByValuePatterns($value, $rules->valuePatterns);
+    }
+
+    /**
+     * Scalars keep their type, so a masked payload stays shaped like the original.
      */
     public static function maskValue(mixed $value): mixed
     {
-        return self::mask($value, self::MODE_FULL);
+        return self::mask($value, MaskingRules::MODE_FULL);
     }
 
     /**
-     * Masks a value but keeps a couple of characters at each end, so two different
-     * values still look different. Never use it for a secret: what is left is enough
-     * to correlate records, and for a short value it is enough to guess it.
+     * Keeps a couple of characters at each end, so two values still look different.
+     * Never for a secret: what is left is enough to correlate records.
      */
     public static function maskValuePartially(mixed $value): mixed
     {
-        return self::mask($value, self::MODE_PARTIAL);
+        return self::mask($value, MaskingRules::MODE_PARTIAL);
     }
 
     /**
-     * Tolerates a hand-written list: this is a public entry point, and a stray
-     * non-string in a configured key list must not take a whole trace batch down.
-     *
-     * @param array<mixed> $keys
-     *
-     * @return string[]
-     */
-    private static function prepareNeedles(array $keys): array
-    {
-        return array_values(
-            array_filter(
-                array_map(
-                    static fn(mixed $key): string => is_string($key) ? Str::lower($key) : '',
-                    $keys
-                )
-            )
-        );
-    }
-
-    /**
-     * Drops anything that is not a usable regular expression. A typo in a configured
-     * pattern would otherwise raise a warning for every string in every trace, from
-     * inside the dispatcher job.
-     *
-     * @param array<mixed> $patterns
-     *
-     * @return string[]
-     */
-    private static function preparePatterns(array $patterns): array
-    {
-        $prepared = [];
-
-        foreach ($patterns as $pattern) {
-            if (!is_string($pattern) || $pattern === '') {
-                continue;
-            }
-
-            if (@preg_match($pattern, '') === false) {
-                continue;
-            }
-
-            $prepared[] = $pattern;
-        }
-
-        return $prepared;
-    }
-
-    /**
-     * Walks the data instead of flattening it: a key that itself contains a dot would
-     * not survive an Arr::dot()/Arr::set() round trip, and third-party payloads do
-     * contain them.
+     * Walked, not flattened: a key containing a dot does not survive an
+     * Arr::dot()/Arr::set() round trip, and third-party payloads do contain them.
      *
      * @param array<int|string, mixed> $data
-     * @param MaskingRules             $rules
-     * @param int                      $mode  the mode an ancestor key already imposed
+     * @param int                      $mode the mode an ancestor key already imposed
      *
      * @return array<int|string, mixed>
      */
     private static function maskNode(
         array $data,
-        string $prefix,
-        array $rules,
+        MaskingRules $rules,
         int $mode,
         int $depth
     ): array {
@@ -194,20 +153,44 @@ class MaskHelper
         foreach ($data as $key => $value) {
             $segment = (string) $key;
 
-            if ($depth === 1) {
-                $path     = '';
-                $thisMode = self::MODE_NONE;
-            } else {
-                $path     = $prefix === '' ? $segment : $prefix . '.' . $segment;
-                $thisMode = max($mode, self::modeFor($path, $rules));
+            // the key itself, not the path: a parent match already covers the
+            // subtree through `$mode`
+            $thisMode = $depth === 1
+                ? MaskingRules::MODE_NONE
+                : max($mode, $rules->modeFor($segment));
+
+            // a key is data too: a cache key is `otp:<email>` often enough
+            $maskedKey = is_string($key)
+                ? self::maskByValuePatterns($key, $rules->valuePatterns)
+                : $key;
+
+            if (array_key_exists($maskedKey, $result)) {
+                // two keys can mask to the same string; an ugly key beats a dropped
+                // entry. Checked whatever the key did, not only when it changed
+                $maskedKey .= '#' . (count($result) + 1);
+            }
+
+            // an object is walked as what it will be serialised into - otherwise it
+            // passes through untouched and is unfolded later by whatever encodes it
+            if (is_object($value) && !$value instanceof Closure) {
+                // instanceof, not method_exists(): PHP 8 adds Stringable implicitly,
+                // and method_exists() throws on an incomplete object
+                if ($value instanceof Stringable) {
+                    $value = (string) $value;
+                } else {
+                    $unfolded = self::unfoldObject($value);
+
+                    if (!is_null($unfolded)) {
+                        $value = $unfolded;
+                    }
+                }
             }
 
             if (is_array($value)) {
-                $result[$key] = $value === []
+                $result[$maskedKey] = $value === []
                     ? $value
                     : self::maskNode(
                         data: $value,
-                        prefix: $path,
                         rules: $rules,
                         mode: $thisMode,
                         depth: $depth + 1
@@ -216,7 +199,7 @@ class MaskHelper
                 continue;
             }
 
-            $result[$key] = $thisMode === self::MODE_NONE
+            $result[$maskedKey] = $thisMode === MaskingRules::MODE_NONE
                 ? self::maskUnmatchedString($value, $segment, $rules)
                 : self::mask($value, $thisMode);
         }
@@ -225,16 +208,37 @@ class MaskHelper
     }
 
     /**
-     * No key pointed at this value, so look at the value itself: it may carry a
-     * structure of its own (a JSON document, a URL query string), and it may contain
-     * something that identifies a person by its own shape.
+     * What `json_encode` would make of it, so the masker sees the shape the receiver
+     * will. Null when there is nothing to walk.
      *
-     * @param MaskingRules $rules
+     * @return array<int|string, mixed>|null
      */
-    private static function maskUnmatchedString(mixed $value, string $key, array $rules): mixed
+    private static function unfoldObject(object $value): ?array
     {
-        if (!is_string($value) || $value === '' || strlen($value) > self::MAX_STRING_LENGTH) {
+        $encoded = json_encode($value, JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
+
+        if ($encoded === false) {
+            return null;
+        }
+
+        $decoded = json_decode($encoded, true);
+
+        return is_array($decoded) && $decoded !== [] ? $decoded : null;
+    }
+
+    /**
+     * No key pointed at this value, so look at the value: it may carry a structure of
+     * its own, or something recognisable by shape.
+     */
+    private static function maskUnmatchedString(mixed $value, string $key, MaskingRules $rules): mixed
+    {
+        if (!is_string($value) || $value === '') {
             return $value;
+        }
+
+        if (strlen($value) > self::MAX_READABLE_BYTES) {
+            // see maskString(): unread means unvouched-for, and it leaves whole
+            return self::FULL_MASK;
         }
 
         if (in_array(Str::lower($key), self::QUERY_STRING_KEYS, true)) {
@@ -245,59 +249,95 @@ class MaskHelper
         $masked = self::maskJsonString($value, $rules);
 
         if ($masked !== $value) {
-            // it was a JSON document and something inside it matched; every string in
-            // it has already been through here
             return $masked;
         }
 
-        return self::maskByValuePatterns($value, $rules['valuePatterns']);
+        if ($key === BodyDecoder::XML_KEY) {
+            // recorded as a document, so one that will not parse cannot be masked -
+            // and this is where that is caught, closed
+            return self::maskXmlString($value, $rules, mustParse: true);
+        }
+
+        $masked = self::maskXmlString($value, $rules);
+
+        if ($masked !== $value) {
+            return $masked;
+        }
+
+        $masked = self::maskSerializedString($value, $rules);
+
+        if ($masked !== $value) {
+            return $masked;
+        }
+
+        return self::maskByValuePatterns($value, $rules->valuePatterns);
     }
 
     /**
-     * Masks every occurrence of a value pattern, in place, keeping the rest of the
-     * string readable: `Anonymous:mail,john@example.com` stays recognisable as an
-     * anonymous mail notifiable while the address itself does not survive.
+     * In place, keeping the rest of the string readable.
      *
      * @param string[] $patterns
      */
     private static function maskByValuePatterns(string $value, array $patterns): string
     {
         foreach ($patterns as $pattern) {
-            $replaced = @preg_replace_callback(
-                $pattern,
-                static function (array $matches): string {
-                    /** @var string $matched */
-                    $matched = $matches[0];
-
-                    /** @var string $masked */
-                    $masked = self::mask($matched, self::MODE_PARTIAL);
-
-                    return $masked;
-                },
-                $value
-            );
-
-            if (is_string($replaced)) {
-                $value = $replaced;
-            }
+            $value = self::applyValuePattern($value, $pattern);
         }
 
         return $value;
     }
 
     /**
-     * Applications hand whole JSON documents over as strings - an Eloquent `array` cast
-     * puts one straight into a model's changes - and the key carrying such a string
+     * Rebuilt by offset, never by searching the match for the captured text: a
+     * credential is routinely a substring of the thing that names it
+     * (`postgres:postgres@`), and searching masked the name and shipped the secret.
+     */
+    private static function applyValuePattern(string $value, string $pattern): string
+    {
+        $matches = [];
+
+        if (!@preg_match_all($pattern, $value, $matches, PREG_OFFSET_CAPTURE)) {
+            return $value;
+        }
+
+        $result = '';
+        $cursor = 0;
+
+        foreach ($matches[0] as $index => [$matched, $matchedOffset]) {
+            // a capture group masks the group and keeps the rest; an unmatched
+            // optional group reports offset -1
+            $group = $matches[1][$index] ?? null;
+
+            if (is_array($group) && $group[0] !== '' && $group[1] >= $matchedOffset) {
+                $groupOffset = $group[1] - $matchedOffset;
+
+                /** @var string $maskedGroup */
+                $maskedGroup = self::mask($group[0], MaskingRules::MODE_FULL);
+
+                $replacement = substr($matched, 0, $groupOffset)
+                    . $maskedGroup
+                    . substr($matched, $groupOffset + strlen($group[0]));
+            } else {
+                /** @var string $replacement */
+                $replacement = self::mask($matched, MaskingRules::MODE_PARTIAL);
+            }
+
+            $result .= substr($value, $cursor, $matchedOffset - $cursor) . $replacement;
+
+            $cursor = $matchedOffset + strlen($matched);
+        }
+
+        return $result . substr($value, $cursor);
+    }
+
+    /**
+     * Applications hand whole JSON documents over as strings, and the key carrying one
      * says nothing about what is inside it.
      *
-     * A document in which something matched is re-encoded rather than patched, so its
-     * exact bytes are not preserved: escaping is normalised, and a number too large or
-     * too precise for a PHP float loses precision. A document in which nothing matched
-     * is returned untouched.
-     *
-     * @param MaskingRules $rules
+     * A document in which something matched is re-encoded, so escaping is normalised
+     * and an oversized number loses precision. One in which nothing did is untouched.
      */
-    private static function maskJsonString(string $value, array $rules): string
+    private static function maskJsonString(string $value, MaskingRules $rules): string
     {
         $trimmed = ltrim($value);
 
@@ -308,22 +348,26 @@ class MaskHelper
         $decoded = json_decode($value, true);
 
         if (!is_array($decoded)) {
+            if (json_last_error() === JSON_ERROR_DEPTH) {
+                // a document deeper than json_decode() reads: handing it back whole
+                // would ship every key in it untouched
+                return self::FULL_MASK;
+            }
+
             return $value;
         }
 
-        // depth 2: the document is the application's own data all the way up, unlike
-        // the trace data it sits in, whose top level belongs to the watcher
+        // depth 2: unlike trace data, a document is the application's own all the
+        // way up
         $masked = self::maskNode(
             data: $decoded,
-            prefix: '',
             rules: $rules,
-            mode: self::MODE_NONE,
+            mode: MaskingRules::MODE_NONE,
             depth: 2
         );
 
         if ($masked === $decoded) {
-            // nothing matched: keep the original bytes rather than a re-encoded
-            // approximation of them
+            // keep the original bytes rather than a re-encoded approximation
             return $value;
         }
 
@@ -333,73 +377,259 @@ class MaskHelper
     }
 
     /**
-     * Masks a query string parameter by parameter: `page=2&token=secret` keeps the
-     * page and loses the token. Masking it as one value would hide which parameters
-     * were sent at all, which is most of what a query string is worth in a trace.
+     * The same for XML - a SOAP envelope, a gateway callback. Element and attribute
+     * names are matched the way object keys are, and a match covers the subtree.
      *
-     * @param MaskingRules $rules
+     * Untouched when nothing matched; re-serialised otherwise, so whitespace and
+     * attribute quoting may differ - the same trade the JSON path makes.
      */
-    private static function maskQueryString(string $value, array $rules): string
+    private static function maskXmlString(string $value, MaskingRules $rules, bool $mustParse = false): string
     {
-        $parameters = [];
+        $trimmed = BodyDecoder::trimForParsing($value);
 
-        parse_str($value, $parameters);
-
-        if (!$parameters) {
+        if ($trimmed === '' || $trimmed[0] !== '<' || !class_exists(DOMDocument::class)) {
             return $value;
         }
 
-        // depth 2: every key here is the application's own
-        $masked = self::maskNode(
-            data: $parameters,
-            prefix: '',
+        $document = new DOMDocument();
+
+        $previousErrors = libxml_use_internal_errors(true);
+
+        try {
+            // no LIBXML_NOENT: entities stay unexpanded, so an outside document
+            // cannot make the dispatcher fetch a URL or unfold an entity bomb
+            $loaded = $document->loadXML($trimmed, LIBXML_NONET | LIBXML_NOWARNING | LIBXML_NOERROR);
+        } catch (Throwable) {
+            $loaded = false;
+        } finally {
+            libxml_clear_errors();
+            libxml_use_internal_errors($previousErrors);
+        }
+
+        if (!$loaded || is_null($document->documentElement)) {
+            if ($mustParse) {
+                // nothing has read it, so nothing can vouch for it
+                return self::FULL_MASK;
+            }
+
+            // unparseable prose starting with `<` is fine to keep; an unparseable
+            // internal subset is where values hide, and a bare `<!DOCTYPE html>`
+            // declares nothing
+            return preg_match('/<!DOCTYPE[^>\[]*\[/i', $trimmed) === 1
+                || stripos($trimmed, '<!ENTITY') !== false
+                    ? self::FULL_MASK
+                    : $value;
+        }
+
+        if (!is_null($document->doctype) && $document->doctype->entities->length > 0) {
+            // an entity reference is not a text node: masking walks past `&secret;`
+            // and leaves its definition in the DTD
+            return self::FULL_MASK;
+        }
+
+        $changed = false;
+
+        self::maskXmlElement(
+            element: $document->documentElement,
             rules: $rules,
-            mode: self::MODE_NONE,
-            depth: 2
+            mode: MaskingRules::MODE_NONE,
+            changed: $changed
         );
 
-        if ($masked === $parameters) {
-            // nothing matched: parse_str is lossy (it mangles keys that are not valid
-            // PHP variable names), so keep the original string
+        if (!$changed) {
             return $value;
         }
 
-        // http_build_query percent-encodes the mask itself, which turns a readable
-        // `token=********` into `token=%2A%2A%2A%2A%2A%2A%2A%2A`; `*` is legal in a
-        // query string, so put it back
-        return str_replace('%2A', '*', http_build_query($masked));
-    }
+        $encoded = $document->saveXML();
 
-    /**
-     * @param MaskingRules $rules
-     */
-    private static function modeFor(string $key, array $rules): int
-    {
-        $lowerKey = Str::lower($key);
-
-        if (self::containsAny($lowerKey, $rules['needles'])) {
-            return self::MODE_FULL;
+        if ($encoded === false) {
+            return $value;
         }
 
-        if (self::containsAny($lowerKey, $rules['partialNeedles'])) {
-            return self::MODE_PARTIAL;
+        // saveXML() always writes a declaration, so one that never had it must have
+        // it taken back off. `<?xml-stylesheet` is an instruction, not a declaration
+        if (!preg_match('/^<\?xml\s/', $trimmed)) {
+            $encoded = preg_replace('/^<\?xml[^?]*\?>\s*/', '', $encoded, 1) ?? $encoded;
         }
 
-        return self::MODE_NONE;
+        return rtrim($encoded, "\n");
     }
 
-    /**
-     * @param string[] $needles
-     */
-    private static function containsAny(string $lowerKey, array $needles): bool
-    {
-        foreach ($needles as $needle) {
-            if (str_contains($lowerKey, $needle)) {
-                return true;
+    private static function maskXmlElement(
+        DOMElement $element,
+        MaskingRules $rules,
+        int $mode,
+        bool &$changed
+    ): void {
+        $name = $element->localName ?: $element->nodeName;
+
+        $thisMode = max($mode, $rules->modeFor($name));
+
+        // no iterator_to_array: a wrapper object per node turns 4 MB of DOM into
+        // tens of MB and kills the worker. Changing text does not change structure,
+        // so the live list is safe to walk
+        foreach ($element->attributes ?? [] as $attribute) {
+            $attributeName = $attribute->localName ?: $attribute->nodeName;
+
+            $attributeMode = max($thisMode, $rules->modeFor($attributeName));
+
+            $masked = self::maskXmlText($attribute->value, $attributeMode, $rules);
+
+            if ($masked !== $attribute->value) {
+                $attribute->value = $masked;
+
+                $changed = true;
             }
         }
 
-        return false;
+        foreach ($element->childNodes as $child) {
+            if ($child instanceof DOMElement) {
+                self::maskXmlElement(
+                    element: $child,
+                    rules: $rules,
+                    mode: $thisMode,
+                    changed: $changed
+                );
+
+                continue;
+            }
+
+            // no key matches these, but they are still text somebody wrote
+            if ($child instanceof DOMComment || $child instanceof DOMProcessingInstruction) {
+                $masked = self::maskByValuePatterns($child->data, $rules->valuePatterns);
+
+                if ($masked !== $child->data) {
+                    $child->data = $masked;
+
+                    $changed = true;
+                }
+
+                continue;
+            }
+
+            // DOMCdataSection extends DOMText, so a CDATA block is covered here too
+            if (!$child instanceof DOMText) {
+                continue;
+            }
+
+            if (trim($child->data) === '') {
+                // the indentation between elements, not content
+                continue;
+            }
+
+            $masked = self::maskXmlText($child->data, $thisMode, $rules);
+
+            if ($masked !== $child->data) {
+                $child->data = $masked;
+
+                $changed = true;
+            }
+        }
+    }
+
+    private static function maskXmlText(string $text, int $mode, MaskingRules $rules): string
+    {
+        if ($mode === MaskingRules::MODE_NONE) {
+            return self::maskByValuePatterns($text, $rules->valuePatterns);
+        }
+
+        $masked = self::mask($text, $mode);
+
+        return is_string($masked) ? $masked : $text;
+    }
+
+    /**
+     * Parameter by parameter: `page=2&token=secret` keeps the page and loses the
+     * token. Masking it whole would hide which parameters were sent at all.
+     *
+     * Split by hand: a parse_str()/http_build_query() round trip rewrites the string
+     * even where nothing matched - `user.name` comes back as `user_name`, a valueless
+     * flag gains an `=`, a repeated parameter loses all but its last value.
+     */
+    private static function maskQueryString(string $value, MaskingRules $rules): string
+    {
+        $pairs = explode('&', $value);
+
+        $changed = false;
+
+        foreach ($pairs as $index => $pair) {
+            if ($pair === '') {
+                continue;
+            }
+
+            $separator = strpos($pair, '=');
+
+            if ($separator === false) {
+                // valueless: adding `=` would change what the request looked like
+                continue;
+            }
+
+            $rawName  = substr($pair, 0, $separator);
+            $rawValue = substr($pair, $separator + 1);
+
+            $name = urldecode($rawName);
+
+            $mode = $rules->modeFor($name);
+
+            $decoded = urldecode($rawValue);
+
+            $masked = $mode === MaskingRules::MODE_NONE
+                ? self::maskByValuePatterns($decoded, $rules->valuePatterns)
+                : self::mask($decoded, $mode);
+
+            if (!is_string($masked) || $masked === $decoded) {
+                continue;
+            }
+
+            // `*` is legal in a query string, and a readable `token=********` beats
+            // `token=%2A%2A%2A%2A%2A%2A%2A%2A`
+            $pairs[$index] = $rawName . '=' . str_replace('%2A', '*', rawurlencode($masked));
+
+            $changed = true;
+        }
+
+        return $changed ? implode('&', $pairs) : $value;
+    }
+
+    /**
+     * A session in the cache is one `serialize()` blob holding the CSRF token and the
+     * password hash, and it matches neither the JSON nor the XML sniff.
+     *
+     * `allowed_classes: false`, so reading a payload the application did not write
+     * cannot construct anything.
+     */
+    private static function maskSerializedString(string $value, MaskingRules $rules): string
+    {
+        if (!preg_match('/^a:\d+:\{/', $value)) {
+            // only arrays: a serialised scalar carries no keys to match on anyway
+            return $value;
+        }
+
+        if (preg_match('/[;{][OCE]:\d+:"/', $value)) {
+            // an object inside becomes an incomplete one, which cannot be inspected
+            // without throwing nor put back together. Left to the value patterns
+            return $value;
+        }
+
+        $decoded = @unserialize($value, ['allowed_classes' => false]);
+
+        if (!is_array($decoded)) {
+            return $value;
+        }
+
+        // depth 2: every key in it is the application's own
+        $masked = self::maskNode(
+            data: $decoded,
+            rules: $rules,
+            mode: MaskingRules::MODE_NONE,
+            depth: 2
+        );
+
+        if ($masked === $decoded) {
+            return $value;
+        }
+
+        return serialize($masked);
     }
 
     private static function mask(mixed $value, int $mode): mixed
@@ -420,7 +650,8 @@ class MaskHelper
             return 0.0;
         }
 
-        if (is_object($value) && method_exists($value, '__toString')) {
+        // instanceof, not method_exists(): see maskNode()
+        if ($value instanceof Stringable) {
             $value = (string) $value;
         }
 
@@ -429,11 +660,11 @@ class MaskHelper
         }
 
         if ($value === '') {
-            // there is nothing to hide, and a mask here would claim there was
+            // a mask here would claim something had been hidden
             return $value;
         }
 
-        if ($mode === self::MODE_FULL) {
+        if ($mode === MaskingRules::MODE_FULL) {
             return self::FULL_MASK;
         }
 

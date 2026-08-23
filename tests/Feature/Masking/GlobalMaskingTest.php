@@ -6,7 +6,9 @@ namespace SLoggerLaravel\Tests\Feature\Masking;
 
 use Illuminate\Log\LogManager;
 use Illuminate\Support\Carbon;
+use RuntimeException;
 use SLoggerLaravel\Configs\GeneralConfig;
+use SLoggerLaravel\Configs\MaskingConfig;
 use SLoggerLaravel\Dispatcher\ApiClients\ApiClientInterface;
 use SLoggerLaravel\Dispatcher\Items\Queue\Jobs\SendTracesJob;
 use SLoggerLaravel\Enums\TraceStatusEnum;
@@ -14,6 +16,7 @@ use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Helpers\TraceDataMasker;
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TracesObject;
+use SLoggerLaravel\Objects\TraceUpdateObject;
 use SLoggerLaravel\Processor;
 use SLoggerLaravel\Tests\Feature\Watchers\BaseWatcherTestCase;
 use SLoggerLaravel\Watchers\Children\LogWatcher;
@@ -67,8 +70,7 @@ class GlobalMaskingTest extends BaseWatcherTestCase
 
         $context = $sent['context'];
 
-        // an address identifies rather than authenticates: enough is left to tell two
-        // customers apart, not enough to reach either of them
+        // an address identifies rather than authenticates
         self::assertSame('cu*****************st', $context['customer_email']);
 
         // a key authenticates: nothing of it survives
@@ -77,14 +79,13 @@ class GlobalMaskingTest extends BaseWatcherTestCase
         // nothing in this key matches either list
         self::assertSame(42, $context['order_id']);
 
-        // `connection_name` matches `_name` but describes the trace, not the traced data
+        // matches `_name`, but describes the trace rather than the traced data
         self::assertSame('redis', $sent['connection_name']);
     }
 
     public function testEmptyKeyListsTurnMaskingOff(): void
     {
-        // all three of them: value patterns match without any key at all, so leaving
-        // them in place would keep masking addresses
+        // all three: value patterns match without any key at all
         $this->getApp()['config']->set('slogger.masking.full_keys', []);
         $this->getApp()['config']->set('slogger.masking.partial_keys', []);
         $this->getApp()['config']->set('slogger.masking.value_patterns', []);
@@ -124,8 +125,7 @@ class GlobalMaskingTest extends BaseWatcherTestCase
         $sent = $this->sendThroughJob(
             [
                 'context' => [
-                    // the key says nothing about what the value holds, and the address
-                    // is only part of the string
+                    // the key says nothing, and the address is part of a string
                     'notifiable' => 'Anonymous:mail,customer@example.test',
                     'note'       => 'invoice sent',
                 ],
@@ -139,6 +139,174 @@ class GlobalMaskingTest extends BaseWatcherTestCase
 
         // nothing in it matches: left readable
         self::assertSame('invoice sent', $sent['context']['note']);
+    }
+
+    /**
+     * An update trace is where the sensitive half of a parent trace lives - request
+     * headers, the payload, `Set-Cookie`, the response body - and it travels a
+     * different branch of maskTraces() from the creating one.
+     */
+    public function testAnUpdateTraceIsMaskedOnItsWayOutToo(): void
+    {
+        $sent = $this->sendUpdateThroughJob(
+            data: [
+                'request' => [
+                    'headers' => ['authorization' => 'Bearer sk-live-SECRET'],
+                    'payload' => ['password' => 'hunter2'],
+                ],
+                'response' => [
+                    'body' => ['access_token' => 'at-SECRET'],
+                ],
+            ],
+            tags: ['/users/customer@example.test/orders'],
+        );
+
+        self::assertSame(MaskHelper::FULL_MASK, $sent['data']['request']['headers']['authorization']);
+        self::assertSame(MaskHelper::FULL_MASK, $sent['data']['request']['payload']['password']);
+        self::assertSame(MaskHelper::FULL_MASK, $sent['data']['response']['body']['access_token']);
+
+        // and its tags, which no key list can reach
+        self::assertSame(['/users/cu*****************st/orders'], $sent['tags']);
+
+        self::assertStringNotContainsString(
+            'sk-live-SECRET',
+            json_encode($sent, JSON_THROW_ON_ERROR)
+        );
+    }
+
+    public function testACreatingTracesTagsAreMaskedOnTheWayOut(): void
+    {
+        $job = new SendTracesJob(
+            (new TracesObject())->addCreating(
+                $this->makeTrace(['context' => []], ['/users/customer@example.test/orders'])
+            )
+        );
+
+        $apiClient = new class implements ApiClientInterface {
+            /**
+             * @var string[]
+             */
+            public array $sentTags = [];
+
+            public function sendTraces(TracesObject $traces): void
+            {
+                foreach ($traces->iterateCreating() as $trace) {
+                    $this->sentTags = $trace->tags;
+                }
+            }
+        };
+
+        $this->runJob($job, $apiClient);
+
+        self::assertSame(['/users/cu*****************st/orders'], $apiClient->sentTags);
+    }
+
+    public function testATraceTheMaskerCannotReadDoesNotCostTheBatch(): void
+    {
+        $breaking = new class(new MaskingConfig()) extends TraceDataMasker {
+            public function mask(array $data): array
+            {
+                if (array_key_exists('breaks', $data)) {
+                    throw new RuntimeException('cannot read this');
+                }
+
+                return parent::mask($data);
+            }
+        };
+
+        $job = new SendTracesJob(
+            (new TracesObject())
+                ->addCreating($this->makeTrace(['breaks' => ['api_token' => 'sk-live-SECRET']]))
+                ->addCreating($this->makeTrace(['context' => ['api_token' => 'sk-live-OTHER']]))
+        );
+
+        $apiClient = new class implements ApiClientInterface {
+            /**
+             * @var array<int, array<string, mixed>>
+             */
+            public array $sent = [];
+
+            public function sendTraces(TracesObject $traces): void
+            {
+                foreach ($traces->iterateCreating() as $trace) {
+                    $this->sent[] = $trace->data;
+                }
+            }
+        };
+
+        $job->handle(
+            $this->getApp()->make(Processor::class),
+            $apiClient,
+            new GeneralConfig(),
+            $breaking
+        );
+
+        // masking is deterministic, so letting the exception out cost the whole batch
+        // and every one of its five retries - the traces around the broken one
+        // included
+        self::assertCount(2, $apiClient->sent);
+
+        // the broken one arrives saying why it is empty, and carrying nothing of what
+        // could not be read
+        self::assertSame(
+            [TraceDataMasker::MASK_ERROR_KEY => 'cannot read this'],
+            $apiClient->sent[0]
+        );
+
+        self::assertSame(MaskHelper::FULL_MASK, $apiClient->sent[1]['context']['api_token']);
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     * @param string[]             $tags
+     *
+     * @return array{data: array<string, mixed>, tags: string[]|null}
+     */
+    private function sendUpdateThroughJob(array $data, array $tags): array
+    {
+        $job = new SendTracesJob(
+            (new TracesObject())->addUpdating(
+                new TraceUpdateObject(
+                    traceId: 'trace-1',
+                    status: TraceStatusEnum::Success->value,
+                    profiling: null,
+                    tags: $tags,
+                    data: $data,
+                    duration: 1.0,
+                    memory: null,
+                    cpu: null,
+                    parentLoggedAt: Carbon::now(),
+                )
+            )
+        );
+
+        $apiClient = new class implements ApiClientInterface {
+            /**
+             * @var array{data: array<string, mixed>, tags: string[]|null}
+             */
+            public array $sent = ['data' => [], 'tags' => null];
+
+            public function sendTraces(TracesObject $traces): void
+            {
+                foreach ($traces->iterateUpdating() as $trace) {
+                    $this->sent = ['data' => $trace->data ?? [], 'tags' => $trace->tags];
+                }
+            }
+        };
+
+        $this->runJob($job, $apiClient);
+
+        return $apiClient->sent;
+    }
+
+    private function runJob(SendTracesJob $job, ApiClientInterface $apiClient): void
+    {
+        $job->handle(
+            $this->getApp()->make(Processor::class),
+            $apiClient,
+            new GeneralConfig(),
+            $this->getApp()->make(TraceDataMasker::class)
+        );
     }
 
     /**
@@ -178,15 +346,16 @@ class GlobalMaskingTest extends BaseWatcherTestCase
 
     /**
      * @param array<string, mixed> $data
+     * @param string[]             $tags
      */
-    private function makeTrace(array $data): TraceCreateObject
+    private function makeTrace(array $data, array $tags = []): TraceCreateObject
     {
         return new TraceCreateObject(
             traceId: 'trace-1',
             parentTraceId: null,
             type: 'log',
             status: TraceStatusEnum::Success->value,
-            tags: [],
+            tags: $tags,
             data: $data,
             duration: null,
             memory: null,

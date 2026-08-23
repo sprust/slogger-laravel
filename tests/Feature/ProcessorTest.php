@@ -70,7 +70,6 @@ class ProcessorTest extends BaseTestCase
             parentLoggedAt: Carbon::now()
         );
 
-        // both the create and the update push must run under paused tracing:
         // the push itself fires watchable events and must not be traced recursively
         self::assertSame([true, true], $fakeDispatcher->pausedStates);
         self::assertFalse($processor->isPaused());
@@ -84,8 +83,7 @@ class ProcessorTest extends BaseTestCase
 
         $processor->handleWithoutTracing(function () use ($processor, &$seen): void {
             $processor->handleWithoutTracing(static function (): void {
-                // a watcher error is reported from inside an already paused section:
-                // the reporting listener pauses again
+                // reported from inside an already paused section, which pauses again
             });
 
             // the inner call must not lift the pause the outer one holds
@@ -127,8 +125,7 @@ class ProcessorTest extends BaseTestCase
             throw new RuntimeException('watcher failed');
         });
 
-        // telemetry must not surface in the host application, least of all as an
-        // exception that replaces the watcher's original one
+        // telemetry must not surface in the host application at all
         self::assertNull($result);
     }
 
@@ -155,8 +152,7 @@ class ProcessorTest extends BaseTestCase
             customParentTraceId: null
         );
 
-        // the parent is stopped while the nested trace is still open: a queue worker
-        // fails a job from its timeout signal handler
+        // stopped with the nested trace still open, as a timeout handler does
         $processor->stop(
             traceId: $parentTraceId,
             status: TraceStatusEnum::Failed->value,
@@ -173,8 +169,7 @@ class ProcessorTest extends BaseTestCase
 
         self::assertCount(1, $updatedNested);
 
-        // an update replaces the data, so the interrupted trace keeps what it had
-        // collected on start and is marked by a tag instead
+        // an update replaces the data, so the tag is what marks it instead
         self::assertNull($updatedNested[0]->data);
 
         self::assertSame(
@@ -319,8 +314,7 @@ class ProcessorTest extends BaseTestCase
             customParentTraceId: null
         );
 
-        // an outbound request that never gets a response: the Guzzle handler throws
-        // synchronously, so the watcher is never told how it ended
+        // the Guzzle handler throws synchronously, so the watcher is never told
         $detachedTraceId = $processor->startAndGetDetachedTraceId(
             type: 'http-client',
             tags: ['https://example.test/alpha'],
@@ -376,8 +370,7 @@ class ProcessorTest extends BaseTestCase
             loggedAt: Carbon::now()
         );
 
-        // both are closed through the wrong method on purpose: a mismatch must not
-        // corrupt the stack or leave a trace open
+        // closed through the wrong method on purpose
         $processor->stop(
             traceId: $detachedTraceId,
             status: TraceStatusEnum::Success->value,
@@ -387,7 +380,7 @@ class ProcessorTest extends BaseTestCase
             parentLoggedAt: Carbon::now()
         );
 
-        $processor->stopDetached(
+        $processor->stop(
             traceId: $stackedTraceId,
             status: TraceStatusEnum::Success->value,
             tags: null,
@@ -421,15 +414,18 @@ class ProcessorTest extends BaseTestCase
         self::assertFalse($processor->isActive());
     }
 
-    public function testDetachedTracesWithoutAnOwnerAreClosedWhenWorkEnds(): void
+    /**
+     * A detached trace nobody will ever close by name: started with no trace around
+     * it, so no stop() can name its owner. Age is the only thing that reaches it, and
+     * the same sweep reaches a promise that never settles.
+     */
+    public function testADetachedTraceNobodyOwnsIsSweptOnceItIsOldEnough(): void
     {
         $processor  = $this->getApp()->make(Processor::class);
         $dispatcher = $this->getApp()->make(MemoryDispatcher::class);
 
         $dispatcher->flush();
 
-        // started before anything else: there is no parent trace to own it, so nothing
-        // else can ever reach it
         $orphanTraceId = $processor->startAndGetDetachedTraceId(
             type: 'http-client',
             tags: [],
@@ -437,7 +433,33 @@ class ProcessorTest extends BaseTestCase
             loggedAt: Carbon::now()
         );
 
-        $parentTraceId = $processor->startAndGetTraceId(
+        // a request still in flight is not an abandoned one
+        $this->runOneTrace($processor);
+
+        self::assertCount(0, $dispatcher->findUpdating(traceId: $orphanTraceId));
+
+        Carbon::setTestNow(Carbon::now()->addSeconds(Processor::DETACHED_TRACE_TTL_SECONDS + 1));
+
+        try {
+            $this->runOneTrace($processor);
+        } finally {
+            Carbon::setTestNow();
+        }
+
+        $updating = $dispatcher->findUpdating(
+            traceId: $orphanTraceId,
+            status: TraceStatusEnum::Failed
+        );
+
+        self::assertCount(1, $updating);
+        self::assertContains(Processor::INTERRUPTED_TAG, $updating[0]->tags ?? []);
+
+        self::assertFalse($processor->isActive());
+    }
+
+    private function runOneTrace(Processor $processor): void
+    {
+        $traceId = $processor->startAndGetTraceId(
             type: 'job',
             tags: [],
             data: [],
@@ -446,22 +468,12 @@ class ProcessorTest extends BaseTestCase
         );
 
         $processor->stop(
-            traceId: $parentTraceId,
+            traceId: $traceId,
             status: TraceStatusEnum::Success->value,
             tags: null,
             data: null,
             duration: null,
             parentLoggedAt: Carbon::now()
         );
-
-        self::assertCount(
-            1,
-            $dispatcher->findUpdating(
-                traceId: $orphanTraceId,
-                status: TraceStatusEnum::Failed
-            )
-        );
-
-        self::assertFalse($processor->isActive());
     }
 }

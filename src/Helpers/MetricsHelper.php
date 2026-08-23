@@ -4,22 +4,15 @@ namespace SLoggerLaravel\Helpers;
 
 class MetricsHelper
 {
-    /**
-     * `false` means "resolved, and there is no limit" - `null` means "not resolved
-     * yet". Without the distinction an unlimited `memory_limit` was re-parsed on
-     * every trace.
-     */
+    /** `false` means "no limit"; `null` means "not resolved yet". */
     private static null|false|float $memoryLimitInMb = null;
 
-    private static ?int $cpuCount = null;
+    /** `false` means "the machine will not say"; `null` means "not looked yet". */
+    private static null|false|int $cpuCount = null;
 
     /**
-     * Percentage of the configured memory limit currently in use, or null when there
-     * is no limit to measure against.
-     *
-     * Null rather than a made-up number: `memory_limit = -1` is the CLI default, and
-     * this package's own dispatcher runs there. Falling back to a hardcoded 128M used
-     * to report percentages above 100 for processes that had no limit at all.
+     * Null rather than a made-up number: `memory_limit = -1` is the CLI default, where
+     * this package's own dispatcher runs.
      */
     public static function getMemoryUsagePercent(): ?float
     {
@@ -35,22 +28,35 @@ class MetricsHelper
     }
 
     /**
-     * One-minute load average as a percentage of the machine's capacity.
+     * One-minute load average as a percentage of capacity - a raw load average is a
+     * queue length, not a percentage. Can exceed 100 on an overloaded machine.
      *
-     * Normalised by core count: a raw load average is a queue length, not a
-     * percentage, so the previous `loadavg * 10` meant nothing on any machine that
-     * did not happen to have ten cores. Can exceed 100 - that is what an overloaded
-     * machine looks like.
+     * Null when the core count cannot be read: assuming one core reported a
+     * comfortable load of 4 on an eight-core box as 400%.
      */
     public static function getCpuAvgPercent(): ?float
     {
+        $cpuCount = self::getCpuCount();
+
+        if ($cpuCount === false) {
+            return null;
+        }
+
         $cpuAvg = sys_getloadavg();
 
         if (!$cpuAvg) {
             return null;
         }
 
-        return round(($cpuAvg[0] / self::getCpuCount()) * 100, 2);
+        return self::normaliseCpuPercent($cpuAvg[0], $cpuCount);
+    }
+
+    /**
+     * One core fully busy is 100% on a one-core machine and 25% on four.
+     */
+    public static function normaliseCpuPercent(float $loadAverage, int $cpuCount): float
+    {
+        return round(($loadAverage / max(1, $cpuCount)) * 100, 2);
     }
 
     private static function getMemoryLimitInMb(): false|float
@@ -70,10 +76,8 @@ class MetricsHelper
      */
     private static function parseMemoryLimitInMb(string $memoryLimitIni): false|float
     {
-        // a shorthand suffix is optional and case-insensitive, and a plain byte count
-        // is just as valid - `memory_limit = 134217728` used to fall through to the
-        // hardcoded default
-        if (!preg_match('/^\s*(-?\d+)\s*([KMG]?)\s*$/i', $memoryLimitIni, $matches)) {
+        // a suffix is optional and case-insensitive, and a plain byte count is valid
+        if (!preg_match('/^\s*(-?\d+)/', $memoryLimitIni, $matches)) {
             return false;
         }
 
@@ -84,10 +88,13 @@ class MetricsHelper
             return false;
         }
 
-        // float, not int: `512K` is half a megabyte, and an int cast made it 0 - and
-        // then every trace died on a DivisionByZeroError, which the watcher firewall
-        // swallowed, taking the whole of tracing down quietly with it
-        return match (strtoupper($matches[2])) {
+        // the leading integer and the trailing unit, whatever sits between: PHP reads
+        // `1.5G` as one gigabyte and warns
+        $suffix = strtoupper(substr(rtrim($memoryLimitIni), -1));
+
+        // float, not int: `512K` is half a megabyte, and an int cast made it 0 - then
+        // every trace died on a DivisionByZeroError the firewall swallowed
+        return match ($suffix) {
             'G'     => $value * 1024,
             'M'     => $value,
             'K'     => $value / 1024,
@@ -95,7 +102,10 @@ class MetricsHelper
         };
     }
 
-    private static function getCpuCount(): int
+    /**
+     * `false` without procfs - every platform but Linux, and containers that hide it.
+     */
+    private static function getCpuCount(): false|int
     {
         if (!is_null(self::$cpuCount)) {
             return self::$cpuCount;
@@ -103,10 +113,12 @@ class MetricsHelper
 
         $cpuInfo = @file_get_contents('/proc/cpuinfo');
 
-        $count = $cpuInfo === false
-            ? 0
-            : preg_match_all('/^processor\s*:/mi', $cpuInfo);
+        if ($cpuInfo === false) {
+            return self::$cpuCount = false;
+        }
 
-        return self::$cpuCount = max(1, (int) $count);
+        $count = (int) preg_match_all('/^processor\s*:/mi', $cpuInfo);
+
+        return self::$cpuCount = $count > 0 ? $count : false;
     }
 }

@@ -45,15 +45,13 @@ class ProcessHelperTest extends BaseTestCase
 
         self::assertIsString($raw);
 
-        // this process was started with at least one argument, so its cmdline holds
-        // a NUL separator - which is the whole point of the test
+        // started with an argument, so its cmdline holds a NUL - the point of this
         self::assertStringContainsString("\0", $raw);
 
         $spaceSeparated = trim(str_replace("\0", ' ', $raw));
 
-        // /proc/<pid>/cmdline is NUL-separated; a saved command name is not. Without
-        // the substitution this never matched, and a master that died left workers
-        // that could be neither found nor stopped through the state file
+        // /proc/<pid>/cmdline is NUL-separated and a saved command name is not:
+        // without the substitution a dead master left unstoppable workers
         self::assertTrue($helper->isPidActive($pid, $spaceSeparated));
 
         self::assertFalse($helper->isPidActive($pid, $spaceSeparated . '-no-such-suffix'));
@@ -75,8 +73,8 @@ class ProcessHelperTest extends BaseTestCase
             static fn() => $helper->sendStopSignal($childPid)
         );
 
-        // posix_getpgid() of the dead pid returns false: previously that became
-        // posix_kill(-false, ...) === posix_kill(0, ...) and signalled our own group
+        // posix_getpgid() of a dead pid returns false, and posix_kill(-false) is
+        // posix_kill(0) - our own group
         self::assertSame(0, $received);
     }
 
@@ -95,13 +93,25 @@ class ProcessHelperTest extends BaseTestCase
                 static fn() => $helper->sendStopSignal($childPid)
             );
 
-            // the child shares our pgid: the group-kill branch must be skipped,
-            // only the child itself may be signaled
+            // the child shares our pgid, so the group-kill branch must be skipped
             self::assertSame(0, $received);
         } finally {
             proc_terminate($process, SIGKILL);
             proc_close($process);
         }
+    }
+
+    public function testSendStopSignalNeverSignalsTheCallerItself(): void
+    {
+        $helper = new ProcessHelper();
+
+        $received = $this->runWithStopSignalCounter(
+            static fn() => $helper->sendStopSignal($helper->getCurrentPid())
+        );
+
+        // a state file outliving its master names a pid the kernel may hand out
+        // again - to this process, whose command line matches the saved one
+        self::assertSame(0, $received);
     }
 
     /**

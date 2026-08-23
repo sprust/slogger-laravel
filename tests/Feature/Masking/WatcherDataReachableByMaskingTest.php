@@ -12,9 +12,8 @@ use SLoggerLaravel\Watchers\Children\CacheWatcher;
 use SLoggerLaravel\Watchers\Parents\JobWatcher;
 
 /**
- * The masker skips the top level of a trace's data, because that level belongs to the
- * watcher. A watcher that puts the application's own data there puts it out of reach:
- * these are the shapes that used to do exactly that.
+ * The masker skips the top level of a trace's data, so a watcher that puts the
+ * application's own data there puts it out of reach.
  */
 class WatcherDataReachableByMaskingTest extends BaseWatcherTestCase
 {
@@ -42,13 +41,13 @@ class WatcherDataReachableByMaskingTest extends BaseWatcherTestCase
         $masked = $this->mask($data);
 
         // the cache key is the only thing that says what the value is, so the value
-        // is nested under it and the key becomes part of the matched path
+        // is nested under it
         self::assertSame(
             MaskHelper::FULL_MASK,
             $masked['cache']['user:1:api_token']['value']
         );
 
-        // the key itself stays readable: it is an identifier, and it is already a tag
+        // the key stays readable: it is an identifier, and already a tag
         self::assertSame('user:1:api_token', $masked['key']);
     }
 
@@ -70,6 +69,41 @@ class WatcherDataReachableByMaskingTest extends BaseWatcherTestCase
         self::assertSame(
             'some-payload',
             $masked['cache']['orders:page:2']['value']
+        );
+    }
+
+    public function testACacheKeyIsMaskedInBothPositionsItAppears(): void
+    {
+        $this->registerWatcher(JobWatcher::class, null);
+        $this->registerWatcher(CacheWatcher::class, null);
+
+        dispatch(static function (): void {
+            Cache::put('otp:john.doe@example.com', '123456', 60);
+        });
+
+        $creating = $this->dispatcher->findCreating(type: 'cache', tag: 'set');
+
+        self::assertCount(1, $creating);
+
+        $masker = $this->getApp()->make(TraceDataMasker::class);
+
+        $masked = $masker->mask($creating[0]->data);
+        $tags   = $masker->maskTags($creating[0]->tags);
+
+        // as a value, as an array key and as a tag. Only the first was ever masked:
+        // no key names a key, and none names a tag
+        self::assertSame('otp:jo****************om', $masked['key']);
+        self::assertSame(['otp:jo****************om'], array_keys($masked['cache']));
+        self::assertSame(['set', 'otp:jo****************om'], $tags);
+    }
+
+    public function testAnAddressInAUrlTagIsMasked(): void
+    {
+        $masker = $this->getApp()->make(TraceDataMasker::class);
+
+        self::assertSame(
+            ['/users/jo****************om/orders'],
+            $masker->maskTags(['/users/john.doe@example.com/orders'])
         );
     }
 
@@ -98,6 +132,67 @@ class WatcherDataReachableByMaskingTest extends BaseWatcherTestCase
 
         // not a person: left readable
         self::assertSame('Welcome', $masked['message']['subject']);
+    }
+
+    public function testTheStructuralNamesOfAWatcherStayReadable(): void
+    {
+        // `name` was a shipped partial key, and a key list matches word components
+        // too, so every one of these came out mangled
+        $data = [
+            'job' => [
+                // JobWatcher::formatJobData()
+                'name' => 'App\\Jobs\\SendEmail',
+                'data' => [
+                    'queue_name' => 'emails',
+                ],
+            ],
+            // EventWatcher::formatListeners()
+            'listeners' => [
+                ['name' => 'App\\Listeners\\SendWelcomeMail', 'queued' => true],
+            ],
+            'files' => [
+                'avatar' => ['name' => 'photo.jpg', 'size' => 1024],
+            ],
+            // and the absurd shape: `name` names the value beside it
+            'settings' => [
+                ['name' => 'password', 'value' => 'hunter2'],
+            ],
+        ];
+
+        $masked = $this->mask($data);
+
+        self::assertSame('App\\Jobs\\SendEmail', $masked['job']['name']);
+        self::assertSame('emails', $masked['job']['data']['queue_name']);
+        self::assertSame('App\\Listeners\\SendWelcomeMail', $masked['listeners'][0]['name']);
+        self::assertSame('photo.jpg', $masked['files']['avatar']['name']);
+        self::assertSame('password', $masked['settings'][0]['name']);
+    }
+
+    public function testAPersonsNameIsStillMaskedWhereItIsSpeltOut(): void
+    {
+        $data = [
+            'context' => [
+                'first_name'  => 'Johnathan',
+                'last_name'   => 'Doelittle',
+                'middle_name' => 'Archibald',
+                'full_name'   => 'Johnathan Doelittle',
+                'username'    => 'johnathan',
+                'order_id'    => 42,
+            ],
+        ];
+
+        $masked = $this->mask($data);
+
+        foreach (['first_name', 'last_name', 'middle_name', 'full_name', 'username'] as $key) {
+            self::assertNotSame(
+                $data['context'][$key],
+                $masked['context'][$key],
+                "$key was shipped as it is"
+            );
+        }
+
+        // still an identifier, not a person
+        self::assertSame(42, $masked['context']['order_id']);
     }
 
     /**

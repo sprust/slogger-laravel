@@ -16,7 +16,6 @@ class HttpMiddleware
 
     private ?TraceIdContainer $traceIdContainer = null;
 
-    private ?string $traceId                = null;
     private ?string $headerParentTraceIdKey = null;
 
     public function __construct(GeneralConfig $config)
@@ -42,8 +41,6 @@ class HttpMiddleware
                         : (is_string($parentTraceId) ? $parentTraceId : null)
                 )
             );
-
-            $this->traceId = $this->getLoggerTraceIdContainer()->getParentTraceId();
         }
 
         $response = $next($request);
@@ -61,7 +58,7 @@ class HttpMiddleware
      */
     private function setTraceIdHeader(Response $response): void
     {
-        if (!$this->enabled || is_null($this->traceId)) {
+        if (!$this->enabled) {
             return;
         }
 
@@ -71,7 +68,16 @@ class HttpMiddleware
             return;
         }
 
-        $response->headers->set($headerParentTraceIdKey, $this->traceId);
+        // read it now rather than remembering it from before $next(): the middleware
+        // is a singleton, and a remembered id would belong to whichever request wrote
+        // it last
+        $traceId = $this->getTraceIdContainer()->getParentTraceId();
+
+        if (is_null($traceId)) {
+            return;
+        }
+
+        $response->headers->set($headerParentTraceIdKey, $traceId);
     }
 
     private function getHeaderParentTraceIdKey(): ?string
@@ -79,7 +85,7 @@ class HttpMiddleware
         return $this->headerParentTraceIdKey ??= app(WatchersConfig::class)->requestsHeaderParentTraceIdKey();
     }
 
-    private function getLoggerTraceIdContainer(): TraceIdContainer
+    private function getTraceIdContainer(): TraceIdContainer
     {
         return $this->traceIdContainer ??= app(TraceIdContainer::class);
     }

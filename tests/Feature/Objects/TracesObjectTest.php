@@ -28,7 +28,7 @@ class TracesObjectTest extends BaseTestCase
         self::assertSame(2, $traces->count());
     }
 
-    public function testIteratorsReturnItemsAndClearInternalState(): void
+    public function testIteratingABatchDoesNotConsumeIt(): void
     {
         $createTrace = $this->makeCreateTrace(['key' => 'create']);
         $updateTrace = $this->makeUpdateTrace(['key' => 'update']);
@@ -39,7 +39,17 @@ class TracesObjectTest extends BaseTestCase
 
         self::assertSame([$createTrace], iterator_to_array($traces->iterateCreating()));
         self::assertSame([$updateTrace], iterator_to_array($traces->iterateUpdating()));
-        self::assertSame(0, $traces->count());
+
+        // the iterators used to array_shift() their way through: the masker walked
+        // the batch and handed the sender an empty one, and count() - the drop
+        // statistics - reported zero for a batch that had just been serialised
+        self::assertSame([$createTrace], iterator_to_array($traces->iterateCreating()));
+        self::assertSame([$updateTrace], iterator_to_array($traces->iterateUpdating()));
+        self::assertSame(2, $traces->count());
+
+        $traces->toJson();
+
+        self::assertSame(2, $traces->count());
     }
 
     /**

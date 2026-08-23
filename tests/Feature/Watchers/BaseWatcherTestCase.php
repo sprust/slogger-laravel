@@ -10,6 +10,7 @@ use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Support\Facades\Artisan;
 use SLoggerLaravel\Dispatcher\Items\Memory\MemoryDispatcher;
 use SLoggerLaravel\Processor;
+use SLoggerLaravel\State;
 use SLoggerLaravel\Tests\Feature\BaseTestCase;
 use SLoggerLaravel\Watchers\WatcherInterface;
 use Symfony\Component\Console\Input\ArrayInput;
@@ -36,12 +37,22 @@ abstract class BaseWatcherTestCase extends BaseTestCase
     }
 
     /**
+     * What ServiceProvider::registerWatchers() does for one entry of the config.
+     *
      * @param class-string<WatcherInterface> $watcherClass
      * @param array<string, mixed>|null      $config
+     *
+     * @throws BindingResolutionException
      */
     protected function registerWatcher(string $watcherClass, ?array $config): void
     {
-        $this->processor->registerWatcher($watcherClass, $config);
+        $watcher = $this->getApp()->make($watcherClass);
+
+        $this->getApp()->instance($watcherClass, $watcher);
+
+        $watcher->register($config);
+
+        $this->getApp()->make(State::class)->addEnabledWatcher($watcherClass);
     }
 
     protected function artisanCall(string $command): int

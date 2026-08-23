@@ -35,13 +35,16 @@ class JobWatcher implements WatcherInterface
     ];
 
     /**
-     * @var array<array{trace_id: string, started_at: Carbon}>
-     */
-    protected array $jobs = [];
-    /**
      * @var class-string[]
      */
     protected array $exceptedJobs = self::ALWAYS_EXCEPTED_JOBS;
+
+    /**
+     * Jobs being processed, by the uuid their payload carries.
+     *
+     * @var array<string, array{trace_id: string, started_at: Carbon}>
+     */
+    protected array $jobs = [];
 
     public function __construct(
         protected readonly Processor $processor,
@@ -51,6 +54,17 @@ class JobWatcher implements WatcherInterface
 
     public function register(?array $config): void
     {
+        // a job killed by the timeout signal has its trace closed by the sweep and
+        // never comes back here; without this the entry outlives the worker
+        $this->processor->onTraceInterrupted(
+            function (string $traceId): void {
+                $this->jobs = array_filter(
+                    $this->jobs,
+                    static fn(array $job): bool => $job['trace_id'] !== $traceId
+                );
+            }
+        );
+
         $this->exceptedJobs = array_values(
             array_unique(
                 array_merge(
@@ -201,8 +215,8 @@ class JobWatcher implements WatcherInterface
             return;
         }
 
-        // forget the job before stopping: a worker can report the same job twice,
-        // e.g. the timeout signal handler fails a job that has just been processed
+        // forgotten before the trace is stopped: a worker can report the same job
+        // twice - the timeout handler fails one that has just been processed
         unset($this->jobs[$uuid]);
 
         $data = [
