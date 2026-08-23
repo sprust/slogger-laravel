@@ -10,41 +10,43 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use SLoggerLaravel\Configs\MaskingConfig;
 use SLoggerLaravel\Enums\TraceStatusEnum;
+use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Helpers\TraceDataMasker;
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Tests\Feature\Watchers\Children\BaseChildWatcherTestCase;
 use SLoggerLaravel\Watchers\Children\DatabaseWatcher;
-use SLoggerLaravel\Watchers\Parents\JobWatcher;
 
 class DatabaseWatcherTest extends BaseChildWatcherTestCase
 {
     /**
-     * Bindings are positional, so nothing says which is a password and which a page
-     * number - and length is no signal either: a PIN is short and numeric.
+     * Bindings are positional, so no key list can reach them: length is what decides,
+     * and anything not worth reading travels as it was.
      */
-    public function testBindingsAreNotRecordedWhileMaskingIsOn(): void
+    public function testStringBindingsAreMaskedOnceTheyAreLongEnoughToRead(): void
     {
-        $this->registerWatcher(JobWatcher::class, null);
+        $data = $this->recordQuery(['plain-value', 'short', 4321, 12.5, null, true]);
 
-        dispatch(static function (): void {
-            DB::select('SELECT ? as pin, ? as otp', ['0000', 4321]);
-        });
-
-        $creating = $this->dispatcher->findCreating(type: 'database');
-
-        self::assertCount(1, $creating);
-
-        $data = $creating[0]->data;
-
-        // masking each left a list of `********` and `0` as long as the query has
-        // placeholders: no information, and work paid for on every query
-        self::assertArrayNotHasKey('bindings', $data);
-        self::assertSame(2, $data['bindings_count']);
-
-        self::assertStringNotContainsString('0000', json_encode($data, JSON_THROW_ON_ERROR));
+        self::assertSame(
+            [MaskHelper::FULL_MASK, 'short', 4321, 12.5, null, true],
+            $data['bindings']
+        );
     }
 
-    public function testBindingsAreRecordedWhenMaskingIsOff(): void
+    public function testNestedBindingsAreWalked(): void
+    {
+        $data = $this->recordQuery([['deep-secret', 'ok'], ['key' => 'another-secret']]);
+
+        self::assertSame(
+            [[MaskHelper::FULL_MASK, 'ok'], ['key' => MaskHelper::FULL_MASK]],
+            $data['bindings']
+        );
+    }
+
+    /**
+     * Not the global masking switch: this happens in the application, and the key
+     * lists the dispatcher job works from never see a binding.
+     */
+    public function testBindingsAreMaskedEvenWithMaskingOff(): void
     {
         $this->getApp()['config']->set('slogger.masking', [
             'full_keys'      => [],
@@ -52,43 +54,11 @@ class DatabaseWatcherTest extends BaseChildWatcherTestCase
             'value_patterns' => [],
         ]);
 
-        $masker = new TraceDataMasker(new MaskingConfig());
+        self::assertFalse((new TraceDataMasker(new MaskingConfig()))->isEnabled());
 
-        self::assertFalse($masker->isEnabled());
+        $data = $this->recordQuery(['plain-value']);
 
-        // the same switch as everything else: with masking off, a trace carries what
-        // the application actually ran
-        $watcher = new DatabaseWatcher($this->processor, $masker);
-
-        $traceId = $this->processor->startAndGetTraceId(
-            type: 'job',
-            tags: [],
-            data: [],
-            loggedAt: Carbon::now(),
-            customParentTraceId: null,
-        );
-
-        $watcher->handleQueryExecuted(
-            new QueryExecuted('SELECT ? as value', ['plain-value'], 1.0, DB::connection())
-        );
-
-        $this->processor->stop(
-            traceId: $traceId,
-            status: TraceStatusEnum::Success->value,
-            tags: null,
-            data: null,
-            duration: 1.0,
-            parentLoggedAt: Carbon::now(),
-        );
-
-        $creating = $this->dispatcher->findCreating(type: 'database');
-
-        self::assertCount(1, $creating);
-
-        $data = $creating[0]->data;
-
-        self::assertSame(['plain-value'], $data['bindings']);
-        self::assertArrayNotHasKey('bindings_count', $data);
+        self::assertSame([MaskHelper::FULL_MASK], $data['bindings']);
     }
 
     protected function getTraceType(): string
@@ -113,9 +83,48 @@ class DatabaseWatcherTest extends BaseChildWatcherTestCase
         $data = $creatingTrace->data;
 
         self::assertSame('SELECT 1', $data['sql']);
-        self::assertSame(0, $data['bindings_count']);
+        self::assertSame([], $data['bindings']);
         self::assertSame('sqlite', $data['connection']);
 
         self::assertSame(['sqlite', 'SELECT 1'], $creatingTrace->tags);
+    }
+
+    /**
+     * @param array<int|string, mixed> $bindings
+     *
+     * @return array<string, mixed>
+     */
+    private function recordQuery(array $bindings): array
+    {
+        $watcher = new DatabaseWatcher($this->processor);
+
+        $connection = DB::connection();
+
+        $traceId = $this->processor->startAndGetTraceId(
+            type: 'job',
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now(),
+            customParentTraceId: null,
+        );
+
+        $watcher->handleQueryExecuted(
+            new QueryExecuted('SELECT ? as value', $bindings, 1.0, $connection)
+        );
+
+        $this->processor->stop(
+            traceId: $traceId,
+            status: TraceStatusEnum::Success->value,
+            tags: null,
+            data: null,
+            duration: 1.0,
+            parentLoggedAt: Carbon::now(),
+        );
+
+        $creating = $this->dispatcher->findCreating(type: 'database');
+
+        self::assertCount(1, $creating);
+
+        return $creating[0]->data;
     }
 }

@@ -45,7 +45,7 @@ class MaskingConfig
     {
         $configured = config("slogger.masking.$name");
 
-        if (is_null($configured)) {
+        if (!is_array($configured) && !is_string($configured)) {
             return [];
         }
 

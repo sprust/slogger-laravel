@@ -249,7 +249,8 @@ Watcher data highlights:
 - `notification`: notifiable, channel, queued, `recipients`, response
 - `cache`: type, key, and `cache.<key>` (value, tags, expiration). A value too long for
   the masker to read is recorded as `__skipped` instead
-- `db`: query, how many bindings it had (`bindings_count`), time. The bindings themselves only with masking turned off entirely
+- `db`: query, bindings, time. The watcher masks a binding itself, by length: a string
+  longer than five characters becomes `********`, a shorter or numeric one is kept
 - `http-client`: method, url, query/query_string, request/response (concurrent requests are traced independently, so `Http::pool()` works)
 - `schedule`: command, description, cron, output (read up to the masker's limit)
 - `dump`, `log`, `gate`: dump/message/ability info
@@ -383,9 +384,12 @@ dispatcher workers instead. Two consequences follow:
 Watchers do not mask. What they do at runtime is hide and truncate: `only_paths`,
 `excepted_paths`, `hidden_paths`, `max_content_length`, per-watcher `excepted` lists.
 The one exception is the database watcher: query bindings are positional, so no key list
-can reach them, and with masking on it records only how many there were. All of them,
-whatever their type or length - nothing in a binding says whether it is a password or a
-page number, and a PIN, an OTP and an account number are all short and numeric.
+can reach them and the dispatcher job has nothing to decide by. It masks them itself, by
+length - a string of more than five characters becomes `********`, a shorter one and a
+numeric binding are recorded as they were. Nothing in a binding says whether it is a
+password or a page number, so a short or numeric secret - a PIN, an OTP, a card number
+held as an integer - does reach the receiver. Do not keep those in cleartext columns, or
+turn the watcher off.
 
 ### The key lists
 
@@ -517,9 +521,9 @@ that needs the parent to be one level in, since the top level is not matched at 
 (see below). A key in both lists is masked whole: the stricter list wins.
 
 Masking is off only when all three lists (`value_patterns` included) are empty. That
-switch governs the database watcher's bindings too: with masking on it records
-`bindings_count` and not the values, because a binding is positional and no key list
-can say which one is a password.
+switch does not reach the database watcher's bindings: they are positional, no key list
+can say which one is a password, so the watcher masks them itself, by length, whatever
+these lists hold.
 
 The split is the point. A secret is worthless the moment any of it leaks, so
 `masking.full_keys` replaces the value entirely: `********`, a fixed width, so the length of
@@ -605,7 +609,7 @@ together - `recipient` in `partial_keys` catches a phone number under
 
 **The top level of a trace's `data` is never masked.** That level belongs to the
 watcher, not to the application: `connection_name`, `request`, `changes`, `context`,
-`bindings_count` and so on are a fixed structure, and the traced data starts one level in.
+`bindings` and so on are a fixed structure, and the traced data starts one level in.
 Matching therefore begins inside it - `context.customer_email` and
 `job.data.customer_email` are masked, while `connection_name` is left readable even
 though it contains `_name`. Watchers whose own top level used to hold application data
@@ -629,7 +633,7 @@ matching:
 | `log.message` | whatever was logged |
 | `dump.dump` | whatever was dumped - `dd($user->api_token)` is exactly this |
 | `schedule.output` | the scheduled command's stdout |
-| `db.sql`, and the sql fragment in a `db` trace's tags | the statement, though its values travel as bindings, which are not recorded at all while masking is on |
+| `db.sql`, and the sql fragment in a `db` trace's tags | the statement, though its values travel as bindings, which the watcher masks by length |
 
 For those, the controls are the watcher's own: turn the watcher off, or keep secrets
 out of what you log and dump. A trace's **tags** are in the same position - bare

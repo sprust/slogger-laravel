@@ -35,10 +35,6 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
      */
     public function register(): void
     {
-        // the only fallback there is: without it an installation that never ran
-        // `vendor:publish` reads every setting as null and silently does nothing
-        $this->mergeConfigFrom(__DIR__ . '/../config/slogger.php', 'slogger');
-
         $this->app->singleton(GeneralConfig::class);
 
         if (!$this->app->make(GeneralConfig::class)->isEnabled()) {
@@ -97,15 +93,6 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
 
         $this->registerListeners();
         $this->registerWatchers();
-
-        $this->publishes(
-            paths: [
-                __DIR__ . '/../config/slogger.php' => config_path('slogger.php'),
-            ],
-            groups: [
-                'slogger-laravel',
-            ]
-        );
     }
 
     /**
@@ -163,5 +150,14 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
             StartDispatcherCommand::class,
             StopDispatcherCommand::class,
         ]);
+
+        $this->publishes(
+            paths: [
+                __DIR__ . '/../config/slogger.php' => config_path('slogger.php'),
+            ],
+            groups: [
+                'slogger-laravel',
+            ]
+        );
     }
 }

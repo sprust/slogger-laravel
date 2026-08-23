@@ -6,7 +6,7 @@ use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Str;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
-use SLoggerLaravel\Helpers\TraceDataMasker;
+use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Helpers\TraceHelper;
 use SLoggerLaravel\Processor;
 use SLoggerLaravel\Watchers\WatcherInterface;
@@ -15,7 +15,6 @@ readonly class DatabaseWatcher implements WatcherInterface
 {
     public function __construct(
         protected Processor $processor,
-        protected TraceDataMasker $masker,
     ) {
     }
 
@@ -29,7 +28,7 @@ readonly class DatabaseWatcher implements WatcherInterface
         $data = [
             'connection' => $event->connectionName,
             'sql'        => Str::substr($event->sql, 0, 10000),
-            ...$this->describeBindings($event->bindings),
+            'bindings'   => $this->maskBindings($event->bindings),
         ];
 
         $this->processor->push(
@@ -45,14 +44,33 @@ readonly class DatabaseWatcher implements WatcherInterface
     }
 
     /**
-     * @param array<int|string, mixed> $bindings
-     *
-     * @return array<string, mixed>
+     * Positional, so no key list can reach them: length is the only signal there is. A
+     * short or numeric binding is kept as it was - a PIN or an OTP is not covered here.
      */
-    protected function describeBindings(array $bindings): array
+    protected function maskBindings(mixed $bindings): mixed
     {
-        return $this->masker->isEnabled()
-            ? ['bindings_count' => count($bindings)]
-            : ['bindings' => $bindings];
+        if (is_string($bindings)) {
+            if (Str::length($bindings) > 5) {
+                return MaskHelper::maskValue($bindings);
+            }
+
+            return $bindings;
+        }
+
+        if (is_numeric($bindings)) {
+            return $bindings;
+        }
+
+        if (is_array($bindings)) {
+            $arrayValue = [];
+
+            foreach ($bindings as $valueKey => $valueValue) {
+                $arrayValue[$valueKey] = $this->maskBindings($valueValue);
+            }
+
+            return $arrayValue;
+        }
+
+        return $bindings;
     }
 }

@@ -39,6 +39,10 @@ readonly class CacheWatcher implements WatcherInterface
 
     public function handleCacheHit(CacheHit $event): void
     {
+        if ($this->shouldIgnore($event->key)) {
+            return;
+        }
+
         $this->pushCache(
             type: 'hit',
             key: $event->key,
@@ -51,6 +55,10 @@ readonly class CacheWatcher implements WatcherInterface
 
     public function handleCacheMissed(CacheMissed $event): void
     {
+        if ($this->shouldIgnore($event->key)) {
+            return;
+        }
+
         $this->pushCache(
             type: 'missed',
             key: $event->key,
@@ -62,6 +70,10 @@ readonly class CacheWatcher implements WatcherInterface
 
     public function handleKeyWritten(KeyWritten $event): void
     {
+        if ($this->shouldIgnore($event->key)) {
+            return;
+        }
+
         $this->pushCache(
             type: 'set',
             key: $event->key,
@@ -75,6 +87,10 @@ readonly class CacheWatcher implements WatcherInterface
 
     public function handleKeyForgotten(KeyForgotten $event): void
     {
+        if ($this->shouldIgnore($event->key)) {
+            return;
+        }
+
         $this->pushCache(type: 'forget', key: $event->key);
     }
 
@@ -85,10 +101,6 @@ readonly class CacheWatcher implements WatcherInterface
      */
     protected function pushCache(string $type, string $key, ?array $entry = null): void
     {
-        if ($this->shouldIgnore($key)) {
-            return;
-        }
-
         $data = [
             'type' => $type,
             'key'  => $key,
