@@ -136,6 +136,69 @@ class WatcherDataReachableByMaskingTest extends BaseWatcherTestCase
         self::assertSame('Welcome', $masked['message']['subject']);
     }
 
+    public function testTheStructuralNamesOfAWatcherStayReadable(): void
+    {
+        // `name` was a shipped partial key, and a key list matches word components
+        // too - so every one of these came out of the masker mangled, and a trace
+        // that cannot be read is not worth collecting
+        $data = [
+            'job' => [
+                // JobWatcher::formatJobData()
+                'name' => 'App\\Jobs\\SendEmail',
+                'data' => [
+                    'queue_name' => 'emails',
+                ],
+            ],
+            // EventWatcher::formatListeners()
+            'listeners' => [
+                ['name' => 'App\\Listeners\\SendWelcomeMail', 'queued' => true],
+            ],
+            'files' => [
+                'avatar' => ['name' => 'photo.jpg', 'size' => 1024],
+            ],
+            // and the shape that made it absurd: here `name` names the value beside
+            // it rather than being one
+            'settings' => [
+                ['name' => 'password', 'value' => 'hunter2'],
+            ],
+        ];
+
+        $masked = $this->mask($data);
+
+        self::assertSame('App\\Jobs\\SendEmail', $masked['job']['name']);
+        self::assertSame('emails', $masked['job']['data']['queue_name']);
+        self::assertSame('App\\Listeners\\SendWelcomeMail', $masked['listeners'][0]['name']);
+        self::assertSame('photo.jpg', $masked['files']['avatar']['name']);
+        self::assertSame('password', $masked['settings'][0]['name']);
+    }
+
+    public function testAPersonsNameIsStillMaskedWhereItIsSpeltOut(): void
+    {
+        $data = [
+            'context' => [
+                'first_name'  => 'Johnathan',
+                'last_name'   => 'Doelittle',
+                'middle_name' => 'Archibald',
+                'full_name'   => 'Johnathan Doelittle',
+                'username'    => 'johnathan',
+                'order_id'    => 42,
+            ],
+        ];
+
+        $masked = $this->mask($data);
+
+        foreach (['first_name', 'last_name', 'middle_name', 'full_name', 'username'] as $key) {
+            self::assertNotSame(
+                $data['context'][$key],
+                $masked['context'][$key],
+                "$key was shipped as it is"
+            );
+        }
+
+        // still an identifier, not a person
+        self::assertSame(42, $masked['context']['order_id']);
+    }
+
     /**
      * @param array<string, mixed> $data
      *

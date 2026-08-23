@@ -19,12 +19,13 @@ use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Events\RequestHandling;
 use SLoggerLaravel\Helpers\BodyDecoder;
+use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Helpers\TraceHelper;
 use SLoggerLaravel\Middleware\HttpMiddleware;
 use SLoggerLaravel\Processor;
-use SLoggerLaravel\Traces\TraceScopeResolverInterface;
 use SLoggerLaravel\RequestPreparer\RequestDataFormatter;
 use SLoggerLaravel\RequestPreparer\RequestDataFormatters;
+use SLoggerLaravel\Watchers\OpenTraces;
 use SLoggerLaravel\Watchers\WatcherInterface;
 use Symfony\Component\HttpFoundation\RedirectResponse;
 use Symfony\Component\HttpFoundation\Response;
@@ -62,26 +63,28 @@ class RequestWatcher implements WatcherInterface
 
     protected RequestDataFormatters $formatters;
 
-    protected int $maxResponseBytes = 1048576;
+    protected int $maxResponseBytes = MaskHelper::MAX_READABLE_BYTES;
 
-    protected int $maxRequestBytes = 1048576;
+    protected int $maxRequestBytes = MaskHelper::MAX_READABLE_BYTES;
+
+    protected OpenTraces $openRequests;
 
     public function __construct(
         protected readonly Application $app,
         protected readonly Processor $processor,
-        protected readonly TraceScopeResolverInterface $scopeResolver,
     ) {
-        $this->formatters = new RequestDataFormatters();
+        $this->formatters   = new RequestDataFormatters();
+        $this->openRequests = new OpenTraces();
     }
 
     public function register(?array $config): void
     {
         // a trace closed by the sweep never comes back here, so its entry would sit
-        // in the stack and be popped by the next finish - which would then close the
+        // in the map and be taken by the next finish - which would then close the
         // wrong trace and leave its own open
         $this->processor->onTraceInterrupted(
             function (string $traceId): void {
-                $this->scopeResolver->current()->forgetWatcherItemsFor($this, $traceId);
+                $this->openRequests->forget($traceId);
             }
         );
 
@@ -136,13 +139,9 @@ class RequestWatcher implements WatcherInterface
             customParentTraceId: $parentTraceId
         );
 
-        // the open requests live in the trace scope, not on the watcher: under a
-        // concurrent runtime every request is its own coroutine, and two of them
-        // sharing one stack would pop each other's entries
-        $this->scopeResolver->current()->pushWatcherItem(
-            $this,
+        $this->openRequests->open(
+            $traceId,
             [
-                'trace_id'   => $traceId,
                 'boot_time'  => $bootTime,
                 'started_at' => $startedAt,
                 'logged_at'  => $loggedAt,
@@ -161,7 +160,7 @@ class RequestWatcher implements WatcherInterface
         }
 
         /** @var array{trace_id: string, boot_time: float, started_at: Carbon, logged_at: Carbon}|null $requestData */
-        $requestData = $this->scopeResolver->current()->popWatcherItem($this);
+        $requestData = $this->openRequests->takeInnermost();
 
         if (!$requestData) {
             return;
@@ -656,7 +655,7 @@ class RequestWatcher implements WatcherInterface
 
         $length = $request->headers->get('Content-Length');
 
-        if (is_numeric($length) && (int) $length > $this->maxResponseBytes) {
+        if (is_numeric($length) && (int) $length > $this->maxRequestBytes) {
             return [
                 '__skipped' => 'request_too_large',
             ];
@@ -664,7 +663,7 @@ class RequestWatcher implements WatcherInterface
 
         $content = $request->getContent();
 
-        if (strlen($content) > $this->maxResponseBytes) {
+        if (strlen($content) > $this->maxRequestBytes) {
             // Content-Length is absent on a chunked request, so the cap has to be
             // re-checked against what was actually read
             return [

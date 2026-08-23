@@ -4,13 +4,10 @@ namespace SLoggerLaravel;
 
 use Closure;
 use Illuminate\Contracts\Events\Dispatcher;
-use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\Carbon;
-use LogicException;
 use SLoggerLaravel\Dispatcher\Items\TraceDispatcherInterface;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Events\WatcherErrorEvent;
-use SLoggerLaravel\Helpers\DataFormatter;
 use SLoggerLaravel\Helpers\MetricsHelper;
 use SLoggerLaravel\Helpers\TraceDataComplementer;
 use SLoggerLaravel\Helpers\TraceHelper;
@@ -18,10 +15,8 @@ use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
 use SLoggerLaravel\Profiling\AbstractProfiling;
 use SLoggerLaravel\Profiling\Dto\ProfilingObjects;
-use SLoggerLaravel\Traces\TraceIdContainer;
 use SLoggerLaravel\Traces\TraceScope;
 use SLoggerLaravel\Traces\TraceScopeResolverInterface;
-use SLoggerLaravel\Watchers\WatcherInterface;
 use Throwable;
 
 class Processor
@@ -32,9 +27,8 @@ class Processor
     public const INTERRUPTED_TAG = '__interrupted';
 
     /**
-     * After this, an ownerless detached trace is swept by whoever notices it, not
-     * only by the unit of work that started it. Long enough that a request still in
-     * flight is never taken for an abandoned one.
+     * After this, an open detached trace is swept by whoever notices it. Long enough
+     * that a request still in flight is never taken for an abandoned one.
      */
     public const DETACHED_TRACE_TTL_SECONDS = 300;
 
@@ -49,7 +43,7 @@ class Processor
      * the sender to sweep a request that in fact succeeded. The trace id is unique,
      * so one map is enough; who owns what is recorded in `owner_trace_id`.
      *
-     * @var array<string, array{owner_trace_id: string|null, owner_scope_id: int, tags: string[], logged_at: Carbon}>
+     * @var array<string, array{owner_trace_id: string|null, tags: string[], logged_at: Carbon}>
      */
     private array $detachedTraces = [];
 
@@ -62,11 +56,8 @@ class Processor
     private array $traceInterruptedListeners = [];
 
     public function __construct(
-        private readonly Application $app,
-        private readonly State $state,
         private readonly Dispatcher $dispatcher,
         private readonly TraceDispatcherInterface $traceDispatcher,
-        private readonly TraceIdContainer $traceIdContainer,
         private readonly AbstractProfiling $profiler,
         private readonly TraceDataComplementer $traceDataComplementer,
         private readonly TraceScopeResolverInterface $scopeResolver
@@ -95,24 +86,22 @@ class Processor
     }
 
     /**
-     * @param class-string<WatcherInterface> $watcherClass
-     * @param array<string, mixed>|null      $config
+     * Where a trace started right now would hang from.
+     *
+     * Read by whatever has to carry that id somewhere else - an outbound header, a
+     * queued job's payload - so a trace started over there joins this tree.
      */
-    public function registerWatcher(string $watcherClass, ?array $config): void
+    public function currentParentTraceId(): ?string
     {
-        /** @var WatcherInterface $watcher */
-        $watcher = $this->app->make($watcherClass);
-
-        $watcher->register($config);
-
-        $this->state->addEnabledWatcher($watcherClass);
+        return $this->scope()->parentTraceId;
     }
 
     /**
      * @param Closure(string): void $listener
      *
-     * @see stopInterruptedDetached()
      * @see stopInterruptedNested()
+     * @see stopInterruptedDetached()
+     * @see sweepExpiredDetached()
      */
     public function onTraceInterrupted(Closure $listener): void
     {
@@ -157,6 +146,13 @@ class Processor
     }
 
     /**
+     * Runs something the watchers must not see.
+     *
+     * The application's own untraceable work goes through here, and so does the
+     * dispatcher's: pushing a trace can itself fire watchable events - the queue
+     * payload INSERT with the database driver, JobQueued with only_events - and a
+     * trace of the tracing is how a storm starts.
+     *
      * @throws Throwable
      */
     public function handleWithoutTracing(Closure $callback): mixed
@@ -180,62 +176,6 @@ class Processor
     /**
      * @param string[]             $tags
      * @param array<string, mixed> $data
-     *
-     * @throws Throwable
-     */
-    public function handleSeparateTracing(
-        Closure $callback,
-        string $type,
-        array $tags,
-        array $data,
-        ?string $customParentTraceId,
-        Carbon $loggedAt,
-    ): mixed {
-        $traceId = $this->startAndGetTraceId(
-            type: $type,
-            tags: $tags,
-            data: $data,
-            loggedAt: $loggedAt,
-            customParentTraceId: $customParentTraceId,
-        );
-
-        $startedAt = Carbon::now();
-
-        $exception = null;
-
-        $dataChanged = false;
-
-        try {
-            $result = $this->app->call($callback);
-        } catch (Throwable $exception) {
-            $result = null;
-
-            $data['exception'] = DataFormatter::exception($exception);
-
-            $dataChanged = true;
-        }
-
-        $this->stop(
-            traceId: $traceId,
-            status: $exception
-                ? TraceStatusEnum::Failed->value
-                : TraceStatusEnum::Success->value,
-            tags: null,
-            data: $dataChanged ? $data : null,
-            duration: TraceHelper::calcDuration($startedAt),
-            parentLoggedAt: $loggedAt,
-        );
-
-        if ($exception) {
-            throw $exception;
-        }
-
-        return $result;
-    }
-
-    /**
-     * @param string[]             $tags
-     * @param array<string, mixed> $data
      */
     public function startAndGetTraceId(
         string $type,
@@ -244,7 +184,9 @@ class Processor
         Carbon $loggedAt,
         ?string $customParentTraceId
     ): string {
-        $parentTraceId = $this->traceIdContainer->getParentTraceId();
+        $scope = $this->scope();
+
+        $parentTraceId = $scope->parentTraceId;
 
         $traceId = $this->dispatchStartTrace(
             type: $type,
@@ -254,14 +196,14 @@ class Processor
             parentTraceId: $customParentTraceId ?? $parentTraceId,
         );
 
-        $this->scope()->tracesStack[] = [
+        $scope->tracesStack[] = [
             'trace_id'            => $traceId,
             'pre_parent_trace_id' => $parentTraceId,
             'tags'                => $tags,
             'logged_at'           => $loggedAt->clone(),
         ];
 
-        $this->traceIdContainer->setParentTraceId($traceId);
+        $scope->parentTraceId = $traceId;
 
         // after the id exists: the profile belongs to this trace, and a nested one
         // started later must not walk off with it
@@ -271,10 +213,10 @@ class Processor
     }
 
     /**
-     * Starts a parent trace that is kept off the trace stack and is closed by
-     * stopDetached(), in any order relative to the other traces. Outbound HTTP
-     * requests need this: `Http::pool()` keeps several of them in flight at once,
-     * so they neither nest into each other nor finish in the order they started.
+     * Starts a parent trace that is kept off the trace stack and is closed by stop()
+     * in any order relative to the other traces. Outbound HTTP requests need this:
+     * `Http::pool()` keeps several of them in flight at once, so they neither nest
+     * into each other nor finish in the order they started.
      *
      * @param string[]             $tags
      * @param array<string, mixed> $data
@@ -286,7 +228,7 @@ class Processor
         Carbon $loggedAt,
         ?string $customParentTraceId = null
     ): string {
-        $ownerTraceId = $customParentTraceId ?? $this->traceIdContainer->getParentTraceId();
+        $ownerTraceId = $customParentTraceId ?? $this->scope()->parentTraceId;
 
         $traceId = $this->dispatchStartTrace(
             type: $type,
@@ -298,9 +240,6 @@ class Processor
 
         $this->detachedTraces[$traceId] = [
             'owner_trace_id' => $ownerTraceId,
-            // which unit of work started it, so an ownerless one is swept by that
-            // unit and not by whichever other one happens to finish first
-            'owner_scope_id' => $this->scope()->ownerId,
             'tags'           => $tags,
             'logged_at'      => $loggedAt->clone(),
         ];
@@ -325,22 +264,12 @@ class Processor
             return;
         }
 
-        $traceId = TraceHelper::makeTraceId();
-
-        $parentTraceId = $this->traceIdContainer->getParentTraceId()
-            // when a parent is in excluded
-            ?? $this->traceIdContainer->getPreParentTraceId();
-
-        if (!$canBeOrphan && !$parentTraceId) {
-            throw new LogicException("Parent trace id has not found for $type.");
-        }
-
         $this->traceDataComplementer->inject($data);
 
         $this->dispatchPushTrace(
             new TraceCreateObject(
-                traceId: $traceId,
-                parentTraceId: $parentTraceId,
+                traceId: TraceHelper::makeTraceId(),
+                parentTraceId: $this->scope()->parentTraceId,
                 type: $type,
                 status: $status,
                 tags: $tags,
@@ -355,6 +284,12 @@ class Processor
     }
 
     /**
+     * Closes a parent trace, whichever way it was started: on the stack or detached.
+     *
+     * One entry point on purpose. The two starts differ in where the trace is kept
+     * and in nothing else, and a caller made to pick the matching stop for a trace
+     * it did not start could only pick wrong.
+     *
      * @param string[]|null             $tags
      * @param array<string, mixed>|null $data
      */
@@ -367,10 +302,14 @@ class Processor
         Carbon $parentLoggedAt,
     ): void {
         if (isset($this->detachedTraces[$traceId])) {
-            // the caller mixed up the two APIs; close it the way it was started
-            $this->stopDetached(
+            unset($this->detachedTraces[$traceId]);
+
+            // the profiler is left alone: it profiles the enclosing parent trace,
+            // which is still running
+            $this->dispatchStopTrace(
                 traceId: $traceId,
                 status: $status,
+                profiling: null,
                 tags: $tags,
                 data: $data,
                 duration: $duration,
@@ -397,6 +336,12 @@ class Processor
 
         $this->stopInterruptedDetached(ownerTraceId: $traceId);
 
+        // and whatever nobody is ever going to close by name. Cheap - the map holds
+        // only what is in flight - and it runs under every runtime, which the end of
+        // a unit of work below does not: a coroutine inherits its parent and never
+        // reaches it
+        $this->sweepExpiredDetached();
+
         $scope = $this->scope();
 
         $stackItem = $scope->tracesStack[$index];
@@ -406,26 +351,7 @@ class Processor
         // whatever this trace was started under: the enclosing trace of this unit of
         // work, or - for the outermost one in a coroutine - the trace of the
         // coroutine that spawned it, which this scope inherited and does not own
-        $this->traceIdContainer->setParentTraceId(
-            parentTraceId: $stackItem['pre_parent_trace_id']
-        );
-
-        if ($scope->tracesStack === [] && is_null($scope->parentTraceId)) {
-            // and not as its own pre-parent either: an orphan event recorded after
-            // this would otherwise be filed as a child of a trace already closed
-            $this->traceIdContainer->reset();
-
-            // the unit of work is over: nothing is open here and nothing encloses it.
-            // Detached traces started outside any parent have no owner to sweep them,
-            // so this is the last chance to close them.
-            //
-            // The emptiness of the stack alone does not mean that - a coroutine has
-            // its own stack and an inherited parent, and clearing it there would drop
-            // every child trace pushed afterwards, in silence
-            $this->stopInterruptedDetached(ownerTraceId: null);
-
-            $scope->endUnitOfWork();
-        }
+        $scope->parentTraceId = $stackItem['pre_parent_trace_id'];
 
         $this->dispatchStopTrace(
             traceId: $traceId,
@@ -436,53 +362,19 @@ class Processor
             duration: $duration,
             parentLoggedAt: $parentLoggedAt,
         );
-    }
 
-    /**
-     * Closes a trace started by startAndGetDetachedTraceId(). The profiler is left
-     * alone: it profiles the enclosing parent trace, which is still running.
-     *
-     * @param string[]|null             $tags
-     * @param array<string, mixed>|null $data
-     */
-    public function stopDetached(
-        string $traceId,
-        string $status,
-        ?array $tags,
-        ?array $data,
-        ?float $duration,
-        Carbon $parentLoggedAt,
-    ): void {
-        if (!isset($this->detachedTraces[$traceId])) {
-            if (is_null($this->findStackIndex($traceId))) {
-                // already closed
-                return;
-            }
-
-            // the caller mixed up the two APIs; close it the way it was started
-            $this->stop(
-                traceId: $traceId,
-                status: $status,
-                tags: $tags,
-                data: $data,
-                duration: $duration,
-                parentLoggedAt: $parentLoggedAt,
-            );
-
-            return;
+        if ($scope->tracesStack === [] && is_null($scope->parentTraceId)) {
+            // the unit of work is over: nothing is open here and nothing encloses it,
+            // so what it carried belongs to it alone and must not reach the next one.
+            //
+            // The emptiness of the stack alone does not mean that - a coroutine has
+            // its own stack and an inherited parent, and clearing it there would drop
+            // every child trace pushed afterwards, in silence.
+            //
+            // After the final update, not before: that update carries the values the
+            // application added for this unit of work, and endUnitOfWork() drops them
+            $scope->endUnitOfWork();
         }
-
-        unset($this->detachedTraces[$traceId]);
-
-        $this->dispatchStopTrace(
-            traceId: $traceId,
-            status: $status,
-            profiling: null,
-            tags: $tags,
-            data: $data,
-            duration: $duration,
-            parentLoggedAt: $parentLoggedAt,
-        );
     }
 
     /**
@@ -616,55 +508,73 @@ class Processor
     }
 
     /**
-     * Closes the detached traces the stopping one had started and never closed. A null
-     * owner closes the ownerless ones of *this* unit of work, which nothing else can
-     * reach - an outbound call made with no trace open around it.
+     * Closes the detached traces the stopping one had started and never closed - the
+     * outbound calls it made that never came back.
      */
-    private function stopInterruptedDetached(?string $ownerTraceId): void
+    private function stopInterruptedDetached(string $ownerTraceId): void
     {
-        $scopeId = $this->scope()->ownerId;
-
         foreach ($this->detachedTraces as $traceId => $detachedTrace) {
             if ($detachedTrace['owner_trace_id'] !== $ownerTraceId) {
                 continue;
             }
 
-            if (is_null($ownerTraceId) && $detachedTrace['owner_scope_id'] !== $scopeId) {
-                // ownerless, and started by a different unit of work - which may still
-                // be waiting on it, so only its own unit may declare it interrupted.
-                // Unless that unit is gone: a coroutine that died holding one would
-                // otherwise leave the trace `started` forever and the entry here for
-                // as long as the process lives
-                if (!$detachedTrace['logged_at']->clone()->addSeconds(self::DETACHED_TRACE_TTL_SECONDS)->isPast()) {
-                    continue;
-                }
+            $this->closeInterruptedDetached($traceId, $detachedTrace);
+        }
+    }
+
+    /**
+     * Closes every detached trace that has simply been open too long.
+     *
+     * Age is the only thing that reaches one nobody will ever close by name. A
+     * coroutine killed while an outbound call was in flight takes the trace that
+     * owned it along, so no stop() will ever name that owner again; a call made with
+     * no trace open around it had no owner to begin with. Both used to sit in the map
+     * for the life of the process and stay `started` on the receiver forever.
+     */
+    private function sweepExpiredDetached(): void
+    {
+        foreach ($this->detachedTraces as $traceId => $detachedTrace) {
+            $expiresAt = $detachedTrace['logged_at']
+                ->clone()
+                ->addSeconds(self::DETACHED_TRACE_TTL_SECONDS);
+
+            if (!$expiresAt->isPast()) {
+                continue;
             }
 
-            unset($this->detachedTraces[$traceId]);
-
-            $this->dispatchStopTrace(
-                traceId: $traceId,
-                status: TraceStatusEnum::Failed->value,
-                profiling: null,
-                tags: [
-                    ...$detachedTrace['tags'],
-                    self::INTERRUPTED_TAG,
-                ],
-                data: null,
-                duration: TraceHelper::calcDuration($detachedTrace['logged_at']),
-                parentLoggedAt: $detachedTrace['logged_at'],
-            );
-
-            $this->notifyTraceInterrupted($traceId);
+            $this->closeInterruptedDetached($traceId, $detachedTrace);
         }
+    }
+
+    /**
+     * @param array{owner_trace_id: string|null, tags: string[], logged_at: Carbon} $detachedTrace
+     */
+    private function closeInterruptedDetached(string $traceId, array $detachedTrace): void
+    {
+        unset($this->detachedTraces[$traceId]);
+
+        $this->dispatchStopTrace(
+            traceId: $traceId,
+            status: TraceStatusEnum::Failed->value,
+            profiling: null,
+            tags: [
+                ...$detachedTrace['tags'],
+                self::INTERRUPTED_TAG,
+            ],
+            data: null,
+            duration: TraceHelper::calcDuration($detachedTrace['logged_at']),
+            parentLoggedAt: $detachedTrace['logged_at'],
+        );
+
+        $this->notifyTraceInterrupted($traceId);
     }
 
     /**
      * The watcher that started a trace keeps its own bookkeeping for it and clears it
      * when the trace is closed. A trace swept from here is closed without the watcher
      * ever hearing about it, so tell it - otherwise a long-lived worker accumulates
-     * one orphaned entry per swept trace, and a watcher holding a stack pops a stale
-     * entry next time and leaves its own trace open forever.
+     * one orphaned entry per swept trace, and a watcher that pops a stale entry next
+     * time leaves its own trace open forever.
      */
     private function notifyTraceInterrupted(string $traceId): void
     {
@@ -679,37 +589,15 @@ class Processor
 
     private function dispatchPushTrace(TraceCreateObject $trace): void
     {
-        $this->withPausedTracing(
+        $this->handleWithoutTracing(
             fn() => $this->traceDispatcher->create($trace)
         );
     }
 
     private function dispatchUpdateTrace(TraceUpdateObject $trace): void
     {
-        $this->withPausedTracing(
+        $this->handleWithoutTracing(
             fn() => $this->traceDispatcher->update($trace)
         );
-    }
-
-    /**
-     * Pauses tracing while the dispatcher pushes a trace: the push itself may
-     * fire watchable events (queue payload INSERT with the database driver,
-     * JobQueued with only_events, etc.) and must never be traced recursively.
-     *
-     * @param Closure(): void $callback
-     */
-    private function withPausedTracing(Closure $callback): void
-    {
-        $scope = $this->scope();
-
-        $previousPaused = $scope->paused;
-
-        $scope->paused = true;
-
-        try {
-            $callback();
-        } finally {
-            $scope->paused = $previousPaused;
-        }
     }
 }

@@ -83,6 +83,44 @@ class UnitOfWorkStateTest extends BaseWatcherTestCase
         self::assertSame('default', $next[TraceDataComplementer::ADDITIONAL_KEY]['tenant']);
     }
 
+    public function testTheRootTracesOwnFinalUpdateCarriesTheAddedValues(): void
+    {
+        $complementer = $this->getApp()->make(TraceDataComplementer::class);
+
+        $traceId = $this->processor->startAndGetTraceId(
+            type: 'job',
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now(),
+            customParentTraceId: null,
+        );
+
+        $complementer->add('user_id', 4242);
+
+        // the watcher closing a request or a job hands over its own data here, and
+        // this is the only update the root trace ever gets
+        $this->processor->stop(
+            traceId: $traceId,
+            status: TraceStatusEnum::Success->value,
+            tags: null,
+            data: ['response_status' => 200],
+            duration: 1.0,
+            parentLoggedAt: Carbon::now(),
+        );
+
+        $updates = $this->dispatcher->findUpdating(traceId: $traceId);
+
+        self::assertCount(1, $updates);
+
+        // ending the unit of work before this update rather than after it is what
+        // left the request's and the job's own trace - and only that one - without
+        // the values the application had added for it
+        self::assertSame(
+            ['user_id' => 4242],
+            $updates[0]->data[TraceDataComplementer::ADDITIONAL_KEY] ?? null
+        );
+    }
+
     /**
      * Runs one parent trace start to finish and returns the data of the child trace
      * recorded inside it - which is where the complementer's additions land.

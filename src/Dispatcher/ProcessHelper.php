@@ -3,7 +3,6 @@
 namespace SLoggerLaravel\Dispatcher;
 
 use RuntimeException;
-use Throwable;
 
 class ProcessHelper
 {
@@ -24,11 +23,10 @@ class ProcessHelper
             return false;
         }
 
-        try {
-            $cmd = @file_get_contents("/proc/$pid/cmdline");
-        } catch (Throwable) {
-            return false;
-        }
+        // @: an unreadable or vanished /proc entry is an ordinary answer here, and
+        // the warning it raises is turned into an exception by Laravel's error
+        // handler. It returns false rather than throwing, so there is nothing to catch
+        $cmd = @file_get_contents("/proc/$pid/cmdline");
 
         if (!$cmd) {
             return false;
@@ -53,6 +51,15 @@ class ProcessHelper
     public function sendStopSignal(int $pid): void
     {
         if ($pid <= 0) {
+            return;
+        }
+
+        if ($pid === $this->getCurrentPid()) {
+            // a state file outliving its master - a container restarted over a
+            // mounted volume - names a pid the kernel is free to hand out again, and
+            // isPidActive() only compares command lines, which match exactly. The
+            // new master would then SIGTERM itself before it started anything, and
+            // the next start would do it all over again
             return;
         }
 

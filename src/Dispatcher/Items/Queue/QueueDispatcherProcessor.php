@@ -2,7 +2,6 @@
 
 namespace SLoggerLaravel\Dispatcher\Items\Queue;
 
-use Illuminate\Queue\Console\WorkCommand;
 use SLoggerLaravel\Configs\DispatcherQueueConfig;
 use SLoggerLaravel\Dispatcher\Items\DispatcherProcessorInterface;
 use Symfony\Component\Process\PhpExecutableFinder;
@@ -10,6 +9,11 @@ use Symfony\Component\Process\Process;
 
 readonly class QueueDispatcherProcessor implements DispatcherProcessorInterface
 {
+    /**
+     * @see \Illuminate\Queue\Console\WorkCommand
+     */
+    private const WORKER_COMMAND = 'queue:work';
+
     private int $workersNum;
     private string $workerCommand;
 
@@ -24,7 +28,7 @@ readonly class QueueDispatcherProcessor implements DispatcherProcessorInterface
             '%s %s/artisan %s %s --queue=%s',
             (new PhpExecutableFinder)->find(),
             base_path(),
-            app(WorkCommand::class)->getName(),
+            self::WORKER_COMMAND,
             $config->getConnection(),
             $config->getName()
         );
@@ -57,5 +61,14 @@ readonly class QueueDispatcherProcessor implements DispatcherProcessorInterface
     {
         return Process::fromShellCommandline('exec ' . $this->workerCommand)
             ->setTimeout(null);
+    }
+
+    /**
+     * The command without the `exec` prefix, which is exactly what /proc shows once
+     * the shell has replaced itself with the worker.
+     */
+    public function getChildCommandName(): string
+    {
+        return $this->workerCommand;
     }
 }

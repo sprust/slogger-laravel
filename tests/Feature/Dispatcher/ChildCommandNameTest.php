@@ -31,9 +31,9 @@ class ChildCommandNameTest extends BaseTestCase
 
             $helper = new ProcessHelper();
 
-            $saved = $this->stripExecPrefix($process->getCommandLine());
-
-            self::assertSame('sleep 5', $saved);
+            // the shape a processor hands over: the command without the shell
+            // prefix it replaces itself with
+            $saved = 'sleep 5';
 
             // the whole point: this is what the master stores and later looks up by
             self::assertTrue($helper->isPidActive($pid, $saved));
@@ -46,24 +46,20 @@ class ChildCommandNameTest extends BaseTestCase
         }
     }
 
-    public function testTheWorkerCommandIsExeced(): void
+    public function testTheWorkerCommandIsExecedAndTheSavedNameIsNot(): void
     {
-        $commandLine = $this->getApp()->make(QueueDispatcherProcessor::class)
-            ->createProcess()
-            ->getCommandLine();
+        $processor = $this->getApp()->make(QueueDispatcherProcessor::class);
+
+        $commandLine = $processor->createProcess()->getCommandLine();
 
         // without it the reported pid is the shell's, and `sh` forwards no signals
         self::assertStringStartsWith('exec ', $commandLine);
-    }
 
-    private function stripExecPrefix(string $commandLine): string
-    {
-        $method = (new \ReflectionClass(\SLoggerLaravel\Dispatcher\Dispatcher::class))
-            ->getMethod('stripExecPrefix');
-
-        /** @var string $stripped */
-        $stripped = $method->invoke(null, $commandLine);
-
-        return $stripped;
+        // and the name the master saves is the one /proc will show. The processor
+        // says it rather than the master guessing it back out of the command line
+        self::assertSame(
+            substr($commandLine, strlen('exec ')),
+            $processor->getChildCommandName()
+        );
     }
 }

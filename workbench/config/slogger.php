@@ -136,21 +136,37 @@ return [
         // a value under a matching key keeps two characters at each end, so two
         // records still look different. these identify a person rather than
         // authenticate one - never put a secret here.
+        //
+        // a bare `name` is not one of them, however common it is as a person's: it is
+        // matched as a word component too, and most of what a trace is made of is
+        // named by one - `job.name` holds a job class, `listeners[].name` a listener
+        // class, an uploaded file's `name` its filename, and in a `{"name": ...,
+        // "value": ...}` pair `name` names the value rather than being one. so the
+        // person's name is spelled out instead.
         'partial_keys' => [
             'email',
             'phone',
             'recipient',
-            'name',
             'username',
+            'user_name',
+            'nickname',
             'surname',
             'firstname',
+            'first_name',
             'lastname',
+            'last_name',
+            'middlename',
+            'middle_name',
+            'fullname',
+            'full_name',
 
             '*email*',
             '*phone*',
             '*recipient*',
             '*firstname*',
+            '*first_name*',
             '*lastname*',
+            '*last_name*',
         ],
 
         // matched against the value instead of the key, and masked in place, keeping
@@ -243,7 +259,7 @@ return [
                     // stop recording request parameters above this many bytes in
                     // total. capped by what the masker will read, so a larger value
                     // records nothing rather than something unmasked.
-                    'max_content_length' => 1048576,
+                    'max_content_length' => 1000000,
                 ],
 
                 'output' => [
@@ -260,7 +276,7 @@ return [
                     // stop recording a response body above this many bytes. capped by
                     // what the masker will read, so a larger value records nothing
                     // rather than something unmasked.
-                    'max_content_length' => 1048576,
+                    'max_content_length' => 1000000,
                 ],
             ],
         ],

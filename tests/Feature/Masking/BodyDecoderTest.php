@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace SLoggerLaravel\Tests\Feature\Masking;
 
 use SLoggerLaravel\Helpers\BodyDecoder;
+use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Tests\Feature\BaseTestCase;
 
 /**
@@ -46,10 +47,44 @@ class BodyDecoderTest extends BaseTestCase
         }
     }
 
-    public function testSomethingThatMerelyStartsWithAngleBracketIsNotXml(): void
+    public function testAnIllFormedDocumentIsCarriedAndThenMaskedWhole(): void
     {
-        self::assertSame([], BodyDecoder::decode("<not xml at all\nsecret=abc", 'application/xml'));
-        self::assertSame([], BodyDecoder::decode('<unclosed>', 'application/xml'));
+        // the sender said this is XML and it is not. Telling the two apart costs a
+        // full parse, and that parse used to happen in the traced application's own
+        // request path - twice over, since the masker parses again in the worker
+        foreach (["<not xml at all\nsecret=abc", '<unclosed>secret=abc'] as $body) {
+            self::assertSame(
+                [BodyDecoder::XML_KEY => $body],
+                BodyDecoder::decode($body, 'application/xml')
+            );
+
+            // so it is caught where the package is allowed to spend time, and caught
+            // closed: nothing read it, so nothing can vouch for it
+            $masked = MaskHelper::maskArrayByKeys(
+                ['request' => ['parameters' => [BodyDecoder::XML_KEY => $body]]],
+                ['*token*']
+            );
+
+            self::assertSame(
+                MaskHelper::FULL_MASK,
+                $masked['request']['parameters'][BodyDecoder::XML_KEY]
+            );
+        }
+    }
+
+    public function testAWellFormedDocumentUnderTheXmlKeyIsStillMaskedPerElement(): void
+    {
+        $document = '<order><api_token>sk-live-SECRET</api_token><amount>100</amount></order>';
+
+        $masked = MaskHelper::maskArrayByKeys(
+            ['request' => ['parameters' => [BodyDecoder::XML_KEY => $document]]],
+            ['*token*']
+        );
+
+        $result = $masked['request']['parameters'][BodyDecoder::XML_KEY];
+
+        self::assertStringContainsString('<api_token>' . MaskHelper::FULL_MASK . '</api_token>', $result);
+        self::assertStringContainsString('<amount>100</amount>', $result);
     }
 
     public function testRealXmlIsCarriedAsItself(): void

@@ -11,7 +11,11 @@ class MetricsHelper
      */
     private static null|false|float $memoryLimitInMb = null;
 
-    private static ?int $cpuCount = null;
+    /**
+     * `false` means "looked, and the machine will not say" - `null` means "not looked
+     * yet".
+     */
+    private static null|false|int $cpuCount = null;
 
     /**
      * Percentage of the configured memory limit currently in use, or null when there
@@ -41,16 +45,26 @@ class MetricsHelper
      * percentage, so the previous `loadavg * 10` meant nothing on any machine that
      * did not happen to have ten cores. Can exceed 100 - that is what an overloaded
      * machine looks like.
+     *
+     * Null when the core count cannot be read, which is the same answer the memory
+     * metric gives: assuming one core reported a comfortable load of 4 on an
+     * eight-core box as 400%, and a made-up number is worse than none.
      */
     public static function getCpuAvgPercent(): ?float
     {
+        $cpuCount = self::getCpuCount();
+
+        if ($cpuCount === false) {
+            return null;
+        }
+
         $cpuAvg = sys_getloadavg();
 
         if (!$cpuAvg) {
             return null;
         }
 
-        return self::normaliseCpuPercent($cpuAvg[0], self::getCpuCount());
+        return self::normaliseCpuPercent($cpuAvg[0], $cpuCount);
     }
 
     /**
@@ -83,7 +97,7 @@ class MetricsHelper
         // a shorthand suffix is optional and case-insensitive, and a plain byte count
         // is just as valid - `memory_limit = 134217728` used to fall through to the
         // hardcoded default
-        if (!preg_match('/^\s*(-?\d+)\s*([KMG]?)\s*$/i', $memoryLimitIni, $matches)) {
+        if (!preg_match('/^\s*(-?\d+)/', $memoryLimitIni, $matches)) {
             return false;
         }
 
@@ -94,10 +108,16 @@ class MetricsHelper
             return false;
         }
 
+        // the leading integer and the trailing unit, whatever sits between them: PHP
+        // reads `1.5G` as one gigabyte and says so in a warning, and requiring the
+        // whole string to match reported no metric at all for a process that does
+        // have a limit
+        $suffix = strtoupper(substr(rtrim($memoryLimitIni), -1));
+
         // float, not int: `512K` is half a megabyte, and an int cast made it 0 - and
         // then every trace died on a DivisionByZeroError, which the watcher firewall
         // swallowed, taking the whole of tracing down quietly with it
-        return match (strtoupper($matches[2])) {
+        return match ($suffix) {
             'G'     => $value * 1024,
             'M'     => $value,
             'K'     => $value / 1024,
@@ -105,7 +125,11 @@ class MetricsHelper
         };
     }
 
-    private static function getCpuCount(): int
+    /**
+     * `false` when the machine will not say - no procfs, which is every platform but
+     * Linux and any container that hides it.
+     */
+    private static function getCpuCount(): false|int
     {
         if (!is_null(self::$cpuCount)) {
             return self::$cpuCount;
@@ -113,10 +137,12 @@ class MetricsHelper
 
         $cpuInfo = @file_get_contents('/proc/cpuinfo');
 
-        $count = $cpuInfo === false
-            ? 0
-            : preg_match_all('/^processor\s*:/mi', $cpuInfo);
+        if ($cpuInfo === false) {
+            return self::$cpuCount = false;
+        }
 
-        return self::$cpuCount = max(1, (int) $count);
+        $count = (int) preg_match_all('/^processor\s*:/mi', $cpuInfo);
+
+        return self::$cpuCount = $count > 0 ? $count : false;
     }
 }

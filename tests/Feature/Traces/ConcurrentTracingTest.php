@@ -11,7 +11,6 @@ use SLoggerLaravel\Processor;
 use SLoggerLaravel\ServiceProvider;
 use SLoggerLaravel\Tests\Feature\Watchers\BaseWatcherTestCase;
 use SLoggerLaravel\Traces\ProcessTraceScopeResolver;
-use SLoggerLaravel\Traces\TraceIdContainer;
 use SLoggerLaravel\Traces\TraceScopeResolverInterface;
 
 /**
@@ -38,7 +37,6 @@ class ConcurrentTracingTest extends BaseWatcherTestCase
 
         // the singletons captured the previous resolver
         $this->getApp()->forgetInstance(Processor::class);
-        $this->getApp()->forgetInstance(TraceIdContainer::class);
         $this->getApp()->forgetInstance(TraceDataComplementer::class);
     }
 
@@ -235,7 +233,7 @@ class ConcurrentTracingTest extends BaseWatcherTestCase
         // the runtime resolves the promise elsewhere - another coroutine, or the
         // scheduler itself. A per-scope map would leave this find nothing, report
         // "already closed", and let the sender sweep a request that succeeded
-        $processor->stopDetached(
+        $processor->stop(
             traceId: $traceId,
             status: TraceStatusEnum::Success->value,
             tags: ['https://example.test'],
@@ -509,24 +507,17 @@ class ConcurrentTracingTest extends BaseWatcherTestCase
         self::assertContains(Processor::INTERRUPTED_TAG, $updating[0]->tags ?? []);
     }
 
-    public function testACoroutineSweepsItsOwnOwnerlessDetachedTraceImmediately(): void
+    public function testADetachedTraceOfAKilledCoroutineIsSweptByAge(): void
     {
         $processor = $this->getApp()->make(Processor::class);
 
-        $traceId = null;
+        $detachedTraceId = null;
 
-        // one coroutine: it starts an outbound call with no trace around it, then
-        // opens and closes a trace of its own. Its own unit of work ending is what
-        // makes the abandoned call an abandoned call
-        $coroutine = $this->resolver->spawn(static function () use ($processor, &$traceId): void {
-            $traceId = $processor->startAndGetDetachedTraceId(
-                type: 'http-client',
-                tags: [],
-                data: [],
-                loggedAt: Carbon::now(),
-            );
-
-            $own = $processor->startAndGetTraceId(
+        // a coroutine opens a trace of its own, sends an outbound call under it, and
+        // is then killed: it will never close either, and nothing else knows the
+        // owner's id to close the call by
+        $killed = $this->resolver->spawn(static function () use ($processor, &$detachedTraceId): void {
+            $processor->startAndGetTraceId(
                 type: 'request',
                 tags: [],
                 data: [],
@@ -534,22 +525,36 @@ class ConcurrentTracingTest extends BaseWatcherTestCase
                 customParentTraceId: null,
             );
 
-            $processor->stop(
-                traceId: $own,
-                status: TraceStatusEnum::Success->value,
-                tags: null,
-                data: null,
-                duration: 1.0,
-                parentLoggedAt: Carbon::now(),
+            $detachedTraceId = $processor->startAndGetDetachedTraceId(
+                type: 'http-client',
+                tags: [],
+                data: [],
+                loggedAt: Carbon::now(),
             );
+
+            \Fiber::suspend();
         });
 
-        $coroutine->start();
+        $killed->start();
 
-        self::assertIsString($traceId);
+        self::assertIsString($detachedTraceId);
 
-        // no TTL involved: this is the owning scope, and it is done
-        $updating = $this->dispatcher->findUpdating(traceId: $traceId);
+        // still in flight as far as anyone can tell
+        $this->runOneCoroutineTrace($processor);
+
+        self::assertCount(0, $this->dispatcher->findUpdating(traceId: $detachedTraceId));
+
+        Carbon::setTestNow(Carbon::now()->addSeconds(Processor::DETACHED_TRACE_TTL_SECONDS + 1));
+
+        try {
+            $this->runOneCoroutineTrace($processor);
+        } finally {
+            Carbon::setTestNow();
+        }
+
+        // age is the only thing that reaches it: the entry used to sit in the map for
+        // the life of the process, and the trace stayed `started` on the receiver
+        $updating = $this->dispatcher->findUpdating(traceId: $detachedTraceId);
 
         self::assertCount(1, $updating);
         self::assertContains(Processor::INTERRUPTED_TAG, $updating[0]->tags ?? []);
@@ -623,5 +628,29 @@ class ConcurrentTracingTest extends BaseWatcherTestCase
         (new ServiceProvider($app))->register();
 
         self::assertSame($own, $app->make(TraceScopeResolverInterface::class));
+    }
+
+    private function runOneCoroutineTrace(Processor $processor): void
+    {
+        $coroutine = $this->resolver->spawn(static function () use ($processor): void {
+            $traceId = $processor->startAndGetTraceId(
+                type: 'job',
+                tags: [],
+                data: [],
+                loggedAt: Carbon::now(),
+                customParentTraceId: null,
+            );
+
+            $processor->stop(
+                traceId: $traceId,
+                status: TraceStatusEnum::Success->value,
+                tags: null,
+                data: null,
+                duration: 1.0,
+                parentLoggedAt: Carbon::now(),
+            );
+        });
+
+        $coroutine->start();
     }
 }

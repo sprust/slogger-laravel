@@ -104,6 +104,21 @@ class ProcessHelperTest extends BaseTestCase
         }
     }
 
+    public function testSendStopSignalNeverSignalsTheCallerItself(): void
+    {
+        $helper = new ProcessHelper();
+
+        $received = $this->runWithStopSignalCounter(
+            static fn() => $helper->sendStopSignal($helper->getCurrentPid())
+        );
+
+        // a state file that outlived its master names a pid the kernel may have
+        // handed out again - to this very process, whose command line matches the
+        // saved one exactly. SIGTERM at its default action then killed the new
+        // master before it had started anything, on every start, forever
+        self::assertSame(0, $received);
+    }
+
     /**
      * @param callable(): void $callback
      */

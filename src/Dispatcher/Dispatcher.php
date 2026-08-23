@@ -8,6 +8,7 @@ use Psr\Log\LoggerInterface;
 use RuntimeException;
 use SLoggerLaravel\Configs\GeneralConfig;
 use SLoggerLaravel\Dispatcher\Items\DispatcherFactory;
+use SLoggerLaravel\Dispatcher\Items\DispatcherProcessorInterface;
 use SLoggerLaravel\Dispatcher\State\DispatcherProcessState;
 use SLoggerLaravel\Dispatcher\State\DispatcherProcessStateDto;
 use Symfony\Component\Console\Output\ConsoleOutput;
@@ -19,8 +20,28 @@ class Dispatcher
     private const RESTARTS_BEFORE_BACKOFF = 3;
 
     private const MAX_RESTART_DELAY_SECONDS = 30;
+
+    /**
+     * How long a worker has to stay up before its slot counts as settled and the
+     * restarts it took to get there are forgotten.
+     */
+    private const SETTLED_UPTIME_SECONDS = 60;
+
+    /**
+     * How long the master waits for its workers to finish the job in hand.
+     */
+    private const STOP_WAIT_SECONDS = 10;
+
     private bool $enabled;
     private bool $shouldQuit = false;
+
+    /**
+     * What this master is supervising, set once by start(). Everything it logs and
+     * saves is named by these.
+     */
+    private string $dispatcherName   = '';
+    private int $masterPid           = 0;
+    private string $childCommandName = '';
 
     /**
      * Consecutive restarts per worker slot, for the backoff below.
@@ -28,6 +49,21 @@ class Dispatcher
      * @var array<int, int>
      */
     private array $restartFailures = [];
+
+    /**
+     * When a slot backing off may be filled again, as a timestamp.
+     *
+     * @var array<int, int>
+     */
+    private array $restartNotBefore = [];
+
+    /**
+     * When the worker now in a slot was started, for SETTLED_UPTIME_SECONDS.
+     *
+     * @var array<int, int>
+     */
+    private array $slotStartedAt = [];
+
     private LoggerInterface $logger;
 
     public function __construct(
@@ -45,7 +81,16 @@ class Dispatcher
      */
     public function start(DispatcherProcessState $processState, string $dispatcher): void
     {
-        $masterPid = $this->processHelper->getCurrentPid();
+        $this->dispatcherName = $dispatcher;
+        $this->masterPid      = $this->processHelper->getCurrentPid();
+
+        // before the takeover, not after it: stop() signals a pid read from a file,
+        // and a master that has not installed its handlers yet dies of its own
+        // signal at the default action
+        pcntl_async_signals(true);
+
+        pcntl_signal(SIGINT, fn() => $this->shouldQuit = true);
+        pcntl_signal(SIGTERM, fn() => $this->shouldQuit = true);
 
         if ($previousState = $processState->getSaved()) {
             $this->stop($previousState);
@@ -55,54 +100,18 @@ class Dispatcher
             // to be found by. The new state overwrites this one atomically anyway
 
             $this->logInfo(
-                $this->makeLogMessage(
-                    dispatcher: $dispatcher,
-                    masterPid: $masterPid,
-                    message: sprintf(
-                        "previous dispatcher[%s, pid: %s] stopped",
-                        $previousState->dispatcher,
-                        $previousState->masterPid
-                    )
+                sprintf(
+                    "previous dispatcher[%s, pid: %s] stopped",
+                    $previousState->dispatcher,
+                    $previousState->masterPid
                 )
             );
         }
 
-        $this->logInfo(
-            $this->makeLogMessage(
-                dispatcher: $dispatcher,
-                masterPid: $masterPid,
-                message: "starting..."
-            )
-        );
-
-        pcntl_async_signals(true);
-
-        pcntl_signal(SIGINT, fn() => $this->shouldQuit = true);
-        pcntl_signal(SIGTERM, fn() => $this->shouldQuit = true);
+        $this->logInfo('starting...');
 
         if (!$this->enabled) {
-            $this->freshState(
-                processState: $processState,
-                dispatcher: $dispatcher,
-                masterPid: $masterPid,
-                childCommandName: 'disabled',
-                childProcesses: []
-            );
-
-            $message = 'SLogger is disabled';
-
-            $logTime = time();
-
-            while (!$this->shouldQuit) {
-                if ((time() - $logTime) > 10) {
-                    $logTime = time();
-
-                    $this->logger->warning($message);
-                    $this->output->writeln($message);
-                }
-
-                sleep(1);
-            }
+            $this->idleWhileDisabled($processState);
 
             return;
         }
@@ -111,113 +120,129 @@ class Dispatcher
 
         $processes = $processor->createProcesses();
 
-        $processesCount = count($processes);
-
-        if (!$processesCount) {
-            $message = $this->makeLogMessage(
-                dispatcher: $dispatcher,
-                masterPid: $masterPid,
-                message: 'processes count is 0'
-            );
-
-            $this->logError($message);
-
-            throw new RuntimeException($message);
+        if (!$processes) {
+            $this->fail('processes count is 0');
         }
 
-        // without the `exec ` prefix: the shell replaces itself with the worker, so
-        // /proc/<pid>/cmdline holds the worker's argv and nothing else. Saving the
-        // command line verbatim made isPidActive() false for every child - and then a
-        // master that died left workers nothing could find or stop
-        $childCommandName = self::stripExecPrefix($processes[0]->getCommandLine());
+        $this->childCommandName = $processor->getChildCommandName();
 
-        foreach ($processes as $process) {
+        foreach ($processes as $index => $process) {
             $process->start();
 
-            $this->logInfo(
-                $this->makeLogMessage(
-                    dispatcher: $dispatcher,
-                    masterPid: $masterPid,
-                    message: "child process started with PID {$process->getPid()}"
-                )
+            $this->slotStartedAt[$index] = time();
+
+            $this->logInfo("child process started with PID {$process->getPid()}");
+        }
+
+        $this->saveState($processState, $processes);
+
+        $this->logInfo('started');
+
+        $this->shutdown(
+            $processState,
+            $this->supervise($processState, $processor, $processes)
+        );
+    }
+
+    public function stop(DispatcherProcessStateDto $state): void
+    {
+        if ($this->processHelper->isPidActive($state->masterPid, $state->masterCommandName)) {
+            $this->processHelper->sendStopSignal($state->masterPid);
+
+            $this->writeInfo(
+                $this->makeLogMessage($state->dispatcher, $state->masterPid, 'stop signal sent')
+            );
+        } else {
+            $this->writeError(
+                $this->makeLogMessage($state->dispatcher, $state->masterPid, 'already stopped')
             );
         }
 
-        $this->freshState(
-            processState: $processState,
-            dispatcher: $dispatcher,
-            masterPid: $masterPid,
-            childCommandName: $childCommandName,
-            childProcesses: $processes
-        );
+        foreach ($state->childProcessPids as $childProcessPid) {
+            if (!$childProcessPid) {
+                continue;
+            }
 
-        $this->logInfo(
-            $this->makeLogMessage(
-                dispatcher: $dispatcher,
-                masterPid: $masterPid,
-                message: 'started'
-            )
-        );
+            if ($this->processHelper->isPidActive($childProcessPid, $state->childCommandName)) {
+                $this->processHelper->sendStopSignal($childProcessPid);
 
+                $this->writeInfo(
+                    $this->makeLogMessage(
+                        $state->dispatcher,
+                        $state->masterPid,
+                        "stop signal sent to child[pid: $childProcessPid]"
+                    )
+                );
+            } else {
+                $this->writeError(
+                    $this->makeLogMessage(
+                        $state->dispatcher,
+                        $state->masterPid,
+                        "dispatcher child [pid: $childProcessPid] already stopped"
+                    )
+                );
+            }
+        }
+    }
+
+    /**
+     * Keeps every slot filled until asked to quit, and hands back what is in them.
+     *
+     * @param Process[] $processes
+     *
+     * @return Process[]
+     */
+    private function supervise(
+        DispatcherProcessState $processState,
+        DispatcherProcessorInterface $processor,
+        array $processes
+    ): array {
         try {
             while (!$this->shouldQuit) {
                 foreach ($processes as $index => $process) {
-                    if ($process->isRunning()) {
-                        $this->readProcessOutput($process);
+                    // read what it said before replacing it: a worker that died says
+                    // why on its way out, and dropping that leaves a restart loop
+                    // with no explanation anywhere
+                    $this->readProcessOutput($process);
 
-                        $this->restartFailures[$index] = 0;
+                    if ($process->isRunning()) {
+                        $this->settleSlot($index);
 
                         continue;
                     }
 
-                    // read what it said before replacing it: a worker that died says
-                    // why on its way out, and dropping that leaves a restart loop with
-                    // no explanation anywhere
-                    $this->readProcessOutput($process);
-
-                    // a worker that dies on boot would otherwise be restarted once a
-                    // second forever - about 86k restarts and 86k state-file writes a
-                    // day, with nothing to show for them
-                    $restartDelay = $this->restartDelayFor($index);
-
-                    if ($restartDelay > 0) {
-                        sleep($restartDelay);
+                    if (!$this->mayRefillSlot($index)) {
+                        continue;
                     }
 
                     $restartedProcess = $processor->createProcess();
                     $restartedProcess->start();
 
-                    $processes[$index] = $restartedProcess;
+                    $processes[$index]           = $restartedProcess;
+                    $this->slotStartedAt[$index] = time();
 
-                    $this->freshState(
-                        processState: $processState,
-                        dispatcher: $dispatcher,
-                        masterPid: $masterPid,
-                        childCommandName: $childCommandName,
-                        childProcesses: $processes
-                    );
+                    $this->saveState($processState, $processes);
 
-                    $this->logInfo(
-                        $this->makeLogMessage(
-                            dispatcher: $dispatcher,
-                            masterPid: $masterPid,
-                            message: "child process restarted with PID {$restartedProcess->getPid()}"
-                        )
-                    );
+                    $this->logInfo("child process restarted with PID {$restartedProcess->getPid()}");
                 }
 
                 sleep(1);
             }
         } catch (Throwable $exception) {
-            $this->logError(
-                $this->makeLogMessage(
-                    dispatcher: $dispatcher,
-                    masterPid: $masterPid,
-                    message: $exception->getMessage()
-                )
-            );
+            $this->logError($exception->getMessage());
         }
 
+        return $processes;
+    }
+
+    /**
+     * Asks every worker to finish what it is doing, waits for it, and gives up the
+     * state file.
+     *
+     * @param Process[] $processes
+     */
+    private function shutdown(DispatcherProcessState $processState, array $processes): void
+    {
         foreach ($processes as $process) {
             if (!$process->isRunning()) {
                 continue;
@@ -228,9 +253,9 @@ class Dispatcher
             );
         }
 
-        $startTimeOfWaitFinishingProcesses = time();
+        $waitingSince = time();
 
-        while ((time() - $startTimeOfWaitFinishingProcesses) < 10) {
+        while ((time() - $waitingSince) < self::STOP_WAIT_SECONDS) {
             foreach ($processes as $index => $process) {
                 $this->readProcessOutput($process);
 
@@ -241,9 +266,7 @@ class Dispatcher
                 unset($processes[$index]);
             }
 
-            $processesCount = count($processes);
-
-            if (!$processesCount) {
+            if (!$processes) {
                 break;
             }
 
@@ -258,75 +281,115 @@ class Dispatcher
             $this->readProcessOutput($process);
         }
 
-        if (!$processesCount) {
-            $this->logInfo(
-                $this->makeLogMessage(
-                    dispatcher: $dispatcher,
-                    masterPid: $masterPid,
-                    message: 'worker processes are stopped'
-                )
-            );
-        } else {
-            $message = $this->makeLogMessage(
-                dispatcher: $dispatcher,
-                masterPid: $masterPid,
-                message: 'failed to stop worker processes'
-            );
-
-            $this->logError($message);
-
-            throw new RuntimeException($message);
+        if ($processes) {
+            $this->fail('failed to stop worker processes');
         }
 
-        $processState->purgeIfOwnedBy($masterPid);
+        $this->logInfo('worker processes are stopped');
+
+        $processState->purgeIfOwnedBy($this->masterPid);
     }
 
-    public function stop(DispatcherProcessStateDto $state): void
+    /**
+     * A disabled dispatcher still holds the state file and still answers `stop`:
+     * turning SLogger off must not leave a command that cannot be managed.
+     */
+    private function idleWhileDisabled(DispatcherProcessState $processState): void
     {
-        if ($this->processHelper->isPidActive($state->masterPid, $state->masterCommandName)) {
-            $this->processHelper->sendStopSignal($state->masterPid);
+        $this->saveState($processState, [], childCommandName: 'disabled');
 
-            $this->logInfo(
-                $this->makeLogMessage(
-                    dispatcher: $state->dispatcher,
-                    masterPid: $state->masterPid,
-                    message: 'stop signal sent'
-                )
-            );
-        } else {
-            $this->logError(
-                $this->makeLogMessage(
-                    dispatcher: $state->dispatcher,
-                    masterPid: $state->masterPid,
-                    message: 'already stopped'
-                )
-            );
-        }
+        $message = 'SLogger is disabled';
 
-        foreach ($state->childProcessPids as $childProcessPid) {
-            if (!$childProcessPid) {
-                continue;
+        $logTime = time();
+
+        while (!$this->shouldQuit) {
+            if ((time() - $logTime) > 10) {
+                $logTime = time();
+
+                $this->logger->warning($message);
+                $this->output->writeln($message);
             }
 
-            if ($this->processHelper->isPidActive($childProcessPid, $state->childCommandName)) {
-                $this->processHelper->sendStopSignal($childProcessPid);
-                $this->logInfo(
-                    $this->makeLogMessage(
-                        dispatcher: $state->dispatcher,
-                        masterPid: $state->masterPid,
-                        message: "stop signal sent to child[pid: $childProcessPid]"
-                    )
-                );
-            } else {
-                $this->logError(
-                    $this->makeLogMessage(
-                        dispatcher: $state->dispatcher,
-                        masterPid: $state->masterPid,
-                        message: "dispatcher child [pid: $childProcessPid] already stopped"
-                    )
-                );
-            }
+            sleep(1);
         }
+    }
+
+    /**
+     * Whether the slot's replacement is due yet.
+     *
+     * A deadline rather than a sleep(): sleeping here stopped the whole supervision
+     * loop, so while one slot waited its turn the healthy ones went unwatched and
+     * their output unread - and 64KB of unread pipe is all it takes for a worker to
+     * block on printing "Processed". Delays added up across slots, too, and a
+     * signal arriving mid-sleep still started one more worker before quitting.
+     */
+    private function mayRefillSlot(int $index): bool
+    {
+        if (isset($this->restartNotBefore[$index])) {
+            if (time() < $this->restartNotBefore[$index]) {
+                return false;
+            }
+
+            unset($this->restartNotBefore[$index]);
+
+            return true;
+        }
+
+        $delay = $this->restartDelayFor($index);
+
+        if ($delay <= 0) {
+            return true;
+        }
+
+        $this->restartNotBefore[$index] = time() + $delay;
+
+        return false;
+    }
+
+    /**
+     * Forgets a slot's restart count once the worker in it has been up long enough
+     * to call it settled.
+     *
+     * Not on the first tick that finds it running: that is a second after the
+     * restart, so a worker dying two seconds in - a Redis connect timing out during
+     * boot, a crash on the first job - cleared the count every single time and never
+     * reached the backoff at all.
+     */
+    private function settleSlot(int $index): void
+    {
+        if (($this->restartFailures[$index] ?? 0) === 0) {
+            return;
+        }
+
+        $startedAt = $this->slotStartedAt[$index] ?? null;
+
+        if (is_null($startedAt) || (time() - $startedAt) < self::SETTLED_UPTIME_SECONDS) {
+            return;
+        }
+
+        $this->restartFailures[$index] = 0;
+    }
+
+    /**
+     * How long to wait before replacing a worker that keeps dying.
+     *
+     * Counted per slot, and cleared by settleSlot() once one stays up, so an
+     * occasional crash restarts immediately and a boot loop backs off.
+     */
+    private function restartDelayFor(int $index): int
+    {
+        $failures = ($this->restartFailures[$index] ?? 0) + 1;
+
+        $this->restartFailures[$index] = $failures;
+
+        if ($failures <= self::RESTARTS_BEFORE_BACKOFF) {
+            return 0;
+        }
+
+        return (int) min(
+            self::MAX_RESTART_DELAY_SECONDS,
+            2 ** ($failures - self::RESTARTS_BEFORE_BACKOFF)
+        );
     }
 
     private function readProcessOutput(Process $process): void
@@ -350,19 +413,17 @@ class Dispatcher
     /**
      * @param Process[] $childProcesses
      */
-    private function freshState(
+    private function saveState(
         DispatcherProcessState $processState,
-        string $dispatcher,
-        int $masterPid,
-        string $childCommandName,
-        array $childProcesses
+        array $childProcesses,
+        ?string $childCommandName = null
     ): void {
         $processState->save(
             new DispatcherProcessStateDto(
-                dispatcher: $dispatcher,
+                dispatcher: $this->dispatcherName,
                 masterCommandName: $processState->getMasterCommandName(),
-                masterPid: $masterPid,
-                childCommandName: $childCommandName,
+                masterPid: $this->masterPid,
+                childCommandName: $childCommandName ?? $this->childCommandName,
                 childProcessPids: array_values(
                     array_filter(
                         array_map(
@@ -382,41 +443,38 @@ class Dispatcher
 
     private function logInfo(string $message): void
     {
-        $this->output->writeln($message);
-        $this->logger->info($message);
+        $this->writeInfo(
+            $this->makeLogMessage($this->dispatcherName, $this->masterPid, $message)
+        );
     }
 
-    /**
-     * How long to wait before replacing a worker that keeps dying.
-     *
-     * Counted per slot and reset as soon as one survives long enough to be seen
-     * running, so an occasional crash restarts immediately and a boot loop backs off.
-     */
-    private function restartDelayFor(int $index): int
+    private function logError(string $message): void
     {
-        $failures = ($this->restartFailures[$index] ?? 0) + 1;
-
-        $this->restartFailures[$index] = $failures;
-
-        if ($failures <= self::RESTARTS_BEFORE_BACKOFF) {
-            return 0;
-        }
-
-        return (int) min(
-            self::MAX_RESTART_DELAY_SECONDS,
-            2 ** ($failures - self::RESTARTS_BEFORE_BACKOFF)
+        $this->writeError(
+            $this->makeLogMessage($this->dispatcherName, $this->masterPid, $message)
         );
     }
 
     /**
-     * @see QueueDispatcherProcessor::createProcess()
+     * Reports what the master cannot carry on from, in both places it is looked for,
+     * and hands the same text to the caller.
      */
-    private static function stripExecPrefix(string $commandLine): string
+    private function fail(string $message): never
     {
-        return preg_replace('/^exec\s+/', '', $commandLine, 1) ?? $commandLine;
+        $decorated = $this->makeLogMessage($this->dispatcherName, $this->masterPid, $message);
+
+        $this->writeError($decorated);
+
+        throw new RuntimeException($decorated);
     }
 
-    private function logError(string $message): void
+    private function writeInfo(string $message): void
+    {
+        $this->output->writeln($message);
+        $this->logger->info($message);
+    }
+
+    private function writeError(string $message): void
     {
         $this->output->writeln($message);
         $this->logger->error($message);

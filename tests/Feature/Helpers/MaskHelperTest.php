@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace SLoggerLaravel\Tests\Feature\Helpers;
 
 use SLoggerLaravel\Helpers\MaskHelper;
+use SLoggerLaravel\Helpers\MaskingRules;
 use SLoggerLaravel\Tests\Feature\BaseTestCase;
 
 class MaskHelperTest extends BaseTestCase
@@ -126,6 +127,141 @@ class MaskHelperTest extends BaseTestCase
         self::assertSame(MaskHelper::FULL_MASK, $decoded['_token']);
         self::assertSame(MaskHelper::FULL_MASK, $decoded['password_hash_web']);
         self::assertSame('en', $decoded['locale']);
+    }
+
+    public function testASerializedBlobHoldingAnObjectIsLeftForTheValuePatterns(): void
+    {
+        // `allowed_classes: false` turns every object in such a blob into an
+        // incomplete one, and an incomplete object cannot be inspected without
+        // throwing - the throw came out of the dispatcher job and took the whole
+        // batch with it, five deterministic retries later
+        $blob = serialize([
+            'user'  => (object) ['email' => 'john@example.com'],
+            'token' => 'X7mQabcdefghijklmnop',
+        ]);
+
+        $masked = MaskHelper::maskArrayByKeys(
+            ['value' => $blob],
+            ['*token*'],
+            [],
+            [self::EMAIL_PATTERN]
+        );
+
+        self::assertIsString($masked['value']);
+
+        // the blob is not taken apart - it could not be put back together as what it
+        // was - but it is still read as the string it is, so a pattern match in it
+        // does not ship
+        self::assertStringNotContainsString('john@example.com', $masked['value']);
+        self::assertStringContainsString('jo************om', $masked['value']);
+    }
+
+    public function testAnIncompleteObjectIsMaskedRatherThanThrownOn(): void
+    {
+        // the same object as above, handed to the masker directly by a caller that
+        // unserialised it itself
+        $incomplete = unserialize(
+            serialize((object) ['api_token' => 'sk-live-SECRET', 'id' => 7]),
+            ['allowed_classes' => false]
+        );
+
+        $masked = MaskHelper::maskArrayByKeys(
+            ['context' => ['dto' => $incomplete]],
+            ['*token*']
+        );
+
+        self::assertSame(MaskHelper::FULL_MASK, $masked['context']['dto']['api_token']);
+        self::assertSame(7, $masked['context']['dto']['id']);
+
+        self::assertStringNotContainsString(
+            'sk-live-SECRET',
+            json_encode($masked, JSON_THROW_ON_ERROR)
+        );
+
+        // and the same one under no key at all: mask() reached for __toString() too
+        self::assertSame(MaskHelper::FULL_MASK, MaskHelper::maskValue($incomplete));
+    }
+
+    public function testAKeyThatMasksOntoAnExistingOneKeepsBothEntries(): void
+    {
+        // two different keys can mask to the same string, and a payload can already
+        // hold something that looks masked. The collision check only ran when the key
+        // had changed, so one of the two was dropped in silence
+        $masked = MaskHelper::maskArrayByKeys(
+            [
+                'ctx' => [
+                    'jo************om' => 'first',
+                    'john@example.com' => 'second',
+                ],
+            ],
+            [],
+            [],
+            [self::EMAIL_PATTERN]
+        );
+
+        self::assertCount(2, $masked['ctx']);
+        self::assertContains('first', $masked['ctx']);
+        self::assertContains('second', $masked['ctx']);
+    }
+
+    public function testAMaskOfZeroIsAMask(): void
+    {
+        // `array_filter` on the compiled list dropped the mask `"0"` as falsy, so a
+        // key literally called `0` - what a list of values under numeric keys looks
+        // like once it has been through json_decode - could not be masked at all
+        $masked = MaskHelper::maskArrayByKeys(
+            ['ctx' => ['0' => 'sk-live-SECRET', '1' => 'kept']],
+            ['0']
+        );
+
+        self::assertSame(MaskHelper::FULL_MASK, $masked['ctx'][0]);
+        self::assertSame('kept', $masked['ctx'][1]);
+    }
+
+    public function testADocumentDeeperThanJsonDecodeReadsIsMaskedWhole(): void
+    {
+        $deep = str_repeat('[', 600) . '"sk-live-SECRET"' . str_repeat(']', 600);
+
+        $masked = MaskHelper::maskArrayByKeys(
+            ['ctx' => ['payload' => $deep]],
+            ['*token*'],
+            [],
+            [self::EMAIL_PATTERN]
+        );
+
+        // handing it back whole shipped every key in it untouched, which is the one
+        // outcome worse than losing the document
+        self::assertSame(MaskHelper::FULL_MASK, $masked['ctx']['payload']);
+    }
+
+    public function testTheRulesAreCompiledOnceRatherThanPerKey(): void
+    {
+        $shipped = require __DIR__ . '/../../../config/slogger.php';
+
+        $rules = new MaskingRules(
+            $shipped['masking']['full_keys'],
+            $shipped['masking']['partial_keys'],
+            []
+        );
+
+        $payload = [];
+
+        for ($index = 0; $index < 20000; $index++) {
+            $payload["field_$index"] = 'value';
+        }
+
+        $startedAt = microtime(true);
+
+        MaskHelper::maskArrayByRules(['ctx' => $payload], $rules);
+
+        $elapsed = microtime(true) - $startedAt;
+
+        // deciding a key's mode used to walk ~60 masks with Str::is, which rebuilds
+        // its regular expression every call, once for the whole key and once per word
+        // component. A megabyte of JSON has enough keys to make that seconds of a
+        // worker's time; the ceiling here is loose on purpose - it is there to catch
+        // a return to per-key compilation, not to measure the machine
+        self::assertLessThan(2.0, $elapsed);
     }
 
     public function testAValuePatternWithAGroupMasksOnlyTheGroup(): void

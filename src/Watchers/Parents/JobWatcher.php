@@ -18,7 +18,7 @@ use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Helpers\DataFormatter;
 use SLoggerLaravel\Helpers\TraceHelper;
 use SLoggerLaravel\Processor;
-use SLoggerLaravel\Traces\TraceIdContainer;
+use SLoggerLaravel\Watchers\OpenTraces;
 use SLoggerLaravel\Watchers\WatcherInterface;
 use Throwable;
 
@@ -35,22 +35,28 @@ class JobWatcher implements WatcherInterface
     ];
 
     /**
-     * @var array<array{trace_id: string, started_at: Carbon}>
-     */
-    protected array $jobs = [];
-    /**
      * @var class-string[]
      */
     protected array $exceptedJobs = self::ALWAYS_EXCEPTED_JOBS;
 
+    protected OpenTraces $openJobs;
+
     public function __construct(
         protected readonly Processor $processor,
-        protected readonly TraceIdContainer $traceIdContainer,
     ) {
+        $this->openJobs = new OpenTraces();
     }
 
     public function register(?array $config): void
     {
+        // a job killed by the timeout signal has its trace closed by the sweep and
+        // never comes back here; without this the entry outlives the worker
+        $this->processor->onTraceInterrupted(
+            function (string $traceId): void {
+                $this->openJobs->forget($traceId);
+            }
+        );
+
         $this->exceptedJobs = array_values(
             array_unique(
                 array_merge(
@@ -64,7 +70,7 @@ class JobWatcher implements WatcherInterface
             function () {
                 return [
                     'slogger_uuid'            => Str::uuid()->toString(),
-                    'slogger_parent_trace_id' => $this->traceIdContainer->getParentTraceId(),
+                    'slogger_parent_trace_id' => $this->processor->currentParentTraceId(),
                 ];
             }
         );
@@ -107,10 +113,13 @@ class JobWatcher implements WatcherInterface
             customParentTraceId: $parentTraceId,
         );
 
-        $this->jobs[$uuid] = [
-            'trace_id'   => $traceId,
-            'started_at' => $loggedAt,
-        ];
+        $this->openJobs->open(
+            $traceId,
+            [
+                'uuid'       => $uuid,
+                'started_at' => $loggedAt,
+            ]
+        );
     }
 
     public function handleJobProcessed(JobProcessed $event): void
@@ -195,15 +204,18 @@ class JobWatcher implements WatcherInterface
             return;
         }
 
-        $jobData = $this->jobs[$uuid] ?? null;
+        // this job's own entry, and taking it also drops whatever a nested job left
+        // open above it. Taken before the trace is stopped: a worker can report the
+        // same job twice - the timeout signal handler fails one that has just been
+        // processed
+        /** @var array{trace_id: string, uuid: string, started_at: Carbon}|null $jobData */
+        $jobData = $this->openJobs->takeInnermost(
+            static fn(array $meta): bool => ($meta['uuid'] ?? null) === $uuid
+        );
 
         if (!$jobData) {
             return;
         }
-
-        // forget the job before stopping: a worker can report the same job twice,
-        // e.g. the timeout signal handler fails a job that has just been processed
-        unset($this->jobs[$uuid]);
 
         $data = [
             'connection_name' => $connectionName,

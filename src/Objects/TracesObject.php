@@ -30,13 +30,15 @@ class TracesObject
     }
 
     /**
+     * Reading, and only reading: these used to array_shift() their way through the
+     * batch, so a second pass saw nothing and count() lied once anything had
+     * serialised it. Whatever masks or sends a batch reads it more than once.
+     *
      * @return Generator<int, TraceCreateObject>
      */
     public function iterateCreating(): Generator
     {
-        while ($trace = array_shift($this->creating)) {
-            yield $trace;
-        }
+        yield from $this->creating;
     }
 
     /**
@@ -44,9 +46,7 @@ class TracesObject
      */
     public function iterateUpdating(): Generator
     {
-        while ($trace = array_shift($this->updating)) {
-            yield $trace;
-        }
+        yield from $this->updating;
     }
 
     public function count(): int

@@ -5,17 +5,10 @@ namespace SLoggerLaravel\Configs;
 class MaskingConfig
 {
     /**
-     * The package's own config, read once per instance rather than per call. The
-     * class is bound as a singleton, so that is once per process.
-     *
-     * @var array<string, mixed>|null
-     */
-    private ?array $shippedMasking = null;
-
-    /**
-     * Case-insensitive substrings of a trace data key whose value is masked whole. An
-     * empty list turns full masking off; only an explicit empty list does, a missing
-     * one falls back to the shipped defaults.
+     * Case-insensitive masks matched against a trace data key - the whole of it and
+     * each of its word components, never as a substring - whose value is masked
+     * whole. An empty list turns full masking off; only an explicit empty list does,
+     * a missing one falls back to the shipped defaults.
      *
      * @return string[]
      */
@@ -57,7 +50,7 @@ class MaskingConfig
         $configured = config("slogger.masking.$name");
 
         if (is_null($configured)) {
-            $configured = $this->shippedDefaults()[$name] ?? [];
+            return [];
         }
 
         return array_values(
@@ -66,30 +59,5 @@ class MaskingConfig
                 static fn(mixed $key): bool => is_string($key) && $key !== ''
             )
         );
-    }
-
-    /**
-     * The package's own config file, read straight from disk.
-     *
-     * A published config replaces this one rather than extending it, so an
-     * application that published before a list existed has no value for it at all -
-     * and would then mask nothing. Reading the file keeps the defaults in one place:
-     * the same file a user publishes and edits.
-     *
-     * @return array<string, mixed>
-     */
-    private function shippedDefaults(): array
-    {
-        if (!is_null($this->shippedMasking)) {
-            return $this->shippedMasking;
-        }
-
-        /** @var array<string, mixed> $config */
-        $config = require __DIR__ . '/../../config/slogger.php';
-
-        /** @var array<string, mixed> $masking */
-        $masking = $config['masking'] ?? [];
-
-        return $this->shippedMasking = $masking;
     }
 }

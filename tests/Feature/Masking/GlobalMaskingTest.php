@@ -6,7 +6,9 @@ namespace SLoggerLaravel\Tests\Feature\Masking;
 
 use Illuminate\Log\LogManager;
 use Illuminate\Support\Carbon;
+use RuntimeException;
 use SLoggerLaravel\Configs\GeneralConfig;
+use SLoggerLaravel\Configs\MaskingConfig;
 use SLoggerLaravel\Dispatcher\ApiClients\ApiClientInterface;
 use SLoggerLaravel\Dispatcher\Items\Queue\Jobs\SendTracesJob;
 use SLoggerLaravel\Enums\TraceStatusEnum;
@@ -200,6 +202,61 @@ class GlobalMaskingTest extends BaseWatcherTestCase
         $this->runJob($job, $apiClient);
 
         self::assertSame(['/users/cu*****************st/orders'], $apiClient->sentTags);
+    }
+
+    public function testATraceTheMaskerCannotReadDoesNotCostTheBatch(): void
+    {
+        $breaking = new class(new MaskingConfig()) extends TraceDataMasker {
+            public function mask(array $data): array
+            {
+                if (array_key_exists('breaks', $data)) {
+                    throw new RuntimeException('cannot read this');
+                }
+
+                return parent::mask($data);
+            }
+        };
+
+        $job = new SendTracesJob(
+            (new TracesObject())
+                ->addCreating($this->makeTrace(['breaks' => ['api_token' => 'sk-live-SECRET']]))
+                ->addCreating($this->makeTrace(['context' => ['api_token' => 'sk-live-OTHER']]))
+        );
+
+        $apiClient = new class implements ApiClientInterface {
+            /**
+             * @var array<int, array<string, mixed>>
+             */
+            public array $sent = [];
+
+            public function sendTraces(TracesObject $traces): void
+            {
+                foreach ($traces->iterateCreating() as $trace) {
+                    $this->sent[] = $trace->data;
+                }
+            }
+        };
+
+        $job->handle(
+            $this->getApp()->make(Processor::class),
+            $apiClient,
+            new GeneralConfig(),
+            $breaking
+        );
+
+        // masking is deterministic, so letting the exception out cost the whole batch
+        // and every one of its five retries - the traces around the broken one
+        // included
+        self::assertCount(2, $apiClient->sent);
+
+        // the broken one arrives saying why it is empty, and carrying nothing of what
+        // could not be read
+        self::assertSame(
+            [TraceDataMasker::MASK_ERROR_KEY => 'cannot read this'],
+            $apiClient->sent[0]
+        );
+
+        self::assertSame(MaskHelper::FULL_MASK, $apiClient->sent[1]['context']['api_token']);
     }
 
     /**

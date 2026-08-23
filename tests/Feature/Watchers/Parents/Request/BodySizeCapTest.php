@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace SLoggerLaravel\Tests\Feature\Watchers\Parents\Request;
 
 use Illuminate\Http\UploadedFile;
+use SLoggerLaravel\Helpers\BodyDecoder;
 use SLoggerLaravel\Tests\Feature\Watchers\BaseWatcherTestCase;
 use SLoggerLaravel\Watchers\Parents\RequestWatcher;
 
@@ -135,6 +136,40 @@ class BodySizeCapTest extends BaseWatcherTestCase
         self::assertSame(['__skipped' => 'request_too_large'], $data['request']['parameters']);
 
         self::assertStringNotContainsString('s3cr3t', json_encode($data, JSON_THROW_ON_ERROR));
+    }
+
+    /**
+     * The two caps are separate settings, and the xml path measured the request
+     * against the response one: with a small `output.max_content_length` an XML
+     * request body well inside `input.max_content_length` was dropped, and with a
+     * large one it was parsed in the traced application's own request path before
+     * anything checked its size.
+     */
+    public function testAnXmlRequestBodyIsMeasuredAgainstTheInputCap(): void
+    {
+        $this->registerWatcher(
+            RequestWatcher::class,
+            [
+                'input'  => ['max_content_length' => self::CAP * 100],
+                'output' => ['max_content_length' => self::CAP],
+            ]
+        );
+
+        $content = '<order><note>' . str_repeat('x', self::CAP * 2) . '</note></order>';
+
+        $this->call(
+            method: 'POST',
+            uri: route('slogger.xml'),
+            server: [
+                'CONTENT_TYPE'   => 'application/xml',
+                'CONTENT_LENGTH' => (string) strlen($content),
+            ],
+            content: $content
+        )->assertOk();
+
+        $parameters = $this->recordedRequestData()['request']['parameters'];
+
+        self::assertSame($content, $parameters[BodyDecoder::XML_KEY]);
     }
 
     public function testAResponseBodyAboveTheCapIsNotRecorded(): void

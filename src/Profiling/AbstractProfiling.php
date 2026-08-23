@@ -2,17 +2,16 @@
 
 namespace SLoggerLaravel\Profiling;
 
-use Fiber;
 use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\Profiling\Dto\ProfilingObjects;
+use SLoggerLaravel\Traces\TraceScopeResolverInterface;
 
 abstract class AbstractProfiling
 {
     private bool $profilingEnabled;
-    private bool $profilingStarted = false;
 
     /**
-     * The trace the running profile belongs to.
+     * The trace the running profile belongs to, and null while nothing is running.
      *
      * A profiler measures the process, so only one run can be in flight at a time.
      * With nested parent traces - `Artisan::call()` from inside a command - the
@@ -27,7 +26,8 @@ abstract class AbstractProfiling
     abstract protected function onStop(): ?ProfilingObjects;
 
     public function __construct(
-        private readonly WatchersConfig $loggerConfig
+        private readonly WatchersConfig $loggerConfig,
+        private readonly TraceScopeResolverInterface $scopeResolver
     ) {
         $this->profilingEnabled = $this->loggerConfig->profilingEnabled();
     }
@@ -38,11 +38,17 @@ abstract class AbstractProfiling
             return;
         }
 
-        if (!is_null(Fiber::getCurrent())) {
+        if ($this->scopeResolver->isConcurrent()) {
             // a profiler is process-wide: it measures whatever the process does
             // between start and stop, and under a concurrent runtime that is every
             // coroutine that ran in between, attributed to whichever trace happened
-            // to stop first. Wrong numbers are worse than none
+            // to stop first. Wrong numbers are worse than none.
+            //
+            // Asked of the resolver rather than of Fiber::getCurrent(): a Swoole
+            // coroutine is not a Fiber, so a runtime with a resolver of its own -
+            // which is exactly the case this guards - profiled the whole interleaved
+            // lot anyway; and under a plain process any library that runs code in a
+            // Fiber (amphp, Reverb) silently switched profiling off while it did
             return;
         }
 
@@ -52,29 +58,20 @@ abstract class AbstractProfiling
             return;
         }
 
-        $this->profilingStarted = $this->onStart();
-
-        if ($this->profilingStarted) {
+        if ($this->onStart()) {
             $this->ownerTraceId = $traceId;
         }
     }
 
     public function stop(string $traceId): ?ProfilingObjects
     {
-        if (!$this->profilingStarted || !$this->profilingEnabled) {
-            return null;
-        }
-
         if ($this->ownerTraceId !== $traceId) {
             return null;
         }
 
-        $profilingObjects = $this->onStop();
+        $this->ownerTraceId = null;
 
-        $this->profilingStarted = false;
-        $this->ownerTraceId     = null;
-
-        return $profilingObjects;
+        return $this->onStop();
     }
 
     /**
@@ -84,10 +81,6 @@ abstract class AbstractProfiling
      */
     public function release(string $traceId): void
     {
-        if ($this->ownerTraceId !== $traceId) {
-            return;
-        }
-
         $this->stop($traceId);
     }
 }

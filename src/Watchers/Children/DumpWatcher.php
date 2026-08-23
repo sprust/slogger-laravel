@@ -2,19 +2,25 @@
 
 namespace SLoggerLaravel\Watchers\Children;
 
+use Closure;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Processor;
 use SLoggerLaravel\Watchers\WatcherInterface;
 use Symfony\Component\VarDumper\VarDumper;
 
-//TODO: refactor
 class DumpWatcher implements WatcherInterface
 {
     /**
-     * @var array<string, mixed>|null
+     * The handler this watcher installs, kept so it can be put back.
+     *
+     * Dumping has to happen with the handler removed, or VarDumper would call back
+     * into here forever - and what is put back afterwards is this closure, which is
+     * all the config was ever kept for.
+     *
+     * @var (Closure(mixed): void)|null
      */
-    protected ?array $config = [];
+    protected ?Closure $handler = null;
 
     public function __construct(
         protected Processor $processor
@@ -23,20 +29,24 @@ class DumpWatcher implements WatcherInterface
 
     public function register(?array $config): void
     {
-        $this->config = $config;
-
-        VarDumper::setHandler(function (mixed $dump) {
+        $this->handler ??= function (mixed $dump): void {
             $this->handleDump($dump);
-        });
+        };
+
+        VarDumper::setHandler($this->handler);
     }
 
     public function handleDump(mixed $dump): void
     {
         VarDumper::setHandler(null);
 
-        VarDumper::dump($dump);
-
-        $this->register($this->config);
+        try {
+            VarDumper::dump($dump);
+        } finally {
+            // put back even when dumping threw: otherwise the handler stays off for
+            // the rest of the process and nothing is traced again
+            VarDumper::setHandler($this->handler);
+        }
 
         if ($this->processor->isPaused()) {
             return;

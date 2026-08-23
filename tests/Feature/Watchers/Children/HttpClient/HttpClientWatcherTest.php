@@ -26,6 +26,7 @@ use SLoggerLaravel\Processor;
 use SLoggerLaravel\RequestPreparer\RequestDataFormatters;
 use SLoggerLaravel\Tests\Feature\Watchers\Children\BaseChildWatcherTestCase;
 use SLoggerLaravel\Watchers\Children\HttpClientWatcher;
+use SLoggerLaravel\Watchers\OpenTraces;
 use SLoggerLaravel\Watchers\Parents\JobWatcher;
 use Throwable;
 
@@ -41,7 +42,7 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
 
         // every tracked request must be released once its trace is stopped,
         // otherwise long-running workers leak one entry per outbound request.
-        self::assertSame([], $this->getTrackedRequests($watcher));
+        self::assertSame(0, $this->countTrackedRequests($watcher));
     }
 
     public function testDoesNotLeakTrackedRequestsOnFailure(): void
@@ -72,7 +73,7 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
             }
         });
 
-        self::assertSame([], $this->getTrackedRequests($watcher));
+        self::assertSame(0, $this->countTrackedRequests($watcher));
     }
 
     public function testParentIsJob(): void
@@ -202,7 +203,7 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
 
         self::assertCount(2, $this->dispatcher->findUpdating());
 
-        self::assertSame([], $this->getTrackedRequests($watcher));
+        self::assertSame(0, $this->countTrackedRequests($watcher));
     }
 
     public function testDoesNotLeakTrackedRequestsSweptByTheProcessor(): void
@@ -234,7 +235,7 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
         );
 
         // and it told the watcher, which would otherwise keep the entry forever
-        self::assertSame([], $this->getTrackedRequests($watcher));
+        self::assertSame(0, $this->countTrackedRequests($watcher));
     }
 
     public function testANonSeekableRequestBodyDoesNotBreakTheTrace(): void
@@ -575,17 +576,13 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
         return app(HttpClientWatcher::class);
     }
 
-    /**
-     * @return array<string, array{trace_id: string, started_at: mixed}>
-     */
-    private function getTrackedRequests(HttpClientWatcher $watcher): array
+    private function countTrackedRequests(HttpClientWatcher $watcher): int
     {
-        $property = (new ReflectionClass($watcher))->getProperty('requests');
-        $property->setAccessible(true);
+        $property = (new ReflectionClass($watcher))->getProperty('openRequests');
 
-        /** @var array<string, array{trace_id: string, started_at: mixed}> $requests */
-        $requests = $property->getValue($watcher);
+        /** @var OpenTraces $openRequests */
+        $openRequests = $property->getValue($watcher);
 
-        return $requests;
+        return $openRequests->count();
     }
 }

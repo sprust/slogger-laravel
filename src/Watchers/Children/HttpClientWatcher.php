@@ -6,16 +6,18 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\StreamInterface;
 use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\DataResolver;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Guzzle\GuzzleHandlerFactory;
 use SLoggerLaravel\Helpers\BodyDecoder;
 use SLoggerLaravel\Helpers\DataFormatter;
+use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Helpers\TraceHelper;
 use SLoggerLaravel\Processor;
 use SLoggerLaravel\RequestPreparer\RequestDataFormatters;
-use SLoggerLaravel\Traces\TraceIdContainer;
+use SLoggerLaravel\Watchers\OpenTraces;
 use SLoggerLaravel\Watchers\WatcherInterface;
 use Throwable;
 
@@ -23,24 +25,22 @@ class HttpClientWatcher implements WatcherInterface
 {
     /**
      * Bodies at or above this are described rather than recorded, in either
-     * direction: telemetry must not double the memory a request needs.
+     * direction: telemetry must not double the memory a request needs. The masker's
+     * own limit, so a body that is recorded is a body that can be read.
      */
-    protected const MAX_BODY_BYTES = 1000000;
+    protected const MAX_BODY_BYTES = MaskHelper::MAX_READABLE_BYTES;
     protected string $headerTraceIdKey;
     protected ?string $headerParentTraceIdKey;
 
-    /**
-     * @var array<string, array{trace_id: string, started_at: Carbon}>
-     */
-    protected array $requests = [];
+    protected OpenTraces $openRequests;
 
     public function __construct(
         protected Processor $processor,
-        protected TraceIdContainer $traceIdContainer,
         WatchersConfig $watchersConfig
     ) {
         $this->headerTraceIdKey       = Str::random(20);
         $this->headerParentTraceIdKey = $watchersConfig->requestsHeaderParentTraceIdKey();
+        $this->openRequests           = new OpenTraces();
     }
 
     public function register(?array $config): void
@@ -52,7 +52,7 @@ class HttpClientWatcher implements WatcherInterface
         // response hook ever runs to clear its entry
         $this->processor->onTraceInterrupted(
             function (string $traceId): void {
-                unset($this->requests[$traceId]);
+                $this->openRequests->forget($traceId);
             }
         );
     }
@@ -107,10 +107,6 @@ class HttpClientWatcher implements WatcherInterface
 
     protected function onHandleRequest(RequestInterface $request): RequestInterface
     {
-        if (!$this->isSubscribeRequest($request)) {
-            return $request;
-        }
-
         $loggedAt = Carbon::now();
 
         // detached: `Http::pool()` keeps several requests in flight at once, so an
@@ -123,10 +119,7 @@ class HttpClientWatcher implements WatcherInterface
             loggedAt: $loggedAt,
         );
 
-        $this->requests[$traceId] = [
-            'trace_id'   => $traceId,
-            'started_at' => $loggedAt,
-        ];
+        $this->openRequests->open($traceId, ['started_at' => $loggedAt]);
 
         $request = $request->withHeader($this->headerTraceIdKey, $traceId);
 
@@ -152,26 +145,13 @@ class HttpClientWatcher implements WatcherInterface
         ResponseInterface $response,
         RequestDataFormatters $formatters
     ): void {
-        if (!$this->isSubscribeRequest($request)) {
-            return;
-        }
-
-        $traceId = $request->getHeader($this->headerTraceIdKey)[0] ?? null;
-
-        if ($traceId === null) {
-            return;
-        }
-
-        $requestData = $this->requests[$traceId] ?? null;
+        $requestData = $this->takeOpenRequest($request);
 
         if (!$requestData) {
             return;
         }
 
-        // drop the tracked request before stopping the trace so the entry is
-        // always cleared, even if stop() throws: otherwise long-running processes
-        // (queue workers, Octane) leak one entry per outbound request.
-        unset($this->requests[$traceId]);
+        $traceId = $requestData['trace_id'];
 
         /** @var Carbon $startedAt */
         $startedAt = $requestData['started_at'];
@@ -180,7 +160,7 @@ class HttpClientWatcher implements WatcherInterface
 
         $statusCode = $response->getStatusCode();
 
-        $this->processor->stopDetached(
+        $this->processor->stop(
             traceId: $traceId,
             status: ($statusCode >= 200 && $statusCode < 300)
                 ? TraceStatusEnum::Success->value
@@ -208,33 +188,20 @@ class HttpClientWatcher implements WatcherInterface
         Throwable $exception,
         RequestDataFormatters $formatters
     ): void {
-        if (!$this->isSubscribeRequest($request)) {
-            return;
-        }
-
-        $traceId = $request->getHeader($this->headerTraceIdKey)[0] ?? null;
-
-        if ($traceId === null) {
-            return;
-        }
-
-        $requestData = $this->requests[$traceId] ?? null;
+        $requestData = $this->takeOpenRequest($request);
 
         if (!$requestData) {
             return;
         }
 
-        // drop the tracked request before stopping the trace so the entry is
-        // always cleared, even if stop() throws: otherwise long-running processes
-        // (queue workers, Octane) leak one entry per outbound request.
-        unset($this->requests[$traceId]);
+        $traceId = $requestData['trace_id'];
 
         /** @var Carbon $startedAt */
         $startedAt = $requestData['started_at'];
 
         $uri = $this->getRequestUrl($request);
 
-        $this->processor->stopDetached(
+        $this->processor->stop(
             traceId: $traceId,
             status: TraceStatusEnum::Failed->value,
             tags: $uri ? [$uri] : [],
@@ -251,9 +218,27 @@ class HttpClientWatcher implements WatcherInterface
         );
     }
 
-    protected function isSubscribeRequest(RequestInterface $request): bool
+    /**
+     * The trace this response belongs to, taken out of the open ones - by the id the
+     * outbound request carries, since responses arrive in no particular order.
+     *
+     * Taken before the trace is stopped, so a stop() that throws still leaves nothing
+     * behind: a long-lived worker otherwise leaks one entry per outbound request.
+     *
+     * @return array{trace_id: string, started_at: Carbon}|null
+     */
+    protected function takeOpenRequest(RequestInterface $request): ?array
     {
-        return true;
+        $traceId = $request->getHeader($this->headerTraceIdKey)[0] ?? null;
+
+        if (!is_string($traceId)) {
+            return null;
+        }
+
+        /** @var array{trace_id: string, started_at: Carbon}|null $requestData */
+        $requestData = $this->openRequests->take($traceId);
+
+        return $requestData;
     }
 
     /**
@@ -267,7 +252,7 @@ class HttpClientWatcher implements WatcherInterface
 
         foreach ($formatters->getItems() as $formatter) {
             $headers = $formatter->prepareRequestHeaders(
-                url: $this->getRequestPath($request),
+                url: $this->getRequestUri($request),
                 headers: $headers
             );
         }
@@ -282,9 +267,9 @@ class HttpClientWatcher implements WatcherInterface
         RequestInterface $request,
         RequestDataFormatters $formatters
     ): array {
-        $parameters = $this->readRequestBody($request);
+        $parameters = $this->readBody($request->getBody(), $request->getHeaderLine('Content-Type'));
 
-        $url = $this->getRequestPath($request);
+        $url = $this->getRequestUri($request);
 
         foreach ($formatters->getItems() as $formatter) {
             $parameters = $formatter->prepareRequestParameters(
@@ -297,29 +282,31 @@ class HttpClientWatcher implements WatcherInterface
     }
 
     /**
+     * Reads a message body without changing what anyone else will do with it.
+     *
      * Reading an outbound body is the one thing tracing does that can change what the
-     * application sends, or how much memory it needs to send it. Both guards below
-     * exist for that reason, and both mirror what the response path already does.
+     * application sends, or how much memory it needs to send it - and the inbound one
+     * has the same problem with what the application is about to read. One copy for
+     * both: the two used to check the same three things in a different order, so the
+     * same stream was described one way going out and another coming back.
      *
      * @return array<int|string, mixed>
      */
-    protected function readRequestBody(RequestInterface $request): array
+    protected function readBody(StreamInterface $body, string $contentType): array
     {
-        $body = $request->getBody();
-
-        if (!$body->isSeekable()) {
-            // reading it would consume the body the client is about to send
-            return [
-                '__skipped' => 'non_seekable_body',
-            ];
-        }
-
         $size = $body->getSize();
 
         if (!is_null($size) && $size >= self::MAX_BODY_BYTES) {
             // an upload must not be copied into memory a second time just to trace it
             return [
                 '__cleaned' => "--cleaned:big-size-$size--",
+            ];
+        }
+
+        if (!$body->isSeekable()) {
+            // reading it would consume the body someone else is about to
+            return [
+                '__skipped' => 'non_seekable_body',
             ];
         }
 
@@ -337,7 +324,7 @@ class HttpClientWatcher implements WatcherInterface
             ];
         }
 
-        return BodyDecoder::decode($contents, $request->getHeaderLine('Content-Type'));
+        return BodyDecoder::decode($contents, $contentType);
     }
 
     /**
@@ -348,7 +335,7 @@ class HttpClientWatcher implements WatcherInterface
         ResponseInterface $response,
         RequestDataFormatters $formatters
     ): array {
-        $url = $this->getRequestPath($request);
+        $url = $this->getRequestUri($request);
 
         $headers = $response->getHeaders();
 
@@ -372,41 +359,14 @@ class HttpClientWatcher implements WatcherInterface
     ): array {
         $body = $response->getBody();
 
-        $size = $body->getSize();
-
-        if (!is_null($size) && $size >= self::MAX_BODY_BYTES) {
-            return [
-                '__cleaned' => "--cleaned:big-size-$size--",
-            ];
-        }
-
-        if (!$body->isSeekable()) {
-            // reading it would consume the body the application is about to read
-            return [
-                '__skipped' => 'non_seekable_body',
-            ];
-        }
-
-        $body->rewind();
-
-        $url = $this->getRequestPath($request);
+        $url = $this->getRequestUri($request);
 
         $contentType = $response->getHeaderLine('Content-Type');
 
+        // lazily: a formatter is allowed to say the body is not worth recording, and
+        // then nothing here touches the stream at all
         $dataResolver = new DataResolver(
-            function () use ($body, $contentType): array {
-                $contents = $body->getContents();
-
-                if (strlen($contents) >= self::MAX_BODY_BYTES) {
-                    // getSize() is null for a chunked or generated body, so the cap
-                    // has to be re-checked against what was actually read
-                    return [
-                        '__cleaned' => '--cleaned:big-size--',
-                    ];
-                }
-
-                return BodyDecoder::decode($contents, $contentType);
-            }
+            fn(): array => $this->readBody($body, $contentType)
         );
 
         foreach ($formatters->getItems() as $formatter) {
@@ -420,11 +380,7 @@ class HttpClientWatcher implements WatcherInterface
             }
         }
 
-        $data = $dataResolver->getData();
-
-        $body->rewind();
-
-        return $data;
+        return $dataResolver->getData();
     }
 
     /**
@@ -466,7 +422,11 @@ class HttpClientWatcher implements WatcherInterface
             ->withUserInfo('');
     }
 
-    protected function getRequestPath(RequestInterface $request): string
+    /**
+     * The url a formatter matches its patterns against - the whole of it, query and
+     * all. It is never recorded: what a trace carries is getRequestUrl().
+     */
+    protected function getRequestUri(RequestInterface $request): string
     {
         return (string) $request->getUri();
     }

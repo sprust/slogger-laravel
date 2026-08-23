@@ -67,7 +67,7 @@ abstract class FiberTraceScopeResolver implements TraceScopeResolverInterface
         $scope = new TraceScope(ownerId: $ownerId);
 
         if ($found instanceof TraceScope) {
-            $scope->parentTraceId = $found->currentParentTraceId();
+            $scope->parentTraceId = $found->parentTraceId;
         }
 
         $this->write($scope);

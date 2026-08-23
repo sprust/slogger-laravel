@@ -7,14 +7,14 @@ use Illuminate\Http\Request;
 use SLoggerLaravel\Configs\GeneralConfig;
 use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\Events\RequestHandling;
-use SLoggerLaravel\Traces\TraceIdContainer;
+use SLoggerLaravel\Processor;
 use Symfony\Component\HttpFoundation\Response;
 
 class HttpMiddleware
 {
     private bool $enabled;
 
-    private ?TraceIdContainer $traceIdContainer = null;
+    private ?Processor $processor = null;
 
     private ?string $headerParentTraceIdKey = null;
 
@@ -73,7 +73,7 @@ class HttpMiddleware
         // last - harmless while a process serves one request at a time, wrong under
         // Octane and under a coroutine runtime. The container resolves it per unit
         // of work, which is the whole point of TraceScope
-        $traceId = $this->getLoggerTraceIdContainer()->getParentTraceId();
+        $traceId = $this->getProcessor()->currentParentTraceId();
 
         if (is_null($traceId)) {
             return;
@@ -87,8 +87,8 @@ class HttpMiddleware
         return $this->headerParentTraceIdKey ??= app(WatchersConfig::class)->requestsHeaderParentTraceIdKey();
     }
 
-    private function getLoggerTraceIdContainer(): TraceIdContainer
+    private function getProcessor(): Processor
     {
-        return $this->traceIdContainer ??= app(TraceIdContainer::class);
+        return $this->processor ??= app(Processor::class);
     }
 }

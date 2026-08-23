@@ -59,6 +59,25 @@ class MetricsHelperTest extends BaseTestCase
         self::assertFalse($this->parse('-1'));
         self::assertFalse($this->parse(''));
         self::assertFalse($this->parse('lots'));
+
+        // PHP reads this as one gigabyte and warns about it; requiring the whole
+        // string to match reported no metric at all for a process that has a limit
+        self::assertSame(1024.0, $this->parse('1.5G'));
+    }
+
+    public function testAMachineThatWillNotSayItsCoreCountReportsNoCpuMetric(): void
+    {
+        $reflection = new ReflectionClass(MetricsHelper::class);
+
+        // assuming one core reported a comfortable load of 4 on an eight-core box as
+        // 400% - and every platform without procfs took that branch
+        $reflection->getProperty('cpuCount')->setValue(null, false);
+
+        try {
+            self::assertNull(MetricsHelper::getCpuAvgPercent());
+        } finally {
+            $this->resetCaches();
+        }
     }
 
     public function testGetCpuAvgPercentIsNormalisedByCoreCount(): void

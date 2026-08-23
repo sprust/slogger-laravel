@@ -2,9 +2,7 @@
 
 namespace SLoggerLaravel\Helpers;
 
-use DOMDocument;
 use Illuminate\Support\Str;
-use Throwable;
 
 /**
  * Turns a request or response body into the array a trace carries.
@@ -15,11 +13,11 @@ use Throwable;
  * under one key, where the masker knows how to look inside it.
  *
  * Anything else is dropped, as it always was. That last part is load-bearing: a
- * body is only XML if it parses as XML, never merely because it starts with `<`.
- * An HTML page starts with `<` too - and a framework error page, which is what a
- * failing endpoint returns, carries CSRF tokens, inlined keys and, with a debug
- * page installed, environment values. The masker cannot read those, so recording
- * them would be shipping them.
+ * body is XML only if the sender said so and it does not look like a page. An HTML
+ * page starts with `<` too - and a framework error page, which is what a failing
+ * endpoint returns, carries CSRF tokens, inlined keys and, with a debug page
+ * installed, environment values. The masker matches key names and cannot read any of
+ * that, so recording it would be shipping it.
  */
 class BodyDecoder
 {
@@ -32,10 +30,13 @@ class BodyDecoder
     /**
      * Above this a document is not parsed at all. It is the masker's own limit:
      * a body it would refuse to look inside must not be recorded unmasked.
-     *
-     * @see MaskHelper::MAX_STRING_LENGTH
      */
-    public const MAX_BODY_BYTES = 1000000;
+    public const MAX_BODY_BYTES = MaskHelper::MAX_READABLE_BYTES;
+
+    /**
+     * How much of a body is read to tell a document from a page.
+     */
+    private const SNIFF_BYTES = 512;
 
     /**
      * Content types that carry XML. Anything else is not recorded as XML, however
@@ -113,62 +114,47 @@ class BodyDecoder
     }
 
     /**
-     * Whether this really is XML - parsed, not guessed from the first character.
+     * Whether this is a document worth recording rather than a page.
+     *
+     * Sniffed, not parsed. Building a DOM of up to a megabyte here would happen in
+     * the traced application's own request path - and the masker builds it again in
+     * the worker anyway, which is where the package is allowed to spend time. The
+     * sender has already said this is XML; all that is left is the one thing a
+     * content type gets wrong often enough to matter.
+     *
+     * A page is not a payload: well-formed HTML parses as XML, and an error page -
+     * which is what a failing endpoint answers with - carries CSRF tokens, inlined
+     * keys and, with a debug page installed, environment values. The masker matches
+     * key names and cannot read any of that, so recording it would be shipping it.
      */
     public static function isXml(string $contents): bool
     {
         $trimmed = self::trimForParsing($contents);
 
-        if ($trimmed === '' || $trimmed[0] !== '<' || !class_exists(DOMDocument::class)) {
+        if ($trimmed === '' || $trimmed[0] !== '<') {
             return false;
         }
 
-        $document = new DOMDocument();
+        $head = substr($trimmed, 0, self::SNIFF_BYTES);
 
-        $previousErrors = libxml_use_internal_errors(true);
-
-        try {
-            // the same flags the masker parses with, so the two never disagree about
-            // what counts as XML
-            $loaded = $document->loadXML(
-                $trimmed,
-                LIBXML_NONET | LIBXML_NOWARNING | LIBXML_NOERROR
-            );
-        } catch (Throwable) {
-            $loaded = false;
-        } finally {
-            libxml_clear_errors();
-            libxml_use_internal_errors($previousErrors);
-        }
-
-        if ($loaded === false || is_null($document->documentElement)) {
-            return false;
-        }
-
-        // a page is not a payload. Well-formed HTML parses as XML, and an error page
-        // - which is what a failing endpoint answers with - carries CSRF tokens,
-        // inlined keys and, with a debug page installed, environment values. The
-        // masker cannot read any of it, so recording it would be shipping it
-        $rootName = $document->documentElement->localName ?: $document->documentElement->nodeName;
-
-        $doctypeName = is_null($document->doctype) ? '' : $document->doctype->name;
-
-        return Str::lower($rootName) !== 'html' && Str::lower($doctypeName) !== 'html';
+        return preg_match('/<!DOCTYPE\s+html\b|<html[\s>]/i', $head) !== 1;
     }
 
     /**
      * A byte order mark is legal before the declaration and is not whitespace, so
      * ltrim() leaves it - and then the document does not start with `<` and is
      * neither recognised nor masked.
+     *
+     * The UTF-8 mark only: after a UTF-16 one the document is UTF-16, where `<` is
+     * two bytes and libxml needs the mark to know it. Stripping those never made a
+     * document readable, it only made the branch look as though it had.
      */
     public static function trimForParsing(string $contents): string
     {
         $trimmed = ltrim($contents);
 
-        foreach (["\xEF\xBB\xBF", "\xFE\xFF", "\xFF\xFE"] as $bom) {
-            if (str_starts_with($trimmed, $bom)) {
-                return ltrim(substr($trimmed, strlen($bom)));
-            }
+        if (str_starts_with($trimmed, "\xEF\xBB\xBF")) {
+            return ltrim(substr($trimmed, 3));
         }
 
         return $trimmed;

@@ -7,11 +7,14 @@ use SLoggerLaravel\LocalStorage;
 
 readonly class DispatcherProcessState
 {
-    private string $staticUid;
+    /**
+     * Part of the state file's name, so two packages sharing a storage directory
+     * cannot collide. A literal, not a value anyone passes in.
+     */
+    private const STATIC_UID = '678ed0bcb2d2c';
 
     public function __construct(private string $masterCommandName)
     {
-        $this->staticUid = "678ed0bcb2d2c";
     }
 
     public function getMasterCommandName(): string
@@ -84,9 +87,11 @@ readonly class DispatcherProcessState
             throw new RuntimeException('Failed to encode dispatcher state.');
         }
 
+        // named after this process: nobody else writes to it, which is why no lock
+        // is taken here. What makes the write safe is the rename below
         $temporaryPath = $pidFilePath . '.' . getmypid() . '.tmp';
 
-        if (file_put_contents($temporaryPath, $json, LOCK_EX) === false) {
+        if (file_put_contents($temporaryPath, $json) === false) {
             throw new RuntimeException('Failed to write PID to file.');
         }
 
@@ -130,6 +135,6 @@ readonly class DispatcherProcessState
 
     private function makeFilePath(): string
     {
-        return app(LocalStorage::class)->makePath("dispatcher-state-$this->staticUid.json");
+        return app(LocalStorage::class)->makePath('dispatcher-state-' . self::STATIC_UID . '.json');
     }
 }

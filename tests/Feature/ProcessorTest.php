@@ -387,7 +387,7 @@ class ProcessorTest extends BaseTestCase
             parentLoggedAt: Carbon::now()
         );
 
-        $processor->stopDetached(
+        $processor->stop(
             traceId: $stackedTraceId,
             status: TraceStatusEnum::Success->value,
             tags: null,
@@ -421,15 +421,18 @@ class ProcessorTest extends BaseTestCase
         self::assertFalse($processor->isActive());
     }
 
-    public function testDetachedTracesWithoutAnOwnerAreClosedWhenWorkEnds(): void
+    /**
+     * A detached trace nobody will ever close by name: started with no trace around
+     * it, so no stop() can name its owner. Age is what reaches it - and the same
+     * sweep is what reaches one whose owner died with the coroutine holding it.
+     */
+    public function testADetachedTraceNobodyOwnsIsSweptOnceItIsOldEnough(): void
     {
         $processor  = $this->getApp()->make(Processor::class);
         $dispatcher = $this->getApp()->make(MemoryDispatcher::class);
 
         $dispatcher->flush();
 
-        // started before anything else: there is no parent trace to own it, so nothing
-        // else can ever reach it
         $orphanTraceId = $processor->startAndGetDetachedTraceId(
             type: 'http-client',
             tags: [],
@@ -437,7 +440,35 @@ class ProcessorTest extends BaseTestCase
             loggedAt: Carbon::now()
         );
 
-        $parentTraceId = $processor->startAndGetTraceId(
+        // a request still in flight is not an abandoned one: closing an ownerless
+        // trace the moment some unrelated unit of work ends would report a call that
+        // is about to succeed as interrupted
+        $this->runOneTrace($processor);
+
+        self::assertCount(0, $dispatcher->findUpdating(traceId: $orphanTraceId));
+
+        Carbon::setTestNow(Carbon::now()->addSeconds(Processor::DETACHED_TRACE_TTL_SECONDS + 1));
+
+        try {
+            $this->runOneTrace($processor);
+        } finally {
+            Carbon::setTestNow();
+        }
+
+        $updating = $dispatcher->findUpdating(
+            traceId: $orphanTraceId,
+            status: TraceStatusEnum::Failed
+        );
+
+        self::assertCount(1, $updating);
+        self::assertContains(Processor::INTERRUPTED_TAG, $updating[0]->tags ?? []);
+
+        self::assertFalse($processor->isActive());
+    }
+
+    private function runOneTrace(Processor $processor): void
+    {
+        $traceId = $processor->startAndGetTraceId(
             type: 'job',
             tags: [],
             data: [],
@@ -446,22 +477,12 @@ class ProcessorTest extends BaseTestCase
         );
 
         $processor->stop(
-            traceId: $parentTraceId,
+            traceId: $traceId,
             status: TraceStatusEnum::Success->value,
             tags: null,
             data: null,
             duration: null,
             parentLoggedAt: Carbon::now()
         );
-
-        self::assertCount(
-            1,
-            $dispatcher->findUpdating(
-                traceId: $orphanTraceId,
-                status: TraceStatusEnum::Failed
-            )
-        );
-
-        self::assertFalse($processor->isActive());
     }
 }

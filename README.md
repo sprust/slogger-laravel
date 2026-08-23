@@ -45,7 +45,7 @@ Masking moved out of the traced application and into the dispatcher job.
   - mail addresses are nested under `message` and carried as `email`/`full_name` pairs
     instead of address-as-key;
   - an anonymous notifiable's routes moved out of the `Anonymous:...` string into
-    `target.recipients` (and an address left in a string like that is now masked by a
+    `recipients` (and an address left in a string like that is now masked by a
     value pattern anyway);
   - a url's query string is split off into `query` and `query_string`;
   - **route parameter values are no longer tags, and no longer the `uri`.** A request
@@ -54,7 +54,12 @@ Masking moved out of the traced application and into the dispatcher job.
   - the outbound `uri` loses its userinfo, so credentials written into a url do not
     reach a tag;
   - values added through `TraceDataComplementer::add()` land under `__add`
-    rather than at the top level, which is what puts them in the masker's reach.
+    rather than at the top level, which is what puts them in the masker's reach. A
+    plain value added there belongs to the current unit of work and is dropped when
+    it ends - the next job in a `queue:work` worker, and the next request under
+    Octane, do not inherit it. A `Closure` is the other half: registered once, for
+    the process, and evaluated afresh for every trace, which is what a
+    `fn() => auth()->id()` in a service provider needs.
 - **An XML body is now recorded**, under `__xml`, where before it was dropped:
   both watchers ran every body through `json_decode`, and an XML one gave `[]`. A
   consumer that assumed a body is always a decoded structure will now also see a
@@ -243,9 +248,9 @@ Watcher data highlights:
 - `event`: listeners, broadcast, optional serialized payload
 - `model`: action, model class, key, changes
 - `mail`: mailable/notification, queued, `message` (from/reply_to/to/cc/bcc as `email`/`full_name` pairs, subject)
-- `notification`: notifiable, channel, queued, `target.recipients`, response
+- `notification`: notifiable, channel, queued, `recipients`, response
 - `cache`: type, key, and `cache.<key>` (value, tags, expiration)
-- `db`: query, bindings (masked unless masking is turned off entirely), time
+- `db`: query, how many bindings it had (`bindings_count`), time. The bindings themselves only with masking turned off entirely
 - `http-client`: method, url, query/query_string, request/response (concurrent requests are traced independently, so `Http::pool()` works)
 - `schedule`: command, description, cron, output
 - `dump`, `log`, `gate`: dump/message/ability info
@@ -313,7 +318,7 @@ For HTTP request tracing, add the middleware to the routes you want traced:
                 ],
 
                 // limit json response size (bytes)
-                'max_content_length' => 1048576,
+                'max_content_length' => 1000000,
             ],
         ],
     ],
@@ -379,9 +384,9 @@ dispatcher workers instead. Two consequences follow:
 Watchers do not mask. What they do at runtime is hide and truncate: `only_paths`,
 `excepted_paths`, `hidden_paths`, `max_content_length`, per-watcher `excepted` lists.
 The one exception is the database watcher: query bindings are positional, so no key list
-can reach them, and it masks them where they are recorded. All of them, whatever their
-type or length - nothing in a binding says whether it is a password or a page number,
-and a PIN, an OTP and an account number are all short and numeric.
+can reach them, and with masking on it records only how many there were. All of them,
+whatever their type or length - nothing in a binding says whether it is a password or a
+page number, and a PIN, an OTP and an account number are all short and numeric.
 
 ### The key lists
 
@@ -453,21 +458,37 @@ and a PIN, an OTP and an account number are all short and numeric.
     // a value under a matching key keeps two characters at each end, so two
     // records still look different. these identify a person rather than
     // authenticate one - never put a secret here.
+    //
+    // a bare `name` is not one of them, however common it is as a person's: it is
+    // matched as a word component too, and most of what a trace is made of is
+    // named by one - `job.name` holds a job class, `listeners[].name` a listener
+    // class, an uploaded file's `name` its filename, and in a `{"name": ...,
+    // "value": ...}` pair `name` names the value rather than being one. so the
+    // person's name is spelled out instead.
     'partial_keys' => [
         'email',
         'phone',
         'recipient',
-        'name',
         'username',
+        'user_name',
+        'nickname',
         'surname',
         'firstname',
+        'first_name',
         'lastname',
+        'last_name',
+        'middlename',
+        'middle_name',
+        'fullname',
+        'full_name',
 
         '*email*',
         '*phone*',
         '*recipient*',
         '*firstname*',
+        '*first_name*',
         '*lastname*',
+        '*last_name*',
     ],
 
     // matched against the value instead of the key, and masked in place, keeping
@@ -526,8 +547,9 @@ that needs the parent to be one level in, since the top level is not matched at 
 (see below). A key in both lists is masked whole: the stricter list wins.
 
 Masking is off only when all three lists (`value_patterns` included) are empty. That
-switch governs the database watcher's bindings too, which are the one thing still
-masked in the traced application.
+switch governs the database watcher's bindings too: with masking on it records
+`bindings_count` and not the values, because a binding is positional and no key list
+can say which one is a password.
 
 The split is the point. A secret is worthless the moment any of it leaks, so
 `masking.full_keys` replaces the value entirely: `********`, a fixed width, so the length of
@@ -552,7 +574,10 @@ such a string says nothing about what is inside it. Two formats are looked into:
   attribute quoting; a document that had no XML declaration does not gain one.
 - **PHP's own serialisation**, for strings starting with `a:<n>:{`. A session stored
   in the cache is one of those, holding the CSRF token and the password hash under
-  keys the lists match. Objects are never instantiated while reading one.
+  keys the lists match. Objects are never instantiated while reading one, and a blob
+  that holds a serialised object is not taken apart at all: without its class it
+  cannot be read or put back together as what it was, so such a blob is left to the
+  value patterns, which read it as the plain string it is.
 
 A document in which **nothing** matched is kept byte for byte.
 
@@ -592,7 +617,7 @@ than raising a warning for every string in every trace.
 
 The key lists and the patterns cover different things and are meant to be used
 together - `recipient` in `partial_keys` catches a phone number under
-`target.recipients.vonage`, which no address pattern would ever match.
+`recipients.vonage`, which no address pattern would ever match.
 
 **The top level of a trace's `data` is never masked.** That level belongs to the
 watcher, not to the application: `connection_name`, `request`, `changes`, `context`,
@@ -620,7 +645,7 @@ matching:
 | `log.message` | whatever was logged |
 | `dump.dump` | whatever was dumped - `dd($user->api_token)` is exactly this |
 | `schedule.output` | the scheduled command's stdout |
-| `db.sql`, and the sql fragment in a `db` trace's tags | the statement, though its values travel as bindings, which are masked |
+| `db.sql`, and the sql fragment in a `db` trace's tags | the statement, though its values travel as bindings, which are not recorded at all while masking is on |
 
 For those, the controls are the watcher's own: turn the watcher off, or keep secrets
 out of what you log and dump. A trace's **tags** are in the same position - bare
@@ -634,7 +659,9 @@ Masked values keep basic types, so a masked payload stays shaped like the origin
 - `int` -> `0`
 - `float` -> `0.0`
 - `string` -> `********`, or two characters at each end for a partial mask
-- an object -> `********` (one with `__toString()` is masked as its string)
+- an object -> whatever `json_encode` would make of it, walked as an array like any
+  other (one with `__toString()` is masked as its string instead). It only becomes
+  `********` when there is nothing to walk - no public state, or nothing encodable
 
 An empty string is left as it is: a mask there would claim something had been hidden.
 
@@ -712,7 +739,7 @@ storage/slogger/*
 A runtime that runs each request or job in its own `Fiber` and switches between them
 on every async call breaks a package that keeps per-request state in process-wide
 objects. Everything slogger keeps per unit of work - the trace stack, where child
-traces hang, the pause flag, each parent watcher's open entries - would be shared by
+traces hang, the pause flag, the values added for this request - would be shared by
 coroutines running interleaved in one process. The failure is quiet: not a crash,
 but a trace closed by the wrong coroutine and children hung under a stranger.
 
@@ -756,11 +783,13 @@ gets its **own** stack (two coroutines popping one stack close each other's trac
 but **inherits the parent trace id** from whoever spawned it, so a call made inside a
 coroutine hangs under the trace that started it instead of arriving as an orphan.
 
-**Profiling turns itself off inside a coroutine.** XHProf is process-wide: it
-measures everything the process does between start and stop, which under a
-concurrent runtime is every coroutine that ran in between, attributed to whichever
-trace stopped first. Wrong numbers are worse than none, so traces started inside a
-fiber carry no profiling data.
+**Profiling turns itself off under a concurrent runtime.** XHProf is process-wide: it
+measures everything the process does between start and stop, which under such a
+runtime is every coroutine that ran in between, attributed to whichever trace stopped
+first. Wrong numbers are worse than none, so with a concurrent resolver bound no trace
+carries profiling data. The resolver is what says so - `isConcurrent()` - not
+`Fiber::getCurrent()`: a Swoole coroutine is not a Fiber, and a library that runs
+ordinary code in one under a plain process must not switch profiling off.
 
 One more thing worth knowing: **the trace batch is shared**. The dispatcher buffers
 traces per process, so one `SendTracesJob` can carry traces from several coroutines.

@@ -26,7 +26,6 @@ use SLoggerLaravel\Profiling\AbstractProfiling;
 use SLoggerLaravel\Profiling\XHProfProfiler;
 use SLoggerLaravel\Traces\ProcessTraceScopeResolver;
 use SLoggerLaravel\Traces\TraceScopeResolverInterface;
-use SLoggerLaravel\Traces\TraceIdContainer;
 use SLoggerLaravel\Watchers\Children\HttpClientWatcher;
 use SLoggerLaravel\Watchers\WatcherInterface;
 
@@ -44,9 +43,10 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         }
 
         // every binding lives here, not in boot(): a provider that boots earlier and
-        // resolves Processor, State or TraceIdContainer would get an auto-wired
-        // duplicate outside the singleton, and end up with a second, disconnected
-        // tracing state whose traces silently go nowhere
+        // resolves Processor or State would get an auto-wired duplicate outside the
+        // singleton, and end up with a second, disconnected tracing state whose
+        // traces silently go nowhere.
+        //
         // the scope resolver decides what "the current unit of work" means, and
         // everything the package keeps per unit follows it - see TraceScope. One
         // process is the answer for FPM, `queue:work` and artisan; an application on
@@ -64,7 +64,6 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         $this->app->singleton(WatchersConfig::class);
         $this->app->singleton(State::class);
         $this->app->singleton(Processor::class);
-        $this->app->singleton(TraceIdContainer::class);
         $this->app->singleton(HttpMiddleware::class);
 
         // the Guzzle handler factory resolves this watcher too, and a fresh instance
@@ -140,7 +139,7 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
      */
     private function registerWatchers(): void
     {
-        $processor = $this->app->make(Processor::class);
+        $state = $this->app->make(State::class);
 
         /** @var array{enabled: bool, class: class-string<WatcherInterface>, config?: array<string, mixed>}[] $watcherConfigs */
         $watcherConfigs = $this->app->make(Repository::class)['slogger.watchers'] ?? [];
@@ -150,10 +149,19 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
                 continue;
             }
 
-            $processor->registerWatcher(
-                watcherClass: $watcherConfig['class'],
-                config: $watcherConfig['config'] ?? null,
-            );
+            $watcherClass = $watcherConfig['class'];
+
+            /** @var WatcherInterface $watcher */
+            $watcher = $this->app->make($watcherClass);
+
+            // the one instance, for good: a watcher keeps what it has open on itself,
+            // and a second instance resolved later would be a second, disconnected
+            // set of open traces whose entries nothing ever closes
+            $this->app->instance($watcherClass, $watcher);
+
+            $watcher->register($watcherConfig['config'] ?? null);
+
+            $state->addEnabledWatcher($watcherClass);
         }
     }
 

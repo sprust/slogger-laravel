@@ -4,6 +4,7 @@ namespace SLoggerLaravel\Helpers;
 
 use SLoggerLaravel\Configs\MaskingConfig;
 use SLoggerLaravel\Objects\TracesObject;
+use Throwable;
 
 /**
  * Masks trace data by the globally configured key lists.
@@ -16,31 +17,26 @@ use SLoggerLaravel\Objects\TracesObject;
 class TraceDataMasker
 {
     /**
-     * @var string[]
+     * Replaces the data of a trace the masker could not read, so the trace still
+     * arrives and says why it is empty.
      */
-    private readonly array $fullKeys;
+    public const MASK_ERROR_KEY = '__mask_error';
 
-    /**
-     * @var string[]
-     */
-    private readonly array $partialKeys;
-
-    /**
-     * @var string[]
-     */
-    private readonly array $valuePatterns;
+    private readonly MaskingRules $rules;
 
     private readonly bool $enabled;
 
     public function __construct(MaskingConfig $config)
     {
-        $this->fullKeys      = $config->getFullKeys();
-        $this->partialKeys   = $config->getPartialKeys();
-        $this->valuePatterns = $config->getValuePatterns();
+        // compiled once, for the life of the process: the lists are validated and
+        // turned into one regular expression each here rather than on every trace
+        $this->rules = new MaskingRules(
+            fullKeys: $config->getFullKeys(),
+            partialKeys: $config->getPartialKeys(),
+            valuePatterns: $config->getValuePatterns()
+        );
 
-        $this->enabled = $this->fullKeys !== []
-            || $this->partialKeys !== []
-            || $this->valuePatterns !== [];
+        $this->enabled = !$this->rules->isEmpty();
     }
 
     public function isEnabled(): bool
@@ -48,34 +44,37 @@ class TraceDataMasker
         return $this->enabled;
     }
 
+    /**
+     * Masks a batch in place and hands the same object back.
+     *
+     * Every trace is masked on its own, and one that cannot be is replaced by a note
+     * saying so. Masking is deterministic - a payload that breaks it breaks it again
+     * on every retry - so letting the exception out cost the whole batch, five times
+     * over, and the traces around the broken one with it. What ships instead says
+     * nothing about what was in there, which is the safe direction to fail in.
+     */
     public function maskTraces(TracesObject $traces): TracesObject
     {
         if (!$this->enabled) {
             return $traces;
         }
 
-        $masked = new TracesObject();
-
         foreach ($traces->iterateCreating() as $trace) {
-            $trace->data = $this->mask($trace->data);
+            $trace->data = $this->maskTraceData($trace->data);
             $trace->tags = $this->maskTags($trace->tags);
-
-            $masked->addCreating($trace);
         }
 
         foreach ($traces->iterateUpdating() as $trace) {
             if (!is_null($trace->data)) {
-                $trace->data = $this->mask($trace->data);
+                $trace->data = $this->maskTraceData($trace->data);
             }
 
             if (!is_null($trace->tags)) {
                 $trace->tags = $this->maskTags($trace->tags);
             }
-
-            $masked->addUpdating($trace);
         }
 
-        return $masked;
+        return $traces;
     }
 
     /**
@@ -89,12 +88,12 @@ class TraceDataMasker
      */
     public function maskTags(array $tags): array
     {
-        if (!$tags || !$this->valuePatterns) {
+        if (!$tags || !$this->rules->valuePatterns) {
             return $tags;
         }
 
         return array_map(
-            fn(string $tag): string => MaskHelper::maskString($tag, $this->valuePatterns),
+            fn(string $tag): string => MaskHelper::maskStringByRules($tag, $this->rules),
             $tags
         );
     }
@@ -111,13 +110,24 @@ class TraceDataMasker
         }
 
         /** @var array<string, mixed> $masked */
-        $masked = MaskHelper::maskArrayByKeys(
-            data: $data,
-            fullKeys: $this->fullKeys,
-            partialKeys: $this->partialKeys,
-            valuePatterns: $this->valuePatterns
-        );
+        $masked = MaskHelper::maskArrayByRules($data, $this->rules);
 
         return $masked;
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     *
+     * @return array<string, mixed>
+     */
+    private function maskTraceData(array $data): array
+    {
+        try {
+            return $this->mask($data);
+        } catch (Throwable $exception) {
+            return [
+                self::MASK_ERROR_KEY => $exception->getMessage(),
+            ];
+        }
     }
 }

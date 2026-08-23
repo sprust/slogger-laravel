@@ -40,9 +40,13 @@ class ModelWatcherTest extends BaseChildWatcherTestCase
         self::assertSame(MaskHelper::FULL_MASK, $masked['changes']['api_token']);
         self::assertSame(MaskHelper::FULL_MASK, $masked['changes']['password']);
 
-        // `name` is in partial_keys: it identifies a person rather than authenticates
-        // one, so enough is kept to tell two records apart
-        self::assertSame('Up***ed', $masked['changes']['name']);
+        // `full_name` is in partial_keys: it identifies a person rather than
+        // authenticates one, so enough is kept to tell two records apart
+        self::assertSame('Up************ee', $masked['changes']['full_name']);
+
+        // a bare `name` is not, and a column called that is as likely to hold a
+        // product or a status as a person - see the shipped partial_keys
+        self::assertSame('Updated', $masked['changes']['name']);
     }
 
     protected function getTraceType(): string
@@ -60,6 +64,7 @@ class ModelWatcherTest extends BaseChildWatcherTestCase
         /** @var TestModel $model */
         $model = TestModel::query()->create([
             'name'      => 'Initial',
+            'full_name' => 'Initial Employee',
             'api_token' => 'initial-token',
             'password'  => 'initial-password',
         ]);
@@ -72,6 +77,7 @@ class ModelWatcherTest extends BaseChildWatcherTestCase
 
             $model->update([
                 'name'      => 'Updated',
+                'full_name' => 'Updated Employee',
                 'api_token' => 'updated-token',
                 'password'  => 'updated-password',
             ]);
@@ -90,6 +96,7 @@ class ModelWatcherTest extends BaseChildWatcherTestCase
         self::assertSame('updated-token', $data['changes']['api_token']);
         self::assertSame('updated-password', $data['changes']['password']);
         self::assertSame('Updated', $data['changes']['name']);
+        self::assertSame('Updated Employee', $data['changes']['full_name']);
     }
 
     private function configureDatabase(): void
@@ -101,6 +108,7 @@ class ModelWatcherTest extends BaseChildWatcherTestCase
         Schema::create('test_models', static function (Blueprint $table): void {
             $table->id();
             $table->string('name')->nullable();
+            $table->string('full_name')->nullable();
             $table->string('api_token')->nullable();
             $table->string('password')->nullable();
             $table->timestamps();
