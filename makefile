@@ -66,13 +66,18 @@ cs-fixer-check:
 cs-fixer-fix:
 	"$(PHP_CLI)" ./vendor/bin/php-cs-fixer fix --config php-cs-fixer.dist.php --verbose
 
+# set-laravel-* rewrite the constraint in composer.json, so the run restores it even
+# when a leg fails - otherwise the matrix leaves the package pinned to one version
 check-laravel-all:
-	make set-laravel-10
-	make check
-	make set-laravel-11
-	make check
-	make set-laravel-12
-	make check
+	@trap 'make restore-composer' EXIT; \
+	for v in 10 11 12; do \
+		make set-laravel-$$v || exit 1; \
+		make check || exit 1; \
+	done
+
+restore-composer:
+	git checkout -- composer.json composer.lock
+	make composer c="install --no-interaction"
 
 set-laravel-10:
 	make composer c="require "laravel/framework:^10" --no-update"

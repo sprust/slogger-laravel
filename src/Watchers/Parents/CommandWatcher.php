@@ -67,8 +67,7 @@ class CommandWatcher implements WatcherInterface
                 command: $event->command,
                 input: $input
             ),
-            'arguments' => $input->getArguments(),
-            'options'   => $input->getOptions(),
+            ...$this->describeInput($input),
         ];
 
         $loggedAt = Carbon::now();
@@ -122,8 +121,7 @@ class CommandWatcher implements WatcherInterface
                 input: $input
             ),
             'exit_code' => $event->exitCode,
-            'arguments' => $input->getArguments(),
-            'options'   => $input->getOptions(),
+            ...$this->describeInput($input),
         ];
 
         $this->processor->stop(
@@ -136,6 +134,17 @@ class CommandWatcher implements WatcherInterface
             duration: TraceHelper::calcDuration($startedAt),
             parentLoggedAt: $startedAt,
         );
+    }
+
+    /**
+     * @return array{arguments: array<string, mixed>, options: array<string, mixed>}
+     */
+    protected function describeInput(?InputInterface $input): array
+    {
+        return [
+            'arguments' => $input?->getArguments() ?? [],
+            'options'   => $input?->getOptions() ?? [],
+        ];
     }
 
     /**
@@ -162,12 +171,12 @@ class CommandWatcher implements WatcherInterface
     }
 
     /**
-     * `$command` is nullable on Laravel 10 and a plain string from 11 on, so the
-     * fallback stays: a command with no name of its own is a real shape there.
+     * Both arguments are nullable on Laravel 10 and plain from 11 on. Declaring them
+     * nullable here is what keeps the analyser happy on every leg of the matrix.
      */
-    protected function makeCommandView(?string $command, InputInterface $input): string
+    protected function makeCommandView(?string $command, ?InputInterface $input): string
     {
-        $command ??= $input->getArguments()['command'] ?? 'unknown';
+        $command ??= $input?->getArguments()['command'] ?? 'unknown';
 
         if (!is_string($command)) {
             return 'unknown';
