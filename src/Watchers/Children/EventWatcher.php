@@ -7,7 +7,6 @@ use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Events\Dispatcher;
 use Illuminate\Support\Str;
-use ReflectionFunction;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Processor;
@@ -139,55 +138,59 @@ class EventWatcher implements WatcherInterface
     }
 
     /**
+     * Raw, not `getListeners()`: that wraps every entry in a closure, so every trace
+     * recorded the same useless `Closure`.
+     *
      * @return array<array{name: string, queued: bool}>
      */
     protected function formatListeners(string $eventName): array
     {
-        $listeners = $this->dispatcher->getListeners($eventName);
+        $listeners = $this->dispatcher->getRawListeners()[$eventName] ?? [];
 
-        return collect($listeners)
-            ->map(
-                static function ($listener) {
-                    if (is_object($listener)) {
-                        return get_class($listener);
-                    }
+        $names = [];
 
-                    $listener = (new ReflectionFunction($listener))
-                        ->getStaticVariables()['listener'];
+        foreach ($listeners as $listener) {
+            $names[] = self::formatListenerName($listener);
+        }
 
-                    if (is_string($listener)) {
-                        return Str::contains($listener, '@') ? $listener : $listener . '@handle';
-                    } elseif (is_array($listener) && is_string($listener[0])) {
-                        return $listener[0] . '@' . $listener[1];
-                    } elseif (is_array($listener) && is_object($listener[0])) {
-                        return get_class($listener[0]) . '@' . $listener[1];
-                    } elseif (is_object($listener) && is_callable($listener) && !$listener instanceof Closure) {
-                        return get_class($listener) . '@__invoke';
-                    }
+        return array_map(
+            static function (string $name): array {
+                $class = Str::contains($name, '@') ? Str::beforeLast($name, '@') : $name;
 
-                    return 'unknown';
-                }
-            )
-            ->map(
-                static function ($listener) {
-                    $queued = false;
+                $implements = class_exists($class) ? class_implements($class) : false;
 
-                    if (Str::contains($listener, '@')) {
-                        $classImplements = class_implements(Str::beforeLast($listener, '@'));
+                return [
+                    'name'   => $name,
+                    'queued' => $implements !== false && in_array(ShouldQueue::class, $implements),
+                ];
+            },
+            $names
+        );
+    }
 
-                        if ($classImplements !== false) {
-                            $queued = in_array(ShouldQueue::class, $classImplements);
-                        }
-                    }
+    protected static function formatListenerName(mixed $listener): string
+    {
+        if (is_string($listener)) {
+            return Str::contains($listener, '@') ? $listener : $listener . '@handle';
+        }
 
-                    return [
-                        'name'   => $listener,
-                        'queued' => $queued,
-                    ];
-                }
-            )
-            ->values()
-            ->toArray();
+        if (is_array($listener) && count($listener) === 2) {
+            $target = is_object($listener[0]) ? get_class($listener[0]) : $listener[0];
+
+            return is_string($target) && is_string($listener[1])
+                ? $target . '@' . $listener[1]
+                : 'unknown';
+        }
+
+        if ($listener instanceof Closure) {
+            return 'Closure';
+        }
+
+        if (is_object($listener)) {
+            return get_class($listener) . (method_exists($listener, '__invoke') ? '@__invoke' : '');
+        }
+
+        return 'unknown';
     }
 
     protected function shouldIgnore(string $eventName): bool

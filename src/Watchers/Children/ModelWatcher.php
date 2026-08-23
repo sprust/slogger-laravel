@@ -6,17 +6,11 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Str;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
-use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Processor;
 use SLoggerLaravel\Watchers\WatcherInterface;
 
 class ModelWatcher implements WatcherInterface
 {
-    /**
-     * @var array<string, string[]>
-     */
-    protected array $masks = [];
-
     public function __construct(
         protected Processor $processor,
     ) {
@@ -24,10 +18,6 @@ class ModelWatcher implements WatcherInterface
 
     public function register(?array $config): void
     {
-        if ($config !== null) {
-            $this->masks = $config['masks'] ?? [];
-        }
-
         $this->processor->registerEvent('eloquent.*', [$this, 'handleEvent']);
     }
 
@@ -88,23 +78,6 @@ class ModelWatcher implements WatcherInterface
      */
     protected function prepareChanges(Model $modelInstance): ?array
     {
-        $changes = $modelInstance->getChanges() ?: null;
-
-        if (!$changes) {
-            return $changes;
-        }
-
-        $modelClass = $modelInstance::class;
-
-        $masksForAll = array_merge(
-            $this->masks['*'] ?? [],
-            $this->masks[$modelClass] ?? []
-        );
-
-        if (!$masksForAll) {
-            return $changes;
-        }
-
-        return MaskHelper::maskArrayByPatterns($changes, $masksForAll);
+        return $modelInstance->getChanges() ?: null;
     }
 }

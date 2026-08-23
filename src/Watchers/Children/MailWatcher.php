@@ -10,7 +10,8 @@ use SLoggerLaravel\Watchers\WatcherInterface;
 use Symfony\Component\Mime\Address;
 
 /**
- * Not tested
+ * Addresses are carried as `email`/`full_name` pairs: the masker matches key names,
+ * so an address has to sit in a value under a key that says what it is.
  */
 class MailWatcher implements WatcherInterface
 {
@@ -29,12 +30,14 @@ class MailWatcher implements WatcherInterface
         $data = [
             'mailable' => $this->getMailable($event),
             'queued'   => $this->getQueuedStatus($event),
-            'from'     => $this->formatAddresses($event->message->getFrom()),
-            'reply_to' => $this->formatAddresses($event->message->getReplyTo()),
-            'to'       => $this->formatAddresses($event->message->getTo()),
-            'cc'       => $this->formatAddresses($event->message->getCc()),
-            'bcc'      => $this->formatAddresses($event->message->getBcc()),
-            'subject'  => $event->message->getSubject(),
+            'message'  => [
+                'from'     => $this->formatAddresses($event->message->getFrom()),
+                'reply_to' => $this->formatAddresses($event->message->getReplyTo()),
+                'to'       => $this->formatAddresses($event->message->getTo()),
+                'cc'       => $this->formatAddresses($event->message->getCc()),
+                'bcc'      => $this->formatAddresses($event->message->getBcc()),
+                'subject'  => $event->message->getSubject(),
+            ],
         ];
 
         $this->processor->push(
@@ -57,9 +60,12 @@ class MailWatcher implements WatcherInterface
     }
 
     /**
-     * @param array<string, string>|Address[]|null $addresses
+     * Symfony Mime addresses: the `[address => name]` shape came from Swift Mailer,
+     * dropped in Laravel 6.
      *
-     * @return array<string, string>|null
+     * @param Address[]|null $addresses
+     *
+     * @return list<array{email: string, full_name: string}>|null
      */
     protected function formatAddresses(?array $addresses): ?array
     {
@@ -67,14 +73,14 @@ class MailWatcher implements WatcherInterface
             return null;
         }
 
-        return collect($addresses)
-            ->flatMap(function ($address, $key) {
-                if ($address instanceof Address) {
-                    return [$address->getAddress() => $address->getName()];
-                }
-
-                return [$key => $address];
-            })
-            ->all();
+        return array_values(
+            array_map(
+                static fn(Address $address): array => [
+                    'email'     => $address->getAddress(),
+                    'full_name' => $address->getName(),
+                ],
+                $addresses
+            )
+        );
     }
 }

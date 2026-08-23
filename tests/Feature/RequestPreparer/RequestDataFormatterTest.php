@@ -5,52 +5,50 @@ declare(strict_types=1);
 namespace SLoggerLaravel\Tests\Feature\RequestPreparer;
 
 use SLoggerLaravel\DataResolver;
-use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\RequestPreparer\RequestDataFormatter;
 use SLoggerLaravel\Tests\Feature\BaseTestCase;
 
+/**
+ * The formatter only hides and reshapes at runtime - masking is the dispatcher
+ * job's business.
+ */
 class RequestDataFormatterTest extends BaseTestCase
 {
     public function testPrepareRequestHeadersNoMatch(): void
     {
-        $formatter = new RequestDataFormatter(['/api/*'], requestHeaders: ['Authorization']);
+        $formatter = new RequestDataFormatter(['/api/*']);
 
         $headers = [
             'Authorization' => 'secret',
             'X-Test'        => ['a', 'b'],
         ];
 
+        // an unmatched url is left exactly as it came in, not even reshaped
         self::assertSame(
             $headers,
             $formatter->prepareRequestHeaders('/other/path', $headers)
         );
     }
 
-    public function testPrepareRequestHeadersMasksByListAndPreparesValues(): void
+    public function testPrepareRequestHeadersJoinsValues(): void
     {
-        $formatter = new RequestDataFormatter(['/api/*'], requestHeaders: ['authorization']);
+        $formatter = new RequestDataFormatter(['/api/*']);
 
-        $headers = [
-            'Authorization' => ['Bearer secret', 'extra'],
-            'X-Test'        => ['a', 'b'],
-        ];
-
-        $prepared = $formatter->prepareRequestHeaders('/api/users', $headers);
-
-        self::assertSame(
-            MaskHelper::maskValue('Bearer secret, extra'),
-            $prepared['Authorization'] ?? null
+        $prepared = $formatter->prepareRequestHeaders(
+            '/api/users',
+            [
+                'Authorization' => ['Bearer secret', 'extra'],
+                'X-Test'        => ['a', 'b'],
+            ]
         );
 
-        self::assertSame(
-            'a, b',
-            $prepared['X-Test'] ?? null
-        );
+        self::assertSame('Bearer secret, extra', $prepared['Authorization'] ?? null);
+        self::assertSame('a, b', $prepared['X-Test'] ?? null);
     }
 
     public function testPrepareRequestParametersNoMatch(): void
     {
-        $formatter = new RequestDataFormatter(['/api/*'], requestParameters: ['token']);
+        $formatter = new RequestDataFormatter(['/api/*'], hideAllRequestParameters: true);
 
         $parameters = [
             'token' => 'abc',
@@ -65,29 +63,23 @@ class RequestDataFormatterTest extends BaseTestCase
 
     public function testPrepareRequestParametersHideAll(): void
     {
-        $formatter = new RequestDataFormatter(
-            ['/api/*'],
-            hideAllRequestParameters: true,
-            requestParameters: ['token']
-        );
-
-        $parameters = [
-            'token' => 'abc',
-            'name'  => 'test',
-        ];
+        $formatter = new RequestDataFormatter(['/api/*'], hideAllRequestParameters: true);
 
         self::assertSame(
             ['__cleaned' => null],
-            $formatter->prepareRequestParameters('/api/users', $parameters)
+            $formatter->prepareRequestParameters(
+                '/api/users',
+                [
+                    'token' => 'abc',
+                    'name'  => 'test',
+                ]
+            )
         );
     }
 
-    public function testPrepareRequestParametersMasksByPatterns(): void
+    public function testPrepareRequestParametersAreKeptAsIs(): void
     {
-        $formatter = new RequestDataFormatter(
-            ['/api/*'],
-            requestParameters: ['user.password', 'token']
-        );
+        $formatter = new RequestDataFormatter(['/api/*']);
 
         $parameters = [
             'user' => [
@@ -95,67 +87,33 @@ class RequestDataFormatterTest extends BaseTestCase
                 'password' => 'secret',
             ],
             'token' => 'abc',
-            'list'  => ['a', 'b'],
         ];
 
-        $prepared = $formatter->prepareRequestParameters('/api/users', $parameters);
-
         self::assertSame(
-            MaskHelper::maskValue('secret'),
-            $prepared['user']['password'] ?? null
-        );
-
-        self::assertSame(
-            MaskHelper::maskValue('abc'),
-            $prepared['token'] ?? null
-        );
-
-        self::assertSame(
-            'Bob',
-            $prepared['user']['name'] ?? null
+            $parameters,
+            $formatter->prepareRequestParameters('/api/users', $parameters)
         );
     }
 
-    public function testPrepareResponseHeadersNoMatch(): void
+    public function testPrepareResponseHeadersJoinsValues(): void
     {
-        $formatter = new RequestDataFormatter(['/api/*'], responseHeaders: ['X-Token']);
+        $formatter = new RequestDataFormatter(['/api/*']);
 
-        $headers = [
-            'X-Token' => 'secret',
-            'X-Test'  => ['a', 'b'],
-        ];
-
-        self::assertSame(
-            $headers,
-            $formatter->prepareResponseHeaders('/other/path', $headers)
-        );
-    }
-
-    public function testPrepareResponseHeadersMasksByListAndPreparesValues(): void
-    {
-        $formatter = new RequestDataFormatter(['/api/*'], responseHeaders: ['x-token']);
-
-        $headers = [
-            'X-Token' => ['secret', 'extra'],
-            'X-Test'  => ['a', 'b'],
-        ];
-
-        $prepared = $formatter->prepareResponseHeaders('/api/users', $headers);
-
-        self::assertSame(
-            MaskHelper::maskValue('secret, extra'),
-            $prepared['X-Token'] ?? null
+        $prepared = $formatter->prepareResponseHeaders(
+            '/api/users',
+            [
+                'X-Token' => ['secret', 'extra'],
+                'X-Test'  => ['a', 'b'],
+            ]
         );
 
-        self::assertSame(
-            'a, b',
-            $prepared['X-Test'] ?? null
-        );
+        self::assertSame('secret, extra', $prepared['X-Token'] ?? null);
+        self::assertSame('a, b', $prepared['X-Test'] ?? null);
     }
 
     public function testPrepareResponseDataNoMatch(): void
     {
-        $formatter = new RequestDataFormatter(['/api/*'], responseFields: ['token']);
+        $formatter = new RequestDataFormatter(['/api/*'], hideAllResponseData: true);
 
         $dataResolver = new DataResolver(
             static fn() => [
@@ -164,9 +122,8 @@ class RequestDataFormatterTest extends BaseTestCase
             ]
         );
 
-        $result = $formatter->prepareResponseData('/other/path', $dataResolver);
+        self::assertTrue($formatter->prepareResponseData('/other/path', $dataResolver));
 
-        self::assertTrue($result);
         self::assertSame(
             [
                 'token' => 'abc',
@@ -178,11 +135,7 @@ class RequestDataFormatterTest extends BaseTestCase
 
     public function testPrepareResponseDataHideAll(): void
     {
-        $formatter = new RequestDataFormatter(
-            ['/api/*'],
-            hideAllResponseData: true,
-            responseFields: ['token']
-        );
+        $formatter = new RequestDataFormatter(['/api/*'], hideAllResponseData: true);
 
         $dataResolver = new DataResolver(
             static fn() => [
@@ -191,52 +144,31 @@ class RequestDataFormatterTest extends BaseTestCase
             ]
         );
 
-        $result = $formatter->prepareResponseData('/api/users', $dataResolver);
+        self::assertFalse($formatter->prepareResponseData('/api/users', $dataResolver));
 
-        self::assertFalse($result);
         self::assertSame(
             ['__cleaned' => null],
             $dataResolver->getData()
         );
     }
 
-    public function testPrepareResponseDataMasksByPatterns(): void
+    public function testPrepareResponseDataIsKeptAsIs(): void
     {
-        $formatter = new RequestDataFormatter(
-            ['/api/*'],
-            responseFields: ['user.password', 'token']
-        );
+        $formatter = new RequestDataFormatter(['/api/*']);
 
-        $dataResolver = new DataResolver(
-            static fn() => [
-                'user' => [
-                    'name'     => 'Bob',
-                    'password' => 'secret',
-                ],
-                'token' => 'abc',
-            ]
-        );
+        $data = [
+            'user' => [
+                'name'     => 'Bob',
+                'password' => 'secret',
+            ],
+            'token' => 'abc',
+        ];
 
-        $result = $formatter->prepareResponseData('/api/users', $dataResolver);
+        $dataResolver = new DataResolver(static fn() => $data);
 
-        self::assertTrue($result);
+        self::assertTrue($formatter->prepareResponseData('/api/users', $dataResolver));
 
-        $data = $dataResolver->getData();
-
-        self::assertSame(
-            MaskHelper::maskValue('secret'),
-            $data['user']['password'] ?? null
-        );
-
-        self::assertSame(
-            MaskHelper::maskValue('abc'),
-            $data['token'] ?? null
-        );
-
-        self::assertSame(
-            'Bob',
-            $data['user']['name'] ?? null
-        );
+        self::assertSame($data, $dataResolver->getData());
     }
 
     public function testHideFlagsAndUrlPatternTrim(): void

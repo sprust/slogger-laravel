@@ -27,8 +27,8 @@ readonly class DatabaseWatcher implements WatcherInterface
     {
         $data = [
             'connection' => $event->connectionName,
-            'bindings'   => $this->maskValue($event->bindings),
             'sql'        => Str::substr($event->sql, 0, 10000),
+            'bindings'   => $this->maskBindings($event->bindings),
         ];
 
         $this->processor->push(
@@ -43,30 +43,34 @@ readonly class DatabaseWatcher implements WatcherInterface
         );
     }
 
-    protected function maskValue(mixed $value): mixed
+    /**
+     * Positional, so no key list can reach them: length is the only signal there is. A
+     * short or numeric binding is kept as it was - a PIN or an OTP is not covered here.
+     */
+    protected function maskBindings(mixed $bindings): mixed
     {
-        if (is_string($value)) {
-            if (Str::length($value) > 5) {
-                return MaskHelper::maskValue($value);
+        if (is_string($bindings)) {
+            if (Str::length($bindings) > 5) {
+                return MaskHelper::maskValue($bindings);
             }
 
-            return $value;
+            return $bindings;
         }
 
-        if (is_numeric($value)) {
-            return $value;
+        if (is_numeric($bindings)) {
+            return $bindings;
         }
 
-        if (is_array($value)) {
+        if (is_array($bindings)) {
             $arrayValue = [];
 
-            foreach ($value as $valueKey => $valueValue) {
-                $arrayValue[$valueKey] = $this->maskValue($valueValue);
+            foreach ($bindings as $valueKey => $valueValue) {
+                $arrayValue[$valueKey] = $this->maskBindings($valueValue);
             }
 
             return $arrayValue;
         }
 
-        return $value;
+        return $bindings;
     }
 }

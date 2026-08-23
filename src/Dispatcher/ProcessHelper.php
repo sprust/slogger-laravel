@@ -3,7 +3,6 @@
 namespace SLoggerLaravel\Dispatcher;
 
 use RuntimeException;
-use Throwable;
 
 class ProcessHelper
 {
@@ -24,43 +23,39 @@ class ProcessHelper
             return false;
         }
 
-        try {
-            $cmd = file_get_contents("/proc/$pid/cmdline");
-        } catch (Throwable) {
-            return false;
-        }
+        // @: a vanished /proc entry is an ordinary answer, and Laravel's error
+        // handler would turn the warning into an exception
+        $cmd = @file_get_contents("/proc/$pid/cmdline");
 
         if (!$cmd) {
             return false;
         }
 
-        $processName = trim($cmd, "\0");
+        // /proc/<pid>/cmdline is NUL-separated and the saved name is not: without
+        // this nothing matched, and a dead master left unstoppable workers
+        $processName = trim(str_replace("\0", ' ', $cmd));
 
         return str_contains($processName, $commandName);
     }
 
+    /**
+     * SIGTERM, not SIGINT: `queue:work` leaves SIGINT at its default, which kills the
+     * worker mid-job. SIGTERM is the one it reads as "finish this job, then stop".
+     */
     public function sendStopSignal(int $pid): void
     {
         if ($pid <= 0) {
             return;
         }
 
-        $pgid = posix_getpgid($pid);
-
-        posix_kill($pid, SIGINT);
-
-        if ($pgid === false || $pgid <= 0) {
-            // the target died in between: posix_kill(-$pgid) would become
-            // posix_kill(0, ...) and signal the caller's own process group
+        if ($pid === $this->getCurrentPid()) {
+            // a stale state file names a pid the kernel may hand out again - to this
+            // process, whose command line matches. It would SIGTERM itself
             return;
         }
 
-        if ($pgid === posix_getpgrp()) {
-            // children spawned without setsid share the caller's process group:
-            // a group-kill would SIGINT the caller itself and every sibling process
-            return;
-        }
-
-        posix_kill(-$pgid, SIGINT);
+        // the pid alone: nothing calls setsid(), so a group kill took whatever else
+        // the entrypoint had started. stop() names every pid anyway
+        posix_kill($pid, SIGTERM);
     }
 }

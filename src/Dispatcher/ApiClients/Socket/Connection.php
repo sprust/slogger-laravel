@@ -128,9 +128,8 @@ class Connection
         $socket = $this->socket;
 
         while ($sentBytes < $bufferLength) {
-            // fwrite() into a socket the peer has closed reports success once:
-            // the chunk simply lands in the local send buffer. Without this check
-            // the break would surface much later — as a read timeout on a dead connection
+            // fwrite() into a socket the peer has closed reports success once - the
+            // chunk lands in the send buffer, and the break surfaces as a read timeout
             $this->checkPeerIsAlive($socket);
 
             $chunk = substr($buffer, $sentBytes, $bufferSize);
@@ -147,9 +146,8 @@ class Connection
                 );
             }
 
-            // a non-blocking stream returns 0 (not false) when the send buffer is full:
-            // both cases mean "no progress" and must hit the timeout branch,
-            // otherwise the loop spins forever at 100% CPU
+            // a non-blocking stream returns 0, not false, when the buffer is full:
+            // both mean "no progress", and without the timeout the loop spins at 100%
             if ($bytes === false || $bytes === 0) {
                 if ($timeout === null) {
                     $timeout = time();

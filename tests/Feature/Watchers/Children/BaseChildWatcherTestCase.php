@@ -9,7 +9,6 @@ use ReflectionException;
 use ReflectionFunction;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Objects\TraceCreateObject;
-use SLoggerLaravel\Objects\TraceUpdateObject;
 use SLoggerLaravel\Tests\Feature\Watchers\BaseWatcherTestCase;
 use SLoggerLaravel\Watchers\Parents\JobWatcher;
 use SLoggerLaravel\Watchers\WatcherInterface;
@@ -25,10 +24,11 @@ abstract class BaseChildWatcherTestCase extends BaseWatcherTestCase
 
     abstract protected function successCallback(): Closure;
 
-    abstract protected function assertSuccess(
-        TraceCreateObject $creatingTrace,
-        TraceUpdateObject $updatingTrace,
-    ): void;
+    /**
+     * Assert the payload the watcher actually recorded. A child watcher pushes a
+     * finished trace, so there is no update to pair it with.
+     */
+    abstract protected function assertSuccess(TraceCreateObject $creatingTrace): void;
 
     protected function setUp(): void
     {
@@ -82,6 +82,8 @@ abstract class BaseChildWatcherTestCase extends BaseWatcherTestCase
             1,
             $creating
         );
+
+        $this->assertSuccess($creating[0]);
     }
 
     /**

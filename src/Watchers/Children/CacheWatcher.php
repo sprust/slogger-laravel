@@ -11,10 +11,16 @@ use Illuminate\Support\Str;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Helpers\DataFormatter;
+use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Processor;
 use SLoggerLaravel\Watchers\WatcherInterface;
 
 // TODO: register all cache event
+
+/**
+ * A cached value is nested under its cache key, which is the only thing that says
+ * what it holds. `key` is kept at the top level too, where it stays readable.
+ */
 readonly class CacheWatcher implements WatcherInterface
 {
     public function __construct(
@@ -37,23 +43,13 @@ readonly class CacheWatcher implements WatcherInterface
             return;
         }
 
-        $type = 'hit';
-
-        $data = [
-            'type'  => $type,
-            'key'   => $event->key,
-            'value' => $this->prepareValue($event->key, $event->value),
-            'tags'  => $event->tags,
-        ];
-
-        $this->processor->push(
-            type: TraceTypeEnum::Cache->value,
-            status: TraceStatusEnum::Success->value,
-            tags: [
-                $type,
-                $event->key,
-            ],
-            data: $data
+        $this->pushCache(
+            type: 'hit',
+            key: $event->key,
+            entry: [
+                'value' => $this->prepareValue($event->value),
+                'tags'  => $event->tags,
+            ]
         );
     }
 
@@ -63,22 +59,12 @@ readonly class CacheWatcher implements WatcherInterface
             return;
         }
 
-        $type = 'missed';
-
-        $data = [
-            'type' => $type,
-            'key'  => $event->key,
-            'tags' => $event->tags,
-        ];
-
-        $this->processor->push(
-            type: TraceTypeEnum::Cache->value,
-            status: TraceStatusEnum::Success->value,
-            tags: [
-                $type,
-                $event->key,
-            ],
-            data: $data
+        $this->pushCache(
+            type: 'missed',
+            key: $event->key,
+            entry: [
+                'tags' => $event->tags,
+            ]
         );
     }
 
@@ -88,24 +74,14 @@ readonly class CacheWatcher implements WatcherInterface
             return;
         }
 
-        $type = 'set';
-
-        $data = [
-            'type'       => $type,
-            'key'        => $event->key,
-            'value'      => $this->prepareValue($event->key, $event->value),
-            'tags'       => $event->tags,
-            'expiration' => $event->seconds,
-        ];
-
-        $this->processor->push(
-            type: TraceTypeEnum::Cache->value,
-            status: TraceStatusEnum::Success->value,
-            tags: [
-                $type,
-                $event->key,
-            ],
-            data: $data
+        $this->pushCache(
+            type: 'set',
+            key: $event->key,
+            entry: [
+                'value'      => $this->prepareValue($event->value),
+                'tags'       => $event->tags,
+                'expiration' => $event->seconds,
+            ]
         );
     }
 
@@ -115,30 +91,42 @@ readonly class CacheWatcher implements WatcherInterface
             return;
         }
 
-        $type = 'forget';
+        $this->pushCache(type: 'forget', key: $event->key);
+    }
 
+    /**
+     * The four events differ in what they know about the entry and in nothing else.
+     *
+     * @param array<string, mixed>|null $entry what is known besides the key
+     */
+    protected function pushCache(string $type, string $key, ?array $entry = null): void
+    {
         $data = [
             'type' => $type,
-            'key'  => $event->key,
+            'key'  => $key,
         ];
+
+        if (!is_null($entry)) {
+            $data['cache'] = [$key => $entry];
+        }
 
         $this->processor->push(
             type: TraceTypeEnum::Cache->value,
             status: TraceStatusEnum::Success->value,
             tags: [
                 $type,
-                $event->key,
+                $key,
             ],
             data: $data
         );
     }
 
-    protected function prepareValue(string $key, mixed $value): mixed
+    /**
+     * Whatever survives being written into a trace. Masking is not this watcher's
+     * business - the value sits under its cache key, where the key lists reach it.
+     */
+    protected function prepareValue(mixed $value): mixed
     {
-        if ($this->shouldHideValue($key)) {
-            return '********';
-        }
-
         if ($value instanceof Model) {
             return DataFormatter::model($value);
         }
@@ -147,12 +135,12 @@ readonly class CacheWatcher implements WatcherInterface
             return $value::class;
         }
 
-        return $value;
-    }
+        // a cached catalogue is megabytes, and a hit is more frequent than a request
+        if (is_string($value) && strlen($value) > MaskHelper::MAX_READABLE_BYTES) {
+            return ['__skipped' => 'value_too_large'];
+        }
 
-    protected function shouldHideValue(string $key): bool
-    {
-        return false;
+        return $value;
     }
 
     protected function shouldIgnore(string $key): bool

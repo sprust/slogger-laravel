@@ -5,8 +5,9 @@ namespace SLoggerLaravel\Guzzle;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
 use GuzzleHttp\Promise\PromiseInterface;
-use GuzzleHttp\Psr7\Response;
 use Psr\Http\Message\RequestInterface;
+use Psr\Http\Message\ResponseInterface;
+use RuntimeException;
 use SLoggerLaravel\RequestPreparer\RequestDataFormatters;
 use SLoggerLaravel\State;
 use SLoggerLaravel\Watchers\Children\HttpClientWatcher;
@@ -49,25 +50,28 @@ readonly class GuzzleHandlerFactory
                 array $options,
                 PromiseInterface $response
             ) use ($formatters): void {
-                try {
-                    $responseWaited = $response->wait();
-                } catch (Throwable $exception) {
-                    $this->httpClientWatcher->handleInvalidResponse(
-                        request: $request,
-                        exception: $exception,
-                        formatters: $formatters
-                    );
+                // never wait() here: tap's `after` is synchronous, and waiting turns
+                // Http::pool() into a serial loop
+                $response->then(
+                    function (ResponseInterface $responseResolved) use ($request, $options, $formatters) {
+                        $this->httpClientWatcher->handleResponse(
+                            request: $request,
+                            options: $options,
+                            response: $responseResolved,
+                            formatters: $formatters
+                        );
 
-                    return;
-                }
-
-                /** @var Response $responseWaited */
-
-                $this->httpClientWatcher->handleResponse(
-                    request: $request,
-                    options: $options,
-                    response: $responseWaited,
-                    formatters: $formatters
+                        return $responseResolved;
+                    },
+                    function (mixed $reason) use ($request, $formatters): void {
+                        $this->httpClientWatcher->handleInvalidResponse(
+                            request: $request,
+                            exception: $reason instanceof Throwable
+                                ? $reason
+                                : new RuntimeException((string) (is_scalar($reason) ? $reason : 'unknown error')),
+                            formatters: $formatters
+                        );
+                    }
                 );
             }
         );

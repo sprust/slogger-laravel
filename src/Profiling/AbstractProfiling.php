@@ -8,7 +8,12 @@ use SLoggerLaravel\Profiling\Dto\ProfilingObjects;
 abstract class AbstractProfiling
 {
     private bool $profilingEnabled;
-    private bool $profilingStarted = false;
+
+    /**
+     * A profiler measures the process, so one run is in flight at a time and the
+     * profile goes to whoever started it - not to a nested `Artisan::call()`.
+     */
+    private ?string $ownerTraceId = null;
 
     abstract protected function onStart(): bool;
 
@@ -20,25 +25,39 @@ abstract class AbstractProfiling
         $this->profilingEnabled = $this->loggerConfig->profilingEnabled();
     }
 
-    public function start(): void
+    public function start(string $traceId): void
     {
         if (!$this->profilingEnabled) {
             return;
         }
 
-        $this->profilingStarted = $this->onStart();
+        if (!is_null($this->ownerTraceId)) {
+            // an outer trace is already being profiled; this is part of it
+            return;
+        }
+
+        if ($this->onStart()) {
+            $this->ownerTraceId = $traceId;
+        }
     }
 
-    public function stop(): ?ProfilingObjects
+    public function stop(string $traceId): ?ProfilingObjects
     {
-        if (!$this->profilingStarted || !$this->profilingEnabled) {
+        if ($this->ownerTraceId !== $traceId) {
             return null;
         }
 
-        $profilingObjects = $this->onStop();
+        $this->ownerTraceId = null;
 
-        $this->profilingStarted = false;
+        return $this->onStop();
+    }
 
-        return $profilingObjects;
+    /**
+     * Gives up a profile whose trace the sweep is closing - otherwise the profiler
+     * stays owned by a trace that is already gone.
+     */
+    public function release(string $traceId): void
+    {
+        $this->stop($traceId);
     }
 }

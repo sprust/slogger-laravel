@@ -12,10 +12,17 @@ use RuntimeException;
 use SLoggerLaravel\Configs\DispatcherQueueConfig;
 use SLoggerLaravel\Configs\GeneralConfig;
 use SLoggerLaravel\Dispatcher\ApiClients\ApiClientInterface;
+use SLoggerLaravel\Helpers\TraceDataMasker;
 use SLoggerLaravel\Objects\TracesObject;
 use SLoggerLaravel\Processor;
 use Throwable;
 
+/**
+ * Carries a batch of traces to the receiver, masking it on the way out.
+ *
+ * The payload sits in the queue with whatever the watchers collected - masking
+ * happens here. Give that queue the retention and access rules raw data implies.
+ */
 class SendTracesJob implements ShouldQueue
 {
     use Dispatchable;
@@ -32,11 +39,8 @@ class SendTracesJob implements ShouldQueue
     public int $tries = 5;
 
     /**
-     * The int arm is required, not decorative: some queue drivers assign a computed
-     * int back to $backoff when releasing a job (e.g. laravel-queue-rabbitmq). A
-     * plain `array` type makes that assignment throw a TypeError and breaks the
-     * retry/drop machinery. Laravel serializes the array into the job payload via
-     * getJobBackoff(), so the [5,10,30,60] schedule is still honored on standard drivers.
+     * The int arm is required: some drivers assign a computed int back when releasing
+     * a job, and a plain `array` type makes that a TypeError.
      *
      * @var int|list<int>
      */
@@ -70,10 +74,13 @@ class SendTracesJob implements ShouldQueue
     public function handle(
         Processor $processor,
         ApiClientInterface $apiClient,
-        GeneralConfig $config
+        GeneralConfig $config,
+        TraceDataMasker $masker
     ): void {
         try {
-            $traces = TracesObject::fromJson($this->tracesJson);
+            $traces = $masker->maskTraces(
+                TracesObject::fromJson($this->tracesJson)
+            );
 
             $processor->handleWithoutTracing(
                 fn() => $apiClient->sendTraces($traces)

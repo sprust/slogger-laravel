@@ -20,6 +20,7 @@ class SocketClient implements ApiClientInterface
     }
 
     /**
+     * @throws Throwable
      * @throws JsonException
      */
     public function sendTraces(TracesObject $traces): void
@@ -63,8 +64,8 @@ class SocketClient implements ApiClientInterface
         }
 
         $payload = [
-            ...(count($creatingTraces) ? ['c' => json_encode($creatingTraces)] : []),
-            ...(count($updatingTraces) ? ['u' => json_encode($updatingTraces)] : []),
+            ...(count($creatingTraces) ? ['c' => json_encode($creatingTraces, JSON_THROW_ON_ERROR)] : []),
+            ...(count($updatingTraces) ? ['u' => json_encode($updatingTraces, JSON_THROW_ON_ERROR)] : []),
         ];
 
         if (count($payload) === 0) {
@@ -94,6 +95,9 @@ class SocketClient implements ApiClientInterface
         }
     }
 
+    /**
+     * @throws Throwable
+     */
     protected function exchange(string $payloadJson): string
     {
         try {

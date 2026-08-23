@@ -35,7 +35,7 @@ return [
 
         'queue' => [
             // queue worker connection and name.
-            // required, no fallback: telemetry must not silently share the application queue connection.
+            // required, no fallback: telemetry must not share the application queue
             'connection' => env('SLOGGER_DISPATCHER_QUEUE_CONNECTION'),
             'name'       => env('SLOGGER_DISPATCHER_QUEUE_NAME', 'slogger'),
             // number of worker processes.
@@ -54,7 +54,6 @@ return [
         ],
     ],
 
-    // not implemented at the moment
     'profiling' => [
         'enabled' => env('SLOGGER_PROFILING_ENABLED', false),
     ],
@@ -66,6 +65,110 @@ return [
     'listeners' => [
         WatcherErrorEvent::class => [
             WatcherErrorListener::class,
+        ],
+    ],
+
+    // applied by the dispatcher job, never in the traced application. off only when
+    // all three lists below are empty.
+    'masking' => [
+        // the value under a matching key is replaced whole, and everything below it.
+        // matched case-insensitively against the whole key and each of its components.
+        'full_keys' => [
+            // a word, so `auth` covers `php-auth-pw` and not `author`
+            'auth',
+            'authentication',
+            'authorization',
+            'oauth',
+            'passwd',
+            'pass',
+            'passcode',
+            'passphrase',
+            'pw',
+            // not bare `signed`: it would take `signed_at` and `signed_by` too
+            'signed_payload',
+            'signed_request',
+            'signed_url',
+            'private',
+            'privatekey',
+            'session',
+            'sessionid',
+            'csrf',
+            'jwt',
+            'bearer',
+            'otp',
+            'totp',
+            'cvv',
+            'cvc',
+            'pin',
+            'pincode',
+            'iban',
+            'ssn',
+            'recovery',
+            // spelled out: a bare `card` would take `card_type` with it
+            'cardnumber',
+            'creditcard',
+            'credit_card',
+            // not covered by `pass`, `passwd` or `pw`: `user_pwd` splits to `pwd`
+            'pwd',
+
+            // a wildcard matches the whole key, and the bare form with it - so a
+            // word listed here is not repeated above
+            '*token*',
+            '*password*',
+            '*secret*',
+            '*api_key*',
+            '*apikey*',
+            '*api-key*',
+            '*credential*',
+            '*cookie*',
+            '*signature*',
+            '*session_id*',
+            '*card_number*',
+            '*recovery_code*',
+        ],
+
+        // two characters kept at each end, so two records still look different.
+        // these identify a person rather than authenticate one - never a secret here.
+        //
+        // no bare `name`: it is matched as a word component, and `job.name` holds a
+        // job class, `listeners[].name` a listener class, a file's `name` its filename
+        'partial_keys' => [
+            'username',
+            'user_name',
+            'nickname',
+            'surname',
+            'middlename',
+            'middle_name',
+            'fullname',
+            'full_name',
+
+            '*email*',
+            '*phone*',
+            '*recipient*',
+            '*firstname*',
+            '*first_name*',
+            '*lastname*',
+            '*last_name*',
+        ],
+
+        // matched against the value and masked in place, for what no key name points
+        // at - an address in a log line. an invalid pattern is ignored, not fatal.
+        //
+        // order matters: first match wins, so narrow before broad. a capture group
+        // masks the group and keeps the rest.
+        'value_patterns' => [
+            // postgres://app:secret@db. a scheme is required, so `//assets:v2@2x.png`
+            // is left alone; the group runs to the last `@`
+            'url_credentials' => '/\b[a-z][a-z0-9+.-]*:\/\/[^\/\s:@]+:([^\/\s]+)@/i',
+
+            // a secret in a url, wherever it turns up. the parameter name is a word,
+            // not a substring: unbounded, it took `?author=` and `?country_code=`
+            'url_secret' => '/[?&](?:[\w.-]*[_-])?(?:token|apikey|api_key|api-key|secret|password|passwd|auth|authorization|signature|credential|session|sessionid)(?:[_-][\w.-]*)?=([^&\s"\'<>]+)/i',
+
+            // whole parameter name only, or it takes `country_code` and `zip_code`
+            'url_oauth_code' => '/[?&]code=([^&\s"\'<>]+)/i',
+
+            'email' => '/[\w.+-]+@[\w-]+\.[\w.-]*[\w-]/u',
         ],
     ],
 
@@ -125,22 +228,9 @@ return [
                         '*',
                     ],
 
-                    // mask specific request headers by url pattern.
-                    'headers_masking' => [
-                        '*' => [
-                            'authorization',
-                            'cookie',
-                            'x-xsrf-token',
-                        ],
-                    ],
-
-                    // mask request parameters by url pattern.
-                    'parameters_masking' => [
-                        '*' => [
-                            '*token*',
-                            '*password*',
-                        ],
-                    ],
+                    // above this the parameters are not recorded at all. a value
+                    // larger than the masker reads records nothing, not something raw
+                    'max_content_length' => 1000000,
                 ],
 
                 'output' => [
@@ -154,20 +244,8 @@ return [
                         '*',
                     ],
 
-                    // mask specific response headers by url pattern.
-                    'headers_masking' => [
-                        '*' => [
-                            'set-cookie',
-                        ],
-                    ],
-
-                    // mask response fields by url pattern.
-                    'fields_masking' => [
-                        '*' => [
-                            '*token*',
-                            '*password*',
-                        ],
-                    ],
+                    // the same for the response body
+                    'max_content_length' => 1000000,
                 ],
             ],
         ],
@@ -239,15 +317,6 @@ return [
         [
             'class'   => ModelWatcher::class,
             'enabled' => env('SLOGGER_LOG_MODEL_ENABLED', false),
-            'config'  => [
-                // model field masks by model class.
-                'masks' => [
-                    '*' => [
-                        '*token*',
-                        '*password*',
-                    ],
-                ],
-            ],
         ],
         [
             'class'   => NotificationWatcher::class,

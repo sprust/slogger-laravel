@@ -24,16 +24,20 @@ class LogWatcher implements WatcherInterface
 
     public function handleMessageLogged(MessageLogged $event): void
     {
-        $exception = $event->context['exception'] ?? null;
+        // a copy: the event is shared, and replacing the Throwable in it would hand
+        // Sentry and Telescope an exception already flattened into an array
+        $context = $event->context;
+
+        $exception = $context['exception'] ?? null;
 
         if ($exception instanceof Throwable) {
-            $event->context['exception'] = DataFormatter::exception($exception);
+            $context['exception'] = DataFormatter::exception($exception);
         }
 
         $data = [
             'level'   => $event->level,
             'message' => $event->message,
-            'context' => $event->context,
+            'context' => $context,
         ];
 
         $this->processor->push(

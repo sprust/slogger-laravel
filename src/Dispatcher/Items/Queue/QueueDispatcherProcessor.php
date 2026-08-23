@@ -2,7 +2,6 @@
 
 namespace SLoggerLaravel\Dispatcher\Items\Queue;
 
-use Illuminate\Queue\Console\WorkCommand;
 use SLoggerLaravel\Configs\DispatcherQueueConfig;
 use SLoggerLaravel\Dispatcher\Items\DispatcherProcessorInterface;
 use Symfony\Component\Process\PhpExecutableFinder;
@@ -10,6 +9,11 @@ use Symfony\Component\Process\Process;
 
 readonly class QueueDispatcherProcessor implements DispatcherProcessorInterface
 {
+    /**
+     * @see \Illuminate\Queue\Console\WorkCommand
+     */
+    private const WORKER_COMMAND = 'queue:work';
+
     private int $workersNum;
     private string $workerCommand;
 
@@ -17,14 +21,13 @@ readonly class QueueDispatcherProcessor implements DispatcherProcessorInterface
     {
         $this->workersNum = $config->getWorkersNum();
 
-        // tries/backoff are not passed here on purpose:
-        // the values set on SendTracesJob (from config) are serialized
-        // into the job payload and take precedence over worker options.
+        // no tries/backoff: SendTracesJob carries its own in the payload, which takes
+        // precedence over the worker's options
         $this->workerCommand = sprintf(
             '%s %s/artisan %s %s --queue=%s',
             (new PhpExecutableFinder)->find(),
             base_path(),
-            app(WorkCommand::class)->getName(),
+            self::WORKER_COMMAND,
             $config->getConnection(),
             $config->getName()
         );
@@ -41,9 +44,19 @@ readonly class QueueDispatcherProcessor implements DispatcherProcessorInterface
         return $processes;
     }
 
+    /**
+     * `exec` is load-bearing: without it Symfony reports the pid of `sh -c`, which
+     * forwards no signals - the master would leave an orphan draining the queue.
+     */
     public function createProcess(): Process
     {
-        return Process::fromShellCommandline($this->workerCommand)
+        return Process::fromShellCommandline('exec ' . $this->workerCommand)
             ->setTimeout(null);
+    }
+
+    /** What /proc shows once the shell has replaced itself with the worker. */
+    public function getChildCommandName(): string
+    {
+        return $this->workerCommand;
     }
 }

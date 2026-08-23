@@ -18,6 +18,8 @@ use SLoggerLaravel\DataResolver;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Events\RequestHandling;
+use SLoggerLaravel\Helpers\BodyDecoder;
+use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Helpers\TraceHelper;
 use SLoggerLaravel\Middleware\HttpMiddleware;
 use SLoggerLaravel\Processor;
@@ -33,9 +35,11 @@ use Symfony\Component\HttpFoundation\Response;
 class RequestWatcher implements WatcherInterface
 {
     /**
-     * @var array<array{trace_id: string, boot_time: float, started_at: Carbon, logged_at: Carbon}>
+     * How much of a path survives when there is no route to name it. Two segments
+     * would keep the token of `/{action}/{token}`.
      */
-    protected array $requests = [];
+    private const UNROUTED_PATH_SEGMENTS = 1;
+
     /**
      * @var string[]
      */
@@ -57,7 +61,16 @@ class RequestWatcher implements WatcherInterface
 
     protected RequestDataFormatters $formatters;
 
-    protected int $maxResponseBytes = 1048576;
+    protected int $maxResponseBytes = MaskHelper::MAX_READABLE_BYTES;
+
+    protected int $maxRequestBytes = MaskHelper::MAX_READABLE_BYTES;
+
+    /**
+     * Requests started and not yet handled, outermost first.
+     *
+     * @var list<array{trace_id: string, request_id: int, boot_time: float, started_at: Carbon, logged_at: Carbon}>
+     */
+    protected array $requests = [];
 
     public function __construct(
         protected readonly Application $app,
@@ -68,6 +81,19 @@ class RequestWatcher implements WatcherInterface
 
     public function register(?array $config): void
     {
+        // a swept trace never comes back here; its entry would be taken by the next
+        // finish, closing the wrong trace
+        $this->processor->onTraceInterrupted(
+            function (string $traceId): void {
+                $this->requests = array_values(
+                    array_filter(
+                        $this->requests,
+                        static fn(array $request): bool => $request['trace_id'] !== $traceId
+                    )
+                );
+            }
+        );
+
         $this->parseConfig($config);
 
         $this->processor->registerEvent(RequestHandling::class, [$this, 'handleRequestHandling']);
@@ -121,6 +147,7 @@ class RequestWatcher implements WatcherInterface
 
         $this->requests[] = [
             'trace_id'   => $traceId,
+            'request_id' => spl_object_id($event->request),
             'boot_time'  => $bootTime,
             'started_at' => $startedAt,
             'logged_at'  => $loggedAt,
@@ -137,7 +164,7 @@ class RequestWatcher implements WatcherInterface
             return;
         }
 
-        $requestData = array_pop($this->requests);
+        $requestData = $this->takeRequest($event->request);
 
         if (!$requestData) {
             return;
@@ -181,11 +208,36 @@ class RequestWatcher implements WatcherInterface
     }
 
     /**
+     * By identity: `RequestHandled` fires for every request, `RequestHandling` only
+     * for the routed ones, so the top entry was not always this request's.
+     *
+     * @return array{trace_id: string, request_id: int, boot_time: float, started_at: Carbon, logged_at: Carbon}|null
+     */
+    protected function takeRequest(Request $request): ?array
+    {
+        $requestId = spl_object_id($request);
+
+        for ($index = count($this->requests) - 1; $index >= 0; $index--) {
+            if ($this->requests[$index]['request_id'] !== $requestId) {
+                continue;
+            }
+
+            $found = $this->requests[$index];
+
+            $this->requests = array_slice($this->requests, 0, $index);
+
+            return $found;
+        }
+
+        return null;
+    }
+
+    /**
      * @return array<string, mixed>
      */
     protected function getCommonRequestData(Request $request): array
     {
-        $url = str_replace($request->root(), '', $request->fullUrl());
+        $url = $this->getUrlPattern($request);
 
         /**
          * for support for Laravel 10, 12
@@ -202,12 +254,17 @@ class RequestWatcher implements WatcherInterface
             $middlewares = null;
         }
 
+        $queryString = $request->getQueryString();
+
         return [
-            'ip_address'  => $request->ip(),
-            'uri'         => $this->prepareUrl($url),
-            'method'      => $request->method(),
-            'action'      => $action,
-            'middlewares' => $middlewares,
+            'ip_address'       => $request->ip(),
+            'uri'              => $url,
+            'method'           => $request->method(),
+            'action'           => $action,
+            'middlewares'      => $middlewares,
+            'query'            => $request->query->all(),
+            'query_string'     => $queryString === '' ? null : $queryString,
+            'route_parameters' => $this->getRouteParameters($request),
         ];
     }
 
@@ -216,17 +273,62 @@ class RequestWatcher implements WatcherInterface
      */
     protected function getPreTags(Request $request): array
     {
-        $url = str_replace($request->root(), '', $request->fullUrl());
-
         return [
-            $this->prepareUrl($url),
+            $this->getUrlPattern($request),
         ];
     }
 
     /**
-     * @return string[]
+     * The route pattern - `/reset/{token}` - not the url it was matched from: nothing
+     * masks a tag, and the values travel as `route_parameters` instead.
+     *
+     * Falls back to the path when there is no route (a 404, a request that never
+     * reached the router).
      */
-    protected function getPostTags(Request $request, Response $response): array
+    protected function getUrlPattern(Request $request): string
+    {
+        /**
+         * for support for Laravel 10, 12
+         *
+         * @var Route|object|string|null $route
+         */
+        $route = $request->route();
+
+        if ($route instanceof Route) {
+            return $this->prepareUrl($route->uri());
+        }
+
+        if (is_string($route) && $route !== '') {
+            return $this->prepareUrl($route);
+        }
+
+        // routing has not happened yet, so the path is whatever the caller typed,
+        // values and all: `/reset/tok-secret` becomes `/reset/…`
+        return $this->prepareUrl(
+            self::shortenUnroutedPath(str_replace($request->root(), '', $request->url()))
+        );
+    }
+
+    /**
+     * Keeps the first two segments of a path and marks the rest as dropped.
+     */
+    protected static function shortenUnroutedPath(string $path): string
+    {
+        $segments = array_values(array_filter(explode('/', trim($path, '/')), static fn(string $s): bool => $s !== ''));
+
+        if (count($segments) <= self::UNROUTED_PATH_SEGMENTS) {
+            return '/' . implode('/', $segments);
+        }
+
+        return '/' . implode('/', array_slice($segments, 0, self::UNROUTED_PATH_SEGMENTS)) . '/…';
+    }
+
+    /**
+     * Only the route pattern, never the values bound to it: a tag is not masked.
+     *
+     * @return string[]|null
+     */
+    protected function getPostTags(Request $request, Response $response): ?array
     {
         /**
          * for support for Laravel 10, 12
@@ -236,7 +338,8 @@ class RequestWatcher implements WatcherInterface
         $route = $request->route();
 
         if (!$route) {
-            return [];
+            // null, not []: an empty array would replace the start trace's tags
+            return null;
         }
 
         if (is_string($route)) {
@@ -246,13 +349,31 @@ class RequestWatcher implements WatcherInterface
         }
 
         if (!$route instanceof Route) {
-            return [];
+            return null;
         }
 
         return [
             $this->prepareUrl($route->uri()),
-            ...array_values($route->originalParameters()),
         ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function getRouteParameters(Request $request): array
+    {
+        /**
+         * for support for Laravel 10, 12
+         *
+         * @var Route|object|string|null $route
+         */
+        $route = $request->route();
+
+        if (!$route instanceof Route) {
+            return [];
+        }
+
+        return $route->originalParameters();
     }
 
     protected function prepareUrl(string $url): string
@@ -300,6 +421,15 @@ class RequestWatcher implements WatcherInterface
         }
 
         $uri = $this->getRequestPath($request);
+
+        foreach ($this->formatters->getItems() as $formatter) {
+            if ($formatter->hidesRequestParameters($uri)) {
+                // before reading anything, which would only be thrown away
+                return [
+                    '__cleaned' => null,
+                ];
+            }
+        }
 
         $parameters = $this->getRequestParameters($request);
 
@@ -353,15 +483,19 @@ class RequestWatcher implements WatcherInterface
             ];
         }
 
-        if ($request->acceptsJson()) {
-            $url = $this->getRequestPath($request);
+        $content = $response->getContent();
 
-            $content = $response->getContent();
+        $contentType = $response->headers->get('Content-Type');
+
+        // acceptsJson() alone dropped every SOAP and XML-API response
+        if ($request->acceptsJson() || BodyDecoder::isXmlContentType($contentType)) {
+            $url = $this->getRequestPath($request);
 
             if ($content === false) {
                 return [];
             }
 
+            // before anything reads it: this runs in the application's own request
             if (strlen($content) > $this->maxResponseBytes) {
                 return [
                     '__skipped' => 'response_too_large',
@@ -369,7 +503,7 @@ class RequestWatcher implements WatcherInterface
             }
 
             $dataResolver = new DataResolver(
-                fn() => json_decode($content, true) ?: []
+                fn() => BodyDecoder::decode($content, $contentType)
             );
 
             foreach ($this->formatters->getItems() as $formatter) {
@@ -408,10 +542,18 @@ class RequestWatcher implements WatcherInterface
     }
 
     /**
-     * @return array<string, mixed>
+     * @return array<int|string, mixed>
      */
     protected function getRequestParameters(Request $request): array
     {
+        // before input() parses anything: a 20 MB body must not be decoded just to
+        // be dropped. Multipart is left to the check below - its length is file bytes
+        if ($this->declaredBodyTooLarge($request)) {
+            return [
+                '__skipped' => 'request_too_large',
+            ];
+        }
+
         $files = $request->files->all();
 
         array_walk_recursive($files, function (&$file) {
@@ -427,7 +569,108 @@ class RequestWatcher implements WatcherInterface
             ];
         });
 
-        return array_replace_recursive($request->input(), $files);
+        $parameters = array_replace_recursive($request->input(), $files);
+
+        // Laravel leaves XML out of input(). Not conditional on input() being empty:
+        // it merges the query bag, and a single `?wsdl` would suppress the body
+        $body = $this->readXmlRequestBody($request);
+
+        $parameters = $body ? [...$parameters, ...$body] : $parameters;
+
+        // Content-Length is absent on a chunked request and misleading on a multipart
+        // one, so what was actually collected is measured too
+        if (self::exceedsBytes($parameters, $this->maxRequestBytes)) {
+            return [
+                '__skipped' => 'request_too_large',
+            ];
+        }
+
+        return $parameters;
+    }
+
+    /**
+     * Whether the request says, before it is read, that it is too big to record.
+     */
+    protected function declaredBodyTooLarge(Request $request): bool
+    {
+        $contentType = (string) $request->headers->get('Content-Type');
+
+        if (Str::startsWith(Str::lower($contentType), 'multipart/')) {
+            return false;
+        }
+
+        $length = $request->headers->get('Content-Length');
+
+        return is_numeric($length) && (int) $length > $this->maxRequestBytes;
+    }
+
+    /**
+     * Walked rather than encoded - encoding an oversized payload to measure it is the
+     * cost the cap exists to avoid - and stopped at the first byte over the limit.
+     *
+     * @param array<int|string, mixed> $parameters
+     */
+    protected static function exceedsBytes(array $parameters, int $limit): bool
+    {
+        $bytes = 0;
+
+        $walk = static function (mixed $value) use (&$walk, &$bytes, $limit): bool {
+            if (is_array($value)) {
+                foreach ($value as $key => $item) {
+                    $bytes += strlen((string) $key);
+
+                    if ($bytes > $limit || $walk($item)) {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            if (is_string($value)) {
+                $bytes += strlen($value);
+            } else {
+                // a number, a bool, a null: nothing that can carry a payload
+                $bytes += 8;
+            }
+
+            return $bytes > $limit;
+        };
+
+        return $walk($parameters);
+    }
+
+    /**
+     * @return array<int|string, mixed>
+     */
+    protected function readXmlRequestBody(Request $request): array
+    {
+        $contentType = $request->headers->get('Content-Type');
+
+        // cheapest check first, then the size, and only then the body itself
+        if (!BodyDecoder::isXmlContentType($contentType)) {
+            return [];
+        }
+
+        $length = $request->headers->get('Content-Length');
+
+        if (is_numeric($length) && (int) $length > $this->maxRequestBytes) {
+            return [
+                '__skipped' => 'request_too_large',
+            ];
+        }
+
+        $content = $request->getContent();
+
+        if (strlen($content) > $this->maxRequestBytes) {
+            // Content-Length is absent on a chunked request, so the cap has to be
+            // re-checked against what was actually read
+            return [
+                '__skipped' => 'request_too_large',
+            ];
+        }
+
+        return BodyDecoder::decode($content, $contentType);
     }
 
     /**
@@ -455,20 +698,6 @@ class RequestWatcher implements WatcherInterface
             $formatterMap[$urlPattern]->setHideAllRequestParameters(true);
         }
 
-        $inputMaskHeadersMasking = $config['input']['headers_masking'] ?? [];
-
-        foreach ($inputMaskHeadersMasking as $urlPattern => $headers) {
-            $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
-            $formatterMap[$urlPattern]->addRequestHeaders($headers);
-        }
-
-        $inputParametersMasking = $config['input']['parameters_masking'] ?? [];
-
-        foreach ($inputParametersMasking as $urlPattern => $parameters) {
-            $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
-            $formatterMap[$urlPattern]->addRequestParameters($parameters);
-        }
-
         $outputFullHiding = $config['output']['hidden_paths'] ?? [];
 
         foreach ($outputFullHiding as $urlPattern) {
@@ -476,20 +705,7 @@ class RequestWatcher implements WatcherInterface
             $formatterMap[$urlPattern]->setHideAllResponseData(true);
         }
 
-        $outputHeadersMasking = $config['output']['headers_masking'] ?? [];
-
-        foreach ($outputHeadersMasking as $urlPattern => $headers) {
-            $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
-            $formatterMap[$urlPattern]->addResponseHeaders($headers);
-        }
-
-        $outputFieldsMasking = $config['output']['fields_masking'] ?? [];
-
-        foreach ($outputFieldsMasking as $urlPattern => $fields) {
-            $formatterMap[$urlPattern] ??= new RequestDataFormatter([$urlPattern]);
-            $formatterMap[$urlPattern]->addResponseFields($fields);
-        }
-
+        $this->maxRequestBytes  = (int) ($config['input']['max_content_length'] ?? $this->maxRequestBytes);
         $this->maxResponseBytes = (int) ($config['output']['max_content_length'] ?? $this->maxResponseBytes);
 
         $this->formatters = new RequestDataFormatters();

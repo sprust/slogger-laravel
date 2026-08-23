@@ -2,10 +2,13 @@
 
 namespace SLoggerLaravel\Watchers\Parents;
 
+use Illuminate\Contracts\Queue\Job;
+use Illuminate\Queue\Events\JobExceptionOccurred;
 use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Queue\Events\JobReleasedAfterException;
+use Illuminate\Queue\Events\JobTimedOut;
 use Illuminate\Queue\Queue;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
@@ -17,6 +20,7 @@ use SLoggerLaravel\Helpers\TraceHelper;
 use SLoggerLaravel\Processor;
 use SLoggerLaravel\Traces\TraceIdContainer;
 use SLoggerLaravel\Watchers\WatcherInterface;
+use Throwable;
 
 class JobWatcher implements WatcherInterface
 {
@@ -31,13 +35,16 @@ class JobWatcher implements WatcherInterface
     ];
 
     /**
-     * @var array<array{trace_id: string, started_at: Carbon}>
-     */
-    protected array $jobs = [];
-    /**
      * @var class-string[]
      */
     protected array $exceptedJobs = self::ALWAYS_EXCEPTED_JOBS;
+
+    /**
+     * Jobs being processed, by the uuid their payload carries.
+     *
+     * @var array<string, array{trace_id: string, started_at: Carbon}>
+     */
+    protected array $jobs = [];
 
     public function __construct(
         protected readonly Processor $processor,
@@ -47,6 +54,17 @@ class JobWatcher implements WatcherInterface
 
     public function register(?array $config): void
     {
+        // a job killed by the timeout signal has its trace closed by the sweep and
+        // never comes back here; without this the entry outlives the worker
+        $this->processor->onTraceInterrupted(
+            function (string $traceId): void {
+                $this->jobs = array_filter(
+                    $this->jobs,
+                    static fn(array $job): bool => $job['trace_id'] !== $traceId
+                );
+            }
+        );
+
         $this->exceptedJobs = array_values(
             array_unique(
                 array_merge(
@@ -69,6 +87,8 @@ class JobWatcher implements WatcherInterface
         $this->processor->registerEvent(JobProcessed::class, [$this, 'handleJobProcessed']);
         $this->processor->registerEvent(JobFailed::class, [$this, 'handleJobFailed']);
         $this->processor->registerEvent(JobReleasedAfterException::class, [$this, 'handleJobReleasedAfterException']);
+        $this->processor->registerEvent(JobTimedOut::class, [$this, 'handleJobTimedOut']);
+        $this->processor->registerEvent(JobExceptionOccurred::class, [$this, 'handleJobExceptionOccurred']);
     }
 
     public function handleJobProcessing(JobProcessing $event): void
@@ -109,86 +129,78 @@ class JobWatcher implements WatcherInterface
 
     public function handleJobProcessed(JobProcessed $event): void
     {
-        $payload = $event->job->payload();
-
-        $uuid = $payload['slogger_uuid'] ?? null;
-
-        if (!$uuid) {
-            return;
-        }
-
-        $jobData = $this->jobs[$uuid] ?? null;
-
-        if (!$jobData) {
-            return;
-        }
-
-        $traceId = $jobData['trace_id'];
-
-        /** @var Carbon $startedAt */
-        $startedAt = $jobData['started_at'];
-
-        $data = [
-            'connection_name' => $event->connectionName,
-            'job'             => $this->formatJobData($payload),
-            'status'          => 'processed',
-        ];
-
-        $this->processor->stop(
-            traceId: $traceId,
-            status: TraceStatusEnum::Success->value,
-            tags: null,
-            data: $data,
-            duration: TraceHelper::calcDuration($startedAt),
-            parentLoggedAt: $startedAt,
+        $this->stopJobTrace(
+            job: $event->job,
+            connectionName: $event->connectionName,
+            jobStatus: 'processed',
+            traceStatus: TraceStatusEnum::Success->value,
         );
-
-        unset($this->jobs[$uuid]);
     }
 
     public function handleJobFailed(JobFailed $event): void
     {
-        $payload = $event->job->payload();
-
-        $uuid = $payload['slogger_uuid'] ?? null;
-
-        if (!$uuid) {
-            return;
-        }
-
-        $jobData = $this->jobs[$uuid] ?? null;
-
-        if (!$jobData) {
-            return;
-        }
-
-        $traceId = $jobData['trace_id'];
-
-        /** @var Carbon $startedAt */
-        $startedAt = $jobData['started_at'];
-
-        $data = [
-            'connection_name' => $event->connectionName,
-            'job'             => $this->formatJobData($payload),
-            'status'          => 'failed',
-            'exception'       => DataFormatter::exception($event->exception),
-        ];
-
-        $this->processor->stop(
-            traceId: $traceId,
-            status: TraceStatusEnum::Failed->value,
-            tags: null,
-            data: $data,
-            duration: TraceHelper::calcDuration($startedAt),
-            parentLoggedAt: $startedAt,
+        $this->stopJobTrace(
+            job: $event->job,
+            connectionName: $event->connectionName,
+            jobStatus: 'failed',
+            traceStatus: TraceStatusEnum::Failed->value,
+            exception: $event->exception,
         );
-
-        unset($this->jobs[$uuid]);
     }
 
     public function handleJobReleasedAfterException(JobReleasedAfterException $event): void
     {
-        $payload = $event->job->payload();
+        $this->stopJobTrace(
+            job: $event->job,
+            connectionName: $event->connectionName,
+            jobStatus: 'released_after_exception',
+            traceStatus: TraceStatusEnum::Failed->value,
+        );
+    }
+
+    /**
+     * The worker kills itself right after a job timeout, so a job that is retried
+     * instead of failed would never close its trace.
+     */
+    public function handleJobTimedOut(JobTimedOut $event): void
+    {
+        $this->stopJobTrace(
+            job: $event->job,
+            connectionName: $event->connectionName,
+            jobStatus: 'timed_out',
+            traceStatus: TraceStatusEnum::Failed->value,
+        );
+    }
+
+    /**
+     * `$this->release(60); throw ...` gets none of the three terminal events, so this
+     * is the last the worker says about that job.
+     */
+    public function handleJobExceptionOccurred(JobExceptionOccurred $event): void
+    {
+        // the worker releases the job and emits JobReleasedAfterException right after
+        // this event unless the job has already disposed of itself
+        if (!$event->job->isDeletedOrReleased() && !$event->job->hasFailed()) {
+            return;
+        }
+
+        $this->stopJobTrace(
+            job: $event->job,
+            connectionName: $event->connectionName,
+            jobStatus: 'exception_occurred',
+            traceStatus: TraceStatusEnum::Failed->value,
+            exception: $event->exception,
+        );
+    }
+
+    protected function stopJobTrace(
+        Job $job,
+        string $connectionName,
+        string $jobStatus,
+        string $traceStatus,
+        ?Throwable $exception = null
+    ): void {
+        $payload = $job->payload();
 
         $uuid = $payload['slogger_uuid'] ?? null;
 
@@ -202,27 +214,31 @@ class JobWatcher implements WatcherInterface
             return;
         }
 
-        $traceId = $jobData['trace_id'];
+        // forgotten before the trace is stopped: a worker can report the same job
+        // twice - the timeout handler fails one that has just been processed
+        unset($this->jobs[$uuid]);
+
+        $data = [
+            'connection_name' => $connectionName,
+            'job'             => $this->formatJobData($payload),
+            'status'          => $jobStatus,
+        ];
+
+        if ($exception) {
+            $data['exception'] = DataFormatter::exception($exception);
+        }
 
         /** @var Carbon $startedAt */
         $startedAt = $jobData['started_at'];
 
-        $data = [
-            'connection_name' => $event->connectionName,
-            'job'             => $this->formatJobData($payload),
-            'status'          => 'released_after_exception',
-        ];
-
         $this->processor->stop(
-            traceId: $traceId,
-            status: TraceStatusEnum::Failed->value,
+            traceId: $jobData['trace_id'],
+            status: $traceStatus,
             tags: null,
             data: $data,
             duration: TraceHelper::calcDuration($startedAt),
             parentLoggedAt: $startedAt,
         );
-
-        unset($this->jobs[$uuid]);
     }
 
     /**

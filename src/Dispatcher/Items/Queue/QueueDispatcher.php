@@ -88,11 +88,8 @@ class QueueDispatcher implements TraceDispatcherInterface
     /**
      * Telemetry must never break or spam the application.
      *
-     * A send/enqueue failure — unreachable trace receiver on a synchronous
-     * connection, a down broker on enqueue, a serialization or configuration
-     * error — is logged to slogger's own channel (rate-limited) and dropped.
-     * It is never propagated into the app's request/event handling, where the
-     * watcher firewall would otherwise surface it through report().
+     * A send or enqueue failure is logged to slogger's own channel, rate-limited, and
+     * dropped - never propagated into the application's request handling.
      *
      * @param Closure(): mixed $dispatch
      */

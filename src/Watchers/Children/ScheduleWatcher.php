@@ -10,6 +10,7 @@ use Illuminate\Console\Scheduling\CallbackEvent;
 use Illuminate\Console\Scheduling\Event;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
+use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Processor;
 use SLoggerLaravel\Watchers\WatcherInterface;
 
@@ -82,7 +83,8 @@ class ScheduleWatcher implements WatcherInterface
             return '';
         }
 
-        $contents = file_get_contents($event->output);
+        // read only that far: the whole file went into memory and into the queue
+        $contents = file_get_contents($event->output, length: MaskHelper::MAX_READABLE_BYTES);
 
         if ($contents === false) {
             return '';

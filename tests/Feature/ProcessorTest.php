@@ -7,6 +7,9 @@ namespace SLoggerLaravel\Tests\Feature;
 use Illuminate\Support\Carbon;
 use RuntimeException;
 use SLoggerLaravel\Dispatcher\Items\DispatcherProcessorInterface;
+use SLoggerLaravel\Dispatcher\Items\Memory\MemoryDispatcher;
+use SLoggerLaravel\Enums\TraceStatusEnum;
+use SLoggerLaravel\Events\WatcherErrorEvent;
 use SLoggerLaravel\Dispatcher\Items\TraceDispatcherInterface;
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
@@ -67,9 +70,431 @@ class ProcessorTest extends BaseTestCase
             parentLoggedAt: Carbon::now()
         );
 
-        // both the create and the update push must run under paused tracing:
         // the push itself fires watchable events and must not be traced recursively
         self::assertSame([true, true], $fakeDispatcher->pausedStates);
         self::assertFalse($processor->isPaused());
+    }
+
+    public function testNestedHandleWithoutTracingKeepsTheOuterPause(): void
+    {
+        $processor = $this->getApp()->make(Processor::class);
+
+        $seen = [];
+
+        $processor->handleWithoutTracing(function () use ($processor, &$seen): void {
+            $processor->handleWithoutTracing(static function (): void {
+                // reported from inside an already paused section, which pauses again
+            });
+
+            // the inner call must not lift the pause the outer one holds
+            $seen[] = $processor->isPaused();
+        });
+
+        self::assertSame([true], $seen);
+        self::assertFalse($processor->isPaused());
+    }
+
+    public function testHandleWithoutTracingRestoresThePauseAfterAThrow(): void
+    {
+        $processor = $this->getApp()->make(Processor::class);
+
+        try {
+            $processor->handleWithoutTracing(static function (): void {
+                throw new RuntimeException('boom');
+            });
+        } catch (RuntimeException) {
+            // the caller still gets the exception - SendTracesJob relies on it
+        }
+
+        self::assertFalse($processor->isPaused());
+    }
+
+    public function testABrokenReportingPathDoesNotReachTheApplication(): void
+    {
+        $processor = $this->getApp()->make(Processor::class);
+
+        $this->getApp()->make('events')->listen(
+            WatcherErrorEvent::class,
+            static function (): void {
+                // the reporting path itself is broken: a dead log channel, a full disk
+                throw new RuntimeException('reporting is broken too');
+            }
+        );
+
+        $result = $processor->handleWatcher(static function (): void {
+            throw new RuntimeException('watcher failed');
+        });
+
+        // telemetry must not surface in the host application at all
+        self::assertNull($result);
+    }
+
+    public function testStopClosesInterruptedNestedTraces(): void
+    {
+        $processor  = $this->getApp()->make(Processor::class);
+        $dispatcher = $this->getApp()->make(MemoryDispatcher::class);
+
+        $dispatcher->flush();
+
+        $parentTraceId = $processor->startAndGetTraceId(
+            type: 'job',
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now(),
+            customParentTraceId: null
+        );
+
+        $nestedTraceId = $processor->startAndGetTraceId(
+            type: 'command',
+            tags: ['nested'],
+            data: ['kept' => true],
+            loggedAt: Carbon::now(),
+            customParentTraceId: null
+        );
+
+        // stopped with the nested trace still open, as a timeout handler does
+        $processor->stop(
+            traceId: $parentTraceId,
+            status: TraceStatusEnum::Failed->value,
+            tags: null,
+            data: null,
+            duration: null,
+            parentLoggedAt: Carbon::now()
+        );
+
+        $updatedNested = $dispatcher->findUpdating(
+            traceId: $nestedTraceId,
+            status: TraceStatusEnum::Failed
+        );
+
+        self::assertCount(1, $updatedNested);
+
+        // an update replaces the data, so the tag is what marks it instead
+        self::assertNull($updatedNested[0]->data);
+
+        self::assertSame(
+            ['nested', Processor::INTERRUPTED_TAG],
+            $updatedNested[0]->tags
+        );
+
+        self::assertCount(
+            1,
+            $dispatcher->findUpdating(
+                traceId: $parentTraceId,
+                status: TraceStatusEnum::Failed
+            )
+        );
+
+        self::assertFalse($processor->isActive());
+    }
+
+    public function testStopOfAnAlreadyStoppedTraceIsIgnored(): void
+    {
+        $processor  = $this->getApp()->make(Processor::class);
+        $dispatcher = $this->getApp()->make(MemoryDispatcher::class);
+
+        $dispatcher->flush();
+
+        $traceId = $processor->startAndGetTraceId(
+            type: 'job',
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now(),
+            customParentTraceId: null
+        );
+
+        $stop = static fn(string $status) => $processor->stop(
+            traceId: $traceId,
+            status: $status,
+            tags: null,
+            data: null,
+            duration: null,
+            parentLoggedAt: Carbon::now()
+        );
+
+        $stop(TraceStatusEnum::Success->value);
+        $stop(TraceStatusEnum::Failed->value);
+
+        self::assertCount(
+            1,
+            $dispatcher->findUpdating(traceId: $traceId)
+        );
+
+        self::assertCount(
+            1,
+            $dispatcher->findUpdating(
+                traceId: $traceId,
+                status: TraceStatusEnum::Success
+            )
+        );
+    }
+
+    public function testStopOfAMiddleTraceKeepsTheOuterOneRunning(): void
+    {
+        $processor  = $this->getApp()->make(Processor::class);
+        $dispatcher = $this->getApp()->make(MemoryDispatcher::class);
+
+        $dispatcher->flush();
+
+        $outerTraceId = $processor->startAndGetTraceId(
+            type: 'command',
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now(),
+            customParentTraceId: null
+        );
+
+        $middleTraceId = $processor->startAndGetTraceId(
+            type: 'job',
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now(),
+            customParentTraceId: null
+        );
+
+        $innerTraceId = $processor->startAndGetTraceId(
+            type: 'command',
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now(),
+            customParentTraceId: null
+        );
+
+        $processor->stop(
+            traceId: $middleTraceId,
+            status: TraceStatusEnum::Failed->value,
+            tags: null,
+            data: null,
+            duration: null,
+            parentLoggedAt: Carbon::now()
+        );
+
+        // only the traces above the stopped one are interrupted
+        self::assertCount(1, $dispatcher->findUpdating(traceId: $innerTraceId));
+        self::assertCount(1, $dispatcher->findUpdating(traceId: $middleTraceId));
+        self::assertCount(0, $dispatcher->findUpdating(traceId: $outerTraceId));
+
+        self::assertTrue($processor->isActive());
+
+        // the outer trace becomes the parent again, so it still collects children
+        $processor->push(type: 'log', status: TraceStatusEnum::Success->value);
+
+        $children = $dispatcher->findCreating(
+            parentTraceId: $outerTraceId,
+            type: 'log',
+            isParent: false,
+        );
+
+        self::assertCount(1, $children);
+
+        $processor->stop(
+            traceId: $outerTraceId,
+            status: TraceStatusEnum::Success->value,
+            tags: null,
+            data: null,
+            duration: null,
+            parentLoggedAt: Carbon::now()
+        );
+
+        self::assertFalse($processor->isActive());
+    }
+
+    public function testStopClosesDetachedTracesTheParentLeftOpen(): void
+    {
+        $processor  = $this->getApp()->make(Processor::class);
+        $dispatcher = $this->getApp()->make(MemoryDispatcher::class);
+
+        $dispatcher->flush();
+
+        $parentTraceId = $processor->startAndGetTraceId(
+            type: 'job',
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now(),
+            customParentTraceId: null
+        );
+
+        // the Guzzle handler throws synchronously, so the watcher is never told
+        $detachedTraceId = $processor->startAndGetDetachedTraceId(
+            type: 'http-client',
+            tags: ['https://example.test/alpha'],
+            data: ['kept' => true],
+            loggedAt: Carbon::now()
+        );
+
+        $processor->stop(
+            traceId: $parentTraceId,
+            status: TraceStatusEnum::Success->value,
+            tags: null,
+            data: null,
+            duration: null,
+            parentLoggedAt: Carbon::now()
+        );
+
+        $updatedDetached = $dispatcher->findUpdating(
+            traceId: $detachedTraceId,
+            status: TraceStatusEnum::Failed
+        );
+
+        self::assertCount(1, $updatedDetached);
+
+        self::assertNull($updatedDetached[0]->data);
+
+        self::assertSame(
+            ['https://example.test/alpha', Processor::INTERRUPTED_TAG],
+            $updatedDetached[0]->tags
+        );
+
+        self::assertFalse($processor->isActive());
+    }
+
+    public function testTheTwoStopMethodsAreInterchangeable(): void
+    {
+        $processor  = $this->getApp()->make(Processor::class);
+        $dispatcher = $this->getApp()->make(MemoryDispatcher::class);
+
+        $dispatcher->flush();
+
+        $stackedTraceId = $processor->startAndGetTraceId(
+            type: 'job',
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now(),
+            customParentTraceId: null
+        );
+
+        $detachedTraceId = $processor->startAndGetDetachedTraceId(
+            type: 'http-client',
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now()
+        );
+
+        // closed through the wrong method on purpose
+        $processor->stop(
+            traceId: $detachedTraceId,
+            status: TraceStatusEnum::Success->value,
+            tags: null,
+            data: null,
+            duration: null,
+            parentLoggedAt: Carbon::now()
+        );
+
+        $processor->stop(
+            traceId: $stackedTraceId,
+            status: TraceStatusEnum::Success->value,
+            tags: null,
+            data: null,
+            duration: null,
+            parentLoggedAt: Carbon::now()
+        );
+
+        self::assertCount(
+            1,
+            $dispatcher->findUpdating(
+                traceId: $detachedTraceId,
+                status: TraceStatusEnum::Success
+            )
+        );
+
+        self::assertCount(
+            1,
+            $dispatcher->findUpdating(
+                traceId: $stackedTraceId,
+                status: TraceStatusEnum::Success
+            )
+        );
+
+        // the detached one was closed on its own, so it must not be marked interrupted
+        self::assertNotContains(
+            Processor::INTERRUPTED_TAG,
+            $dispatcher->findUpdating(traceId: $detachedTraceId)[0]->tags ?? []
+        );
+
+        self::assertFalse($processor->isActive());
+    }
+
+    /**
+     * A call made with no trace around it has no owner to name it, and under FPM the
+     * process is gone long before any TTL.
+     */
+    public function testADetachedTraceWithNoOwnerIsClosedWhenTheUnitOfWorkEnds(): void
+    {
+        $processor  = $this->getApp()->make(Processor::class);
+        $dispatcher = $this->getApp()->make(MemoryDispatcher::class);
+
+        $dispatcher->flush();
+
+        $orphanTraceId = $processor->startAndGetDetachedTraceId(
+            type: 'http-client',
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now()
+        );
+
+        $this->runOneTrace($processor);
+
+        $updating = $dispatcher->findUpdating(
+            traceId: $orphanTraceId,
+            status: TraceStatusEnum::Failed
+        );
+
+        self::assertCount(1, $updating);
+        self::assertContains(Processor::INTERRUPTED_TAG, $updating[0]->tags ?? []);
+    }
+
+    /** One whose owner never stops is reached by age and by nothing else. */
+    public function testADetachedTraceWhoseOwnerNeverStopsIsSweptOnceItIsOldEnough(): void
+    {
+        $processor  = $this->getApp()->make(Processor::class);
+        $dispatcher = $this->getApp()->make(MemoryDispatcher::class);
+
+        $dispatcher->flush();
+
+        $detachedTraceId = $processor->startAndGetDetachedTraceId(
+            type: 'http-client',
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now(),
+            customParentTraceId: 'owner-that-never-stops'
+        );
+
+        // a request still in flight is not an abandoned one
+        $this->runOneTrace($processor);
+
+        self::assertCount(0, $dispatcher->findUpdating(traceId: $detachedTraceId));
+
+        Carbon::setTestNow(Carbon::now()->addSeconds(Processor::DETACHED_TRACE_TTL_SECONDS + 1));
+
+        try {
+            $this->runOneTrace($processor);
+        } finally {
+            Carbon::setTestNow();
+        }
+
+        $updating = $dispatcher->findUpdating(traceId: $detachedTraceId);
+
+        self::assertCount(1, $updating);
+        self::assertContains(Processor::INTERRUPTED_TAG, $updating[0]->tags ?? []);
+    }
+
+    private function runOneTrace(Processor $processor): void
+    {
+        $traceId = $processor->startAndGetTraceId(
+            type: 'job',
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now(),
+            customParentTraceId: null
+        );
+
+        $processor->stop(
+            traceId: $traceId,
+            status: TraceStatusEnum::Success->value,
+            tags: null,
+            data: null,
+            duration: null,
+            parentLoggedAt: Carbon::now()
+        );
     }
 }

@@ -34,9 +34,9 @@ class TraceUpdateObject
             [
                 'tid'   => $this->traceId,
                 'st'    => $this->status,
-                'pr'    => null, // TODO
+                'pr'    => null, // the receiver does not read it yet
                 'tg'    => $this->tags,
-                'dt'    => json_encode($this->data),
+                'dt'    => json_encode($this->data, JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR),
                 'du'    => $this->duration,
                 'mem'   => $this->memory,
                 'cpu'   => $this->cpu,
@@ -64,7 +64,7 @@ class TraceUpdateObject
         return new TraceUpdateObject(
             traceId: $jsonData['tid'],
             status: $jsonData['st'],
-            profiling: null, // TODO
+            profiling: null, // see toJson()
             tags: $jsonData['tg'],
             data: $data,
             duration: isset($jsonData['du']) ? ((float) $jsonData['du']) : null,

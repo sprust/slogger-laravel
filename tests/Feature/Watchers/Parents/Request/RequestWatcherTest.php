@@ -4,6 +4,15 @@ declare(strict_types=1);
 
 namespace SLoggerLaravel\Tests\Feature\Watchers\Parents\Request;
 
+use App\Events\NestedEvent;
+use Illuminate\Foundation\Http\Events\RequestHandled;
+use Illuminate\Http\Request;
+use Illuminate\Http\Response;
+use SLoggerLaravel\Configs\WatchersConfig;
+use SLoggerLaravel\Enums\TraceStatusEnum;
+use SLoggerLaravel\Events\RequestHandling;
+use SLoggerLaravel\Helpers\MaskHelper;
+use SLoggerLaravel\Helpers\TraceDataMasker;
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
 use SLoggerLaravel\Tests\Feature\Watchers\Parents\BaseParentWatcherTestCase;
@@ -11,6 +20,157 @@ use SLoggerLaravel\Watchers\Parents\RequestWatcher;
 
 class RequestWatcherTest extends BaseParentWatcherTestCase
 {
+    public function testTheQueryStringIsCarriedAsDataAndNotAsAUrl(): void
+    {
+        $this->get(route('slogger.success') . '?page=2&api_token=tok-secret')
+            ->assertOk();
+
+        $creating = $this->dispatcher->findCreating(type: 'request');
+
+        self::assertCount(1, $creating);
+
+        $data = $creating[0]->data;
+
+        // nothing masks a url, so the query string is carried as data instead
+        self::assertStringNotContainsString('tok-secret', $data['uri']);
+        self::assertStringNotContainsString('tok-secret', implode(' ', $creating[0]->tags));
+
+        self::assertSame('tok-secret', $data['query']['api_token']);
+
+        // Symfony normalises a query string, so assert on what it decodes to
+        $raw = [];
+
+        parse_str($data['query_string'], $raw);
+
+        self::assertSame(['api_token' => 'tok-secret', 'page' => '2'], $raw);
+
+        $masked = app(TraceDataMasker::class)->mask($data);
+
+        $parameters = [];
+
+        parse_str($masked['query_string'], $parameters);
+
+        self::assertSame('2', $parameters['page']);
+        self::assertSame(MaskHelper::FULL_MASK, $parameters['api_token']);
+        self::assertSame(MaskHelper::FULL_MASK, $masked['query']['api_token']);
+    }
+
+    public function testRouteParametersAreCarriedAsDataAndNotAsTags(): void
+    {
+        $this->get(route('slogger.reset', ['token' => 'tok-secret']))
+            ->assertOk();
+
+        $creating = $this->dispatcher->findCreating(type: 'request');
+
+        self::assertCount(1, $creating);
+
+        $updating = $this->dispatcher->findUpdating(traceId: $creating[0]->traceId);
+
+        self::assertCount(1, $updating);
+
+        // the pattern, not the value bound to it: a tag is never masked
+        self::assertSame(['/slogger/reset/{token}'], $creating[0]->tags);
+        self::assertSame(['/slogger/reset/{token}'], $updating[0]->tags);
+
+        // and `uri` too: it sits at the top level, which the masker leaves alone
+        self::assertSame('/slogger/reset/{token}', $creating[0]->data['uri']);
+        self::assertSame('/slogger/reset/{token}', ($updating[0]->data ?? [])['uri']);
+
+        $data = $updating[0]->data ?? [];
+
+        self::assertSame(['token' => 'tok-secret'], $data['route_parameters']);
+
+        $masked = app(TraceDataMasker::class)->mask($data);
+
+        self::assertSame(MaskHelper::FULL_MASK, $masked['route_parameters']['token']);
+
+        // nothing anywhere in the trace still carries the bound value
+        foreach ([$creating[0]->tags, $updating[0]->tags] as $tags) {
+            self::assertStringNotContainsString('tok-secret', implode(' ', $tags));
+        }
+
+        self::assertStringNotContainsString('tok-secret', json_encode($masked, JSON_THROW_ON_ERROR));
+    }
+
+    public function testTheTraceIdHeaderReachesTheClient(): void
+    {
+        $response = $this->get(route('slogger.success'))
+            ->assertOk();
+
+        $headerKey = app(WatchersConfig::class)->requestsHeaderParentTraceIdKey();
+
+        self::assertNotNull($headerKey);
+
+        $creating = $this->dispatcher->findCreating(type: 'request');
+
+        self::assertCount(1, $creating);
+
+        // the response the client gets: under FPM terminate() runs after it is sent
+        self::assertSame(
+            $creating[0]->traceId,
+            $response->headers->get($headerKey)
+        );
+    }
+
+    public function testAnUnroutedPathKeepsOnlyItsFirstSegment(): void
+    {
+        // routing has not happened when RequestHandling fires, and a 404 never routes
+        $shorten = (new \ReflectionClass(RequestWatcher::class))->getMethod('shortenUnroutedPath');
+
+        // the canonical secret-in-path shapes: a password reset, an email verify
+        self::assertSame('/reset/…', $shorten->invoke(null, '/reset/tok-secret'));
+        self::assertSame('/verify/…', $shorten->invoke(null, '/verify/abc'));
+        self::assertSame('/reset/…', $shorten->invoke(null, '/reset/tok-secret/confirm'));
+
+        // nothing to hide in a single segment
+        self::assertSame('/health', $shorten->invoke(null, '/health'));
+        self::assertSame('/', $shorten->invoke(null, '/'));
+    }
+
+    public function testAnUnroutedRequestKeepsTheTagsItsStartTraceCarried(): void
+    {
+        $watcher = $this->getApp()->make(RequestWatcher::class);
+
+        $method = (new \ReflectionClass(RequestWatcher::class))->getMethod('getPostTags');
+
+        $tags = $method->invoke(
+            $watcher,
+            \Illuminate\Http\Request::create('/nowhere/at/all'),
+            new \Symfony\Component\HttpFoundation\Response()
+        );
+
+        // null leaves them alone; [] would leave a 404 untagged
+        self::assertNull($tags);
+    }
+
+    /**
+     * `RequestHandling` comes from the middleware, `RequestHandled` from the kernel
+     * for every request - so taking the top entry closed the wrong request.
+     */
+    public function testARequestHandledWithoutItsOwnHandlingLeavesTheOpenRequestAlone(): void
+    {
+        $outer = Request::create('/slogger/outer', 'GET');
+        $inner = Request::create('/no-slogger/inner', 'GET');
+
+        event(new RequestHandling(request: $outer, parentTraceId: null));
+
+        // an untraced sub-request finishing inside the traced one
+        event(new RequestHandled($inner, new Response('', 500)));
+
+        $creating = $this->dispatcher->findCreating(type: 'request');
+
+        self::assertCount(1, $creating);
+        self::assertCount(0, $this->dispatcher->findUpdating(traceId: $creating[0]->traceId));
+
+        event(new RequestHandled($outer, new Response('', 200)));
+
+        $updating = $this->dispatcher->findUpdating(traceId: $creating[0]->traceId);
+
+        self::assertCount(1, $updating);
+        self::assertSame(200, ($updating[0]->data ?? [])['response']['status']);
+        self::assertSame(TraceStatusEnum::Success->value, $updating[0]->status);
+    }
+
     protected function getTraceType(): string
     {
         return 'request';
@@ -31,7 +191,18 @@ class RequestWatcherTest extends BaseParentWatcherTestCase
         TraceCreateObject $creatingTrace,
         TraceUpdateObject $updatingTrace
     ): void {
-        // no action
+        self::assertSame('/slogger/success', $creatingTrace->data['uri']);
+        self::assertSame('GET', $creatingTrace->data['method']);
+        self::assertSame(['/slogger/success'], $creatingTrace->tags);
+
+        $data = $updatingTrace->data ?? [];
+
+        self::assertSame(200, $data['response']['status']);
+        self::assertSame(['ok' => true], $data['response']['data']);
+        self::assertSame([], $data['route_parameters']);
+
+        // the route pattern, never the values bound to it
+        self::assertSame(['/slogger/success'], $updatingTrace->tags);
     }
 
     protected function runFailed(): void
@@ -44,7 +215,9 @@ class RequestWatcherTest extends BaseParentWatcherTestCase
         TraceCreateObject $creatingTrace,
         TraceUpdateObject $updatingTrace
     ): void {
-        // no action
+        self::assertSame('/slogger/failed', $creatingTrace->data['uri']);
+
+        self::assertSame(500, $updatingTrace->data['response']['status'] ?? null);
     }
 
     protected function runWithNestedEvent(): void
@@ -57,6 +230,8 @@ class RequestWatcherTest extends BaseParentWatcherTestCase
         TraceUpdateObject $updatingTrace,
         TraceCreateObject $creatingEventTrace
     ): void {
-        // no action
+        // the event was recorded as a child of the request, not as an orphan
+        self::assertSame($creatingTrace->traceId, $creatingEventTrace->parentTraceId);
+        self::assertSame([NestedEvent::class], $creatingEventTrace->tags);
     }
 }
