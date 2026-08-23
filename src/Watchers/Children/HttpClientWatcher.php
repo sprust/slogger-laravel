@@ -283,9 +283,8 @@ class HttpClientWatcher implements WatcherInterface
     }
 
     /**
-     * Reads a body without changing what anyone else will do with it - reading one is
-     * the one thing tracing does that can change what the application sends, or how
-     * much memory it needs. One copy for both directions.
+     * Reading a body is the one thing tracing does that can change what the
+     * application sends, or how much memory it needs. One copy for both directions.
      *
      * @return array<int|string, mixed>
      */
@@ -401,9 +400,8 @@ class HttpClientWatcher implements WatcherInterface
     }
 
     /**
-     * The url with the query string and the userinfo stripped - both would otherwise
-     * end up in a tag, and nothing masks a tag. A secret bound into the path still
-     * gets through; only a value pattern can reach that.
+     * Query string and userinfo stripped: both would end up in a tag, and nothing
+     * masks a tag. A secret bound into the path is left to the value patterns.
      */
     protected function getRequestUrl(RequestInterface $request): string
     {

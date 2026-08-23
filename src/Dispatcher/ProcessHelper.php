@@ -31,9 +31,8 @@ class ProcessHelper
             return false;
         }
 
-        // /proc/<pid>/cmdline is NUL-separated, the saved command name is not:
-        // without this nothing ever matched, and a dead master left unstoppable
-        // workers behind
+        // /proc/<pid>/cmdline is NUL-separated and the saved name is not: without
+        // this nothing matched, and a dead master left unstoppable workers
         $processName = trim(str_replace("\0", ' ', $cmd));
 
         return str_contains($processName, $commandName);
@@ -50,32 +49,13 @@ class ProcessHelper
         }
 
         if ($pid === $this->getCurrentPid()) {
-            // a state file outliving its master names a pid the kernel may hand out
-            // again - to this process, whose command line matches. The new master
-            // would SIGTERM itself before starting anything
+            // a stale state file names a pid the kernel may hand out again - to this
+            // process, whose command line matches. It would SIGTERM itself
             return;
         }
 
-        $pgid = posix_getpgid($pid);
-
+        // the pid alone: nothing calls setsid(), so a group kill took whatever else
+        // the entrypoint had started. stop() names every pid anyway
         posix_kill($pid, SIGTERM);
-
-        if ($pgid === false || $pgid <= 0) {
-            // the target died in between: posix_kill(-false) is posix_kill(0), which
-            // signals the caller's own group
-            return;
-        }
-
-        if ($pgid === posix_getpgrp()) {
-            // children spawned without setsid share the caller's group
-            return;
-        }
-
-        if ($pgid <= 1) {
-            // posix_kill(-1) is a broadcast; a master running as PID 1 has pgid 1
-            return;
-        }
-
-        posix_kill(-$pgid, SIGTERM);
     }
 }

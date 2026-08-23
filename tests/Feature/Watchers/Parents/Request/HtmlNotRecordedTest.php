@@ -13,8 +13,7 @@ use SLoggerLaravel\Tests\Feature\Watchers\BaseWatcherTestCase;
 use SLoggerLaravel\Watchers\Parents\RequestWatcher;
 
 /**
- * A page is not a payload: it carries CSRF tokens and, with a debug page installed,
- * environment values - and the masker matches *names*, so a token in `value="…"`
+ * A page is not a payload: the masker matches *names*, so a token in `value="…"`
  * beside `name="_token"` is out of its reach.
  */
 class HtmlNotRecordedTest extends BaseWatcherTestCase

@@ -11,15 +11,15 @@ use Illuminate\Support\Str;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
 use SLoggerLaravel\Helpers\DataFormatter;
+use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Processor;
 use SLoggerLaravel\Watchers\WatcherInterface;
 
 // TODO: register all cache event
 
 /**
- * A cached value is nested under its cache key, so the key becomes part of the path
- * the masker matches: `value` says nothing about what it holds. `key` is kept at the
- * top level too, where it stays readable.
+ * A cached value is nested under its cache key, which is the only thing that says
+ * what it holds. `key` is kept at the top level too, where it stays readable.
  */
 readonly class CacheWatcher implements WatcherInterface
 {
@@ -121,6 +121,11 @@ readonly class CacheWatcher implements WatcherInterface
 
         if (is_object($value)) {
             return $value::class;
+        }
+
+        // a cached catalogue is megabytes, and a hit is more frequent than a request
+        if (is_string($value) && strlen($value) > MaskHelper::MAX_READABLE_BYTES) {
+            return ['__skipped' => 'value_too_large'];
         }
 
         return $value;

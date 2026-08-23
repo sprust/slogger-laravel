@@ -7,9 +7,8 @@ use Illuminate\Support\Str;
 /**
  * The configured key lists, compiled once and asked many times.
  *
- * Deciding a key's mode by walking ~60 masks with `Str::is`, which rebuilds its
- * regular expression every call, costs seconds of a worker's time on a megabyte of
- * JSON. One alternation per list answers the same question in one match.
+ * Walking ~60 masks with `Str::is`, which rebuilds its regex every call, costs
+ * seconds on a megabyte of JSON. One alternation per list answers it in one match.
  */
 class MaskingRules
 {
@@ -70,11 +69,8 @@ class MaskingRules
     /**
      * What a value under this key gets, and what everything below it inherits.
      *
-     * A mask is matched against the whole key **and against each of its word
-     * components** - `db_pass`, `x-auth-user` and `apiToken` split on `_`, `-`, `.`,
-     * `:` and camelCase boundaries. That is the middle ground between substring
-     * search, which took `author` for `auth`, and whole-key masks, which missed
-     * `php-auth-pw`.
+     * Matched against the whole key **and each of its word components**: substring
+     * search took `author` for `auth`, whole-key missed `php-auth-pw`.
      */
     public function modeFor(string $key): int
     {
@@ -133,8 +129,7 @@ class MaskingRules
 
     /**
      * One alternation per list, or null when nothing in it is usable. `*` keeps its
-     * `Str::is` meaning. A stray non-string in a published config must not take a
-     * whole batch of traces down.
+     * `Str::is` meaning; a stray non-string must not take a batch down.
      *
      * @param array<mixed> $keys
      */

@@ -35,6 +35,10 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
      */
     public function register(): void
     {
+        // the only fallback there is: without it an installation that never ran
+        // `vendor:publish` reads every setting as null and silently does nothing
+        $this->mergeConfigFrom(__DIR__ . '/../config/slogger.php', 'slogger');
+
         $this->app->singleton(GeneralConfig::class);
 
         if (!$this->app->make(GeneralConfig::class)->isEnabled()) {
@@ -47,6 +51,7 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         $this->app->singleton(MaskingConfig::class);
         $this->app->singleton(TraceDataMasker::class);
         $this->app->singleton(WatchersConfig::class);
+        $this->app->singleton(LocalStorage::class);
         $this->app->singleton(State::class);
         $this->app->singleton(Processor::class);
         $this->app->singleton(TraceIdContainer::class);

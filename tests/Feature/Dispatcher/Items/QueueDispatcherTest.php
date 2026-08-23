@@ -86,9 +86,8 @@ class QueueDispatcherTest extends BaseTestCase
 
     public function testCreateSwallowsDispatchFailures(): void
     {
-        // telemetry must never break the app: a dispatch/construction failure
-        // (here the missing connection triggers fail-fast inside SendTracesJob)
-        // is swallowed and dropped, never thrown into the caller.
+        // telemetry must never break the app: a dispatch failure is swallowed and
+        // dropped, never thrown into the caller
         config()->set('slogger.dispatchers.queue.connection', '');
 
         $dispatcher = new QueueDispatcher($this->getApp());

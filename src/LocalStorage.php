@@ -2,6 +2,8 @@
 
 namespace SLoggerLaravel;
 
+use RuntimeException;
+
 readonly class LocalStorage
 {
     private string $storagePath;
@@ -10,8 +12,14 @@ readonly class LocalStorage
     {
         $this->storagePath = rtrim(storage_path(), '/') . '/slogger';
 
-        if (!file_exists($this->storagePath)) {
-            mkdir($this->storagePath, 0755, true);
+        if (is_dir($this->storagePath)) {
+            return;
+        }
+
+        // @ plus the retest: the loser of a mkdir race would raise a warning, which
+        // Laravel turns into an exception out of container resolution
+        if (!@mkdir($this->storagePath, 0755, true) && !is_dir($this->storagePath)) {
+            throw new RuntimeException("Failed to create the slogger storage directory: $this->storagePath");
         }
     }
 

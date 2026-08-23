@@ -559,9 +559,8 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
     }
 
     /**
-     * Bind a single HttpClientWatcher instance so the Guzzle handler (resolved
-     * inside the dispatched job) and the test inspect the same object, without
-     * making the watcher a singleton in production.
+     * One instance, so the Guzzle handler inside the job and the test inspect the
+     * same object.
      */
     private function bindSharedWatcher(): HttpClientWatcher
     {

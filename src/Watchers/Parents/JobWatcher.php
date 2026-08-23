@@ -173,9 +173,8 @@ class JobWatcher implements WatcherInterface
     }
 
     /**
-     * A job that disposes of itself and then throws - `$this->release(60); throw ...`
-     * - gets neither JobProcessed nor JobFailed nor JobReleasedAfterException, so this
-     * is the last the worker says about it.
+     * `$this->release(60); throw ...` gets none of the three terminal events, so this
+     * is the last the worker says about that job.
      */
     public function handleJobExceptionOccurred(JobExceptionOccurred $event): void
     {

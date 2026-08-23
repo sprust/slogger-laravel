@@ -22,7 +22,9 @@ class MetricsHelper
             return null;
         }
 
-        $memoryUsage = memory_get_usage() / 1024 / 1024;
+        // real usage: the limit is enforced against the chunks the allocator holds,
+        // not the sum of live allocations
+        $memoryUsage = memory_get_usage(true) / 1024 / 1024;
 
         return round(($memoryUsage / $memoryLimit) * 100, 2);
     }

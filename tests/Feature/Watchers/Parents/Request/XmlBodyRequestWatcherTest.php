@@ -11,9 +11,8 @@ use SLoggerLaravel\Tests\Feature\Watchers\BaseWatcherTestCase;
 use SLoggerLaravel\Watchers\Parents\RequestWatcher;
 
 /**
- * Laravel parses form and JSON bodies into input() and leaves an XML one alone, and
- * the response side only recorded a body when the client asked for JSON. A SOAP or
- * XML-API call was therefore traced with no body at all, in either direction.
+ * Laravel leaves XML out of input(), and the response side only recorded a body for
+ * JSON - so a SOAP call was traced with no body at all, in either direction.
  */
 class XmlBodyRequestWatcherTest extends BaseWatcherTestCase
 {

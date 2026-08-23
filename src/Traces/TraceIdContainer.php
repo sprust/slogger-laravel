@@ -17,10 +17,8 @@ class TraceIdContainer
         return $this->parentTraceId;
     }
 
-    public function setParentTraceId(?string $parentTraceId): static
+    public function setParentTraceId(?string $parentTraceId): void
     {
         $this->parentTraceId = $parentTraceId;
-
-        return $this;
     }
 }

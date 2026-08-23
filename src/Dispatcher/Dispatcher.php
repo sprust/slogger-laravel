@@ -83,48 +83,63 @@ class Dispatcher
         pcntl_signal(SIGINT, fn() => $this->shouldQuit = true);
         pcntl_signal(SIGTERM, fn() => $this->shouldQuit = true);
 
-        if ($previousState = $processState->getSaved()) {
-            $this->stop($previousState);
+        // before the takeover: create() throws, and killing the incumbent first left
+        // the queue undrained and nothing running
+        $processor = $this->enabled
+            ? $this->dispatcherFactory->create($dispatcher)->getProcessor()
+            : null;
 
-            // not purged here: a crash before the new state is saved would leave the
-            // workers with no file to be found by. The save overwrites it anyway
+        /** @var Process[] $processes */
+        $processes = $processState->withLock(function () use ($processState, $processor): array {
+            if ($previousState = $processState->getSaved()) {
+                $this->stop($previousState);
 
-            $this->logInfo(
-                sprintf(
-                    "previous dispatcher[%s, pid: %s] stopped",
-                    $previousState->dispatcher,
-                    $previousState->masterPid
-                )
-            );
-        }
+                // not purged here: a crash before the new state is saved would leave
+                // the workers with no file to be found by. The save overwrites it
 
-        $this->logInfo('starting...');
+                $this->logInfo(
+                    sprintf(
+                        "previous dispatcher[%s, pid: %s] stopped",
+                        $previousState->dispatcher,
+                        $previousState->masterPid
+                    )
+                );
+            }
 
-        if (!$this->enabled) {
+            $this->logInfo('starting...');
+
+            if (is_null($processor)) {
+                $this->saveState($processState, [], childCommandName: 'disabled');
+
+                return [];
+            }
+
+            $started = $processor->createProcesses();
+
+            if (!$started) {
+                $this->fail('processes count is 0');
+            }
+
+            $this->childCommandName = $processor->getChildCommandName();
+
+            foreach ($started as $index => $process) {
+                $process->start();
+
+                $this->slotStartedAt[$index] = time();
+
+                $this->logInfo("child process started with PID {$process->getPid()}");
+            }
+
+            $this->saveState($processState, $started);
+
+            return $started;
+        });
+
+        if (is_null($processor)) {
             $this->idleWhileDisabled($processState);
 
             return;
         }
-
-        $processor = $this->dispatcherFactory->create($dispatcher)->getProcessor();
-
-        $processes = $processor->createProcesses();
-
-        if (!$processes) {
-            $this->fail('processes count is 0');
-        }
-
-        $this->childCommandName = $processor->getChildCommandName();
-
-        foreach ($processes as $index => $process) {
-            $process->start();
-
-            $this->slotStartedAt[$index] = time();
-
-            $this->logInfo("child process started with PID {$process->getPid()}");
-        }
-
-        $this->saveState($processState, $processes);
 
         $this->logInfo('started');
 
@@ -187,23 +202,23 @@ class Dispatcher
         DispatcherProcessorInterface $processor,
         array $processes
     ): array {
-        try {
-            while (!$this->shouldQuit) {
-                foreach ($processes as $index => $process) {
-                    // read it before replacing it: a worker that died says why on
-                    // its way out
-                    $this->readProcessOutput($process);
+        while (!$this->shouldQuit) {
+            foreach ($processes as $index => $process) {
+                // read it before replacing it: a worker that died says why on
+                // its way out
+                $this->readProcessOutput($process);
 
-                    if ($process->isRunning()) {
-                        $this->settleSlot($index);
+                if ($process->isRunning()) {
+                    $this->settleSlot($index);
 
-                        continue;
-                    }
+                    continue;
+                }
 
-                    if (!$this->mayRefillSlot($index)) {
-                        continue;
-                    }
+                if (!$this->mayRefillSlot($index)) {
+                    continue;
+                }
 
+                try {
                     $restartedProcess = $processor->createProcess();
                     $restartedProcess->start();
 
@@ -211,14 +226,18 @@ class Dispatcher
                     $this->slotStartedAt[$index] = time();
 
                     $this->saveState($processState, $processes);
+                } catch (Throwable $exception) {
+                    // per slot: one throw used to end supervision for good, and the
+                    // command still exited 0
+                    $this->logError($exception->getMessage());
 
-                    $this->logInfo("child process restarted with PID {$restartedProcess->getPid()}");
+                    continue;
                 }
 
-                sleep(1);
+                $this->logInfo("child process restarted with PID {$restartedProcess->getPid()}");
             }
-        } catch (Throwable $exception) {
-            $this->logError($exception->getMessage());
+
+            sleep(1);
         }
 
         return $processes;
@@ -281,11 +300,10 @@ class Dispatcher
      */
     private function idleWhileDisabled(DispatcherProcessState $processState): void
     {
-        $this->saveState($processState, [], childCommandName: 'disabled');
-
         $message = 'SLogger is disabled';
 
-        $logTime = time();
+        // said at once, not eleven seconds in
+        $logTime = 0;
 
         while (!$this->shouldQuit) {
             if ((time() - $logTime) > 10) {
@@ -297,14 +315,16 @@ class Dispatcher
 
             sleep(1);
         }
+
+        // as the enabled path does: a file naming a dead master misleads both commands
+        $processState->purgeIfOwnedBy($this->masterPid);
     }
 
     /**
      * Whether the slot's replacement is due yet.
      *
-     * A deadline rather than a sleep(): sleeping stopped the whole loop, leaving the
-     * healthy slots unwatched and their output unread - and 64KB of unread pipe is all
-     * it takes for a worker to block on printing.
+     * A deadline rather than a sleep(): sleeping left the healthy slots unwatched and
+     * their output unread, and 64KB of pipe blocks a worker on printing.
      */
     private function mayRefillSlot(int $index): bool
     {
@@ -330,9 +350,8 @@ class Dispatcher
     }
 
     /**
-     * Not on the first tick that finds the worker running: that is a second after the
-     * restart, so one dying two seconds in cleared the count every time and never
-     * reached the backoff.
+     * Not on the first tick that finds it running - that is a second after the
+     * restart, and one dying two seconds in never reached the backoff.
      */
     private function settleSlot(int $index): void
     {

@@ -65,11 +65,8 @@ class TraceDataComplementerTest extends BaseTestCase
 
     public function testInjectRespectsExcludedFileMasks(): void
     {
-        // a frame is recorded by class where it has one, and every frame from a test
-        // method does - so an assertion looking for `file` never ran, and deleting
-        // excluded_file_masks support entirely left this test green. Going through a
-        // plain function gives a frame that carries `file`, which is what the masks
-        // are matched against
+        // a frame from a class method is recorded by class, so an assertion looking
+        // for `file` never ran. A plain function gives a frame that carries one
         $before = slogger_probe_trace($this->makeComplementer());
 
         self::assertContains(__FILE__, array_column($before, 'file'), 'this file should be in the trace to begin with');

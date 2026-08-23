@@ -41,9 +41,8 @@ class SendTracesJobTest extends BaseTestCase
 
     public function testBackoffAcceptsIntAssignedByQueueDriver(): void
     {
-        // some queue drivers (e.g. laravel-queue-rabbitmq) assign a computed int
-        // back to $backoff when releasing a job; a typed array property would throw
-        // a TypeError here and break the retry/drop machinery.
+        // some drivers assign a computed int back when releasing a job, and a typed
+        // array property would make that a TypeError
         $job = new SendTracesJob($this->makeTraces());
 
         $job->backoff = 10;

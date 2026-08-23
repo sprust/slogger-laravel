@@ -2,6 +2,7 @@
 
 namespace SLoggerLaravel\Dispatcher\State;
 
+use Closure;
 use RuntimeException;
 use SLoggerLaravel\LocalStorage;
 
@@ -12,6 +13,35 @@ readonly class DispatcherProcessState
 
     public function __construct(private string $masterCommandName)
     {
+    }
+
+    /**
+     * Deciding whether to take over and writing the new state have to be one step, or
+     * two `start`s both read no state and only the second one is named on disk.
+     *
+     * @template T
+     *
+     * @param Closure(): T $callback
+     *
+     * @return T
+     */
+    public function withLock(Closure $callback): mixed
+    {
+        $handle = @fopen($this->makeLockFilePath(), 'c');
+
+        if ($handle === false) {
+            // refusing to start would be worse than the race
+            return $callback();
+        }
+
+        try {
+            flock($handle, LOCK_EX);
+
+            return $callback();
+        } finally {
+            flock($handle, LOCK_UN);
+            fclose($handle);
+        }
     }
 
     public function getMasterCommandName(): string
@@ -43,9 +73,8 @@ readonly class DispatcherProcessState
             || !is_array($data['childProcessPids'] ?? null)
             || array_filter($data['childProcessPids'], static fn(mixed $pid): bool => !is_int($pid))
         ) {
-            // every key the DTO needs, of the type it needs: a hand-edited file is
-            // valid JSON that used to be a TypeError taking down start and stop
-            // alike. Treated as no state at all - the next save overwrites it
+            // every key the DTO needs, of the type it needs: a hand-edited file was
+            // a TypeError taking down both commands. No state at all instead
             return null;
         }
 
@@ -100,13 +129,15 @@ readonly class DispatcherProcessState
      */
     public function purgeIfOwnedBy(int $masterPid): void
     {
-        $saved = $this->getSaved();
+        $this->withLock(function () use ($masterPid): void {
+            $saved = $this->getSaved();
 
-        if ($saved === null || $saved->masterPid !== $masterPid) {
-            return;
-        }
+            if ($saved === null || $saved->masterPid !== $masterPid) {
+                return;
+            }
 
-        $this->purge();
+            $this->purge();
+        });
     }
 
     public function purge(): void
@@ -125,5 +156,10 @@ readonly class DispatcherProcessState
     private function makeFilePath(): string
     {
         return app(LocalStorage::class)->makePath('dispatcher-state-' . self::STATIC_UID . '.json');
+    }
+
+    private function makeLockFilePath(): string
+    {
+        return $this->makeFilePath() . '.lock';
     }
 }

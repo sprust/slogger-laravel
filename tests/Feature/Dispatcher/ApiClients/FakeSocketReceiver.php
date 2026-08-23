@@ -7,9 +7,8 @@ namespace SLoggerLaravel\Tests\Feature\Dispatcher\ApiClients;
 /**
  * A minimal stand-in for the receiver, run in a separate process.
  *
- * Speaks the length-prefixed protocol of `Connection`: answers `ok` to the auth
- * frame and `received` to a traces batch, then closes the connection — which is
- * exactly what a receiver restart looks like from the client side.
+ * Speaks the length-prefixed protocol of `Connection`, then closes - which is what
+ * a receiver restart looks like from the client side.
  */
 class FakeSocketReceiver
 {

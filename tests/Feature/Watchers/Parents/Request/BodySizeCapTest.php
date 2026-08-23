@@ -10,18 +10,16 @@ use SLoggerLaravel\Tests\Feature\Watchers\BaseWatcherTestCase;
 use SLoggerLaravel\Watchers\Parents\RequestWatcher;
 
 /**
- * A body above the cap is not recorded at all. The cap is not about disk: the masker
- * refuses to read a string this long, so the body would reach the receiver exactly as
- * the client sent it.
+ * A body above the cap is not recorded at all: the masker refuses to read a string
+ * this long, so it would reach the receiver exactly as the client sent it.
  */
 class BodySizeCapTest extends BaseWatcherTestCase
 {
     private const CAP = 1000;
 
     /**
-     * Dropped before input() decodes it: a 20 MB body must not be parsed just to be
-     * thrown away. The padding makes that visible - it decodes to two small fields,
-     * so anything recorded here means the body was parsed first.
+     * Dropped before input() decodes it. The padding makes that visible: it decodes
+     * to two small fields, so anything recorded means the body was parsed first.
      */
     public function testABodyDeclaredTooLargeIsNotEvenParsed(): void
     {

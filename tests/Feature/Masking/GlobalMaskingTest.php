@@ -142,9 +142,8 @@ class GlobalMaskingTest extends BaseWatcherTestCase
     }
 
     /**
-     * An update trace is where the sensitive half of a parent trace lives - request
-     * headers, the payload, `Set-Cookie`, the response body - and it travels a
-     * different branch of maskTraces() from the creating one.
+     * An update trace carries the sensitive half - headers, payload, `Set-Cookie` -
+     * and travels a different branch of maskTraces() from the creating one.
      */
     public function testAnUpdateTraceIsMaskedOnItsWayOutToo(): void
     {
@@ -241,9 +240,8 @@ class GlobalMaskingTest extends BaseWatcherTestCase
             $breaking
         );
 
-        // masking is deterministic, so letting the exception out cost the whole batch
-        // and every one of its five retries - the traces around the broken one
-        // included
+        // masking is deterministic, so letting the exception out cost the batch and
+        // every one of its retries
         self::assertCount(2, $apiClient->sent);
 
         // the broken one arrives saying why it is empty, and carrying nothing of what

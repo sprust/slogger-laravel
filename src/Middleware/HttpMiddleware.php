@@ -51,10 +51,8 @@ class HttpMiddleware
     }
 
     /**
-     * On the response the middleware returns, not in terminate(): under FPM
-     * terminate() runs after the response has already been sent, so a header set
-     * there never reached the client. Cross-service correlation only ever worked in
-     * tests, which inspect the response after calling terminate() by hand.
+     * On the response the middleware returns, not in terminate(): under FPM that runs
+     * after the response was sent, so the header never reached the client.
      */
     private function setTraceIdHeader(Response $response): void
     {
@@ -68,9 +66,8 @@ class HttpMiddleware
             return;
         }
 
-        // read it now rather than remembering it from before $next(): the middleware
-        // is a singleton, and a remembered id would belong to whichever request wrote
-        // it last
+        // read now, not remembered from before $next(): the middleware is a
+        // singleton, and a remembered id belongs to whichever request wrote it last
         $traceId = $this->getTraceIdContainer()->getParentTraceId();
 
         if (is_null($traceId)) {

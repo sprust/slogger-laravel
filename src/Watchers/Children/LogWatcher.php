@@ -24,9 +24,8 @@ class LogWatcher implements WatcherInterface
 
     public function handleMessageLogged(MessageLogged $event): void
     {
-        // work on a copy: the event is shared with every other listener, and replacing
-        // the Throwable in it would hand Sentry, Bugsnag and Telescope an exception
-        // that has already been flattened into an array
+        // a copy: the event is shared, and replacing the Throwable in it would hand
+        // Sentry and Telescope an exception already flattened into an array
         $context = $event->context;
 
         $exception = $context['exception'] ?? null;

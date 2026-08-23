@@ -390,38 +390,19 @@ htmx- или Turbo-эндпоинт, — это валидная разметк�
 
 ```php
 'masking' => [
-    // masks matched against a trace data key. the top level of a trace's data is
-    // the watcher's own structure and is never matched; matching starts one level
-    // in, where the traced data actually is.
-    //
-    // a value under a matching key is replaced whole - nothing of it survives.
-    //
-    // a mask is matched against the whole key and against each of its word
-    // components (`db_pass`, `x-auth-user`, `apiToken` split on `_`, `-`, `.`,
-    // `:` and camelCase). so `pass` covers `db_pass` and not `passengers`, and
-    // `*token*` covers `api_token` and `tokenizer`. case-insensitive; a match on
-    // a key covers everything under it.
+    // the value under a matching key is replaced whole, and everything below it.
+    // matched case-insensitively against the whole key and each of its components.
     'full_keys' => [
-        // a word here matches a whole key or one of its components, so `auth`
-        // covers `basic_auth`, `x-auth-user` and `php-auth-pw` - and not `author`
+        // a word, so `auth` covers `php-auth-pw` and not `author`
         'auth',
         'authentication',
         'authorization',
         'oauth',
-        'token',
-        'password',
         'passwd',
         'pass',
         'passcode',
         'passphrase',
         'pw',
-        'secret',
-        'apikey',
-        'credential',
-        'credentials',
-        'cookie',
-        'cookies',
-        'signature',
         // not bare `signed`: it would take `signed_at` and `signed_by` too
         'signed_payload',
         'signed_request',
@@ -430,15 +411,27 @@ htmx- или Turbo-эндпоинт, — это валидная разметк�
         'privatekey',
         'session',
         'sessionid',
+        'csrf',
+        'jwt',
+        'bearer',
         'otp',
+        'totp',
         'cvv',
         'cvc',
         'pin',
+        'pincode',
         'iban',
         'ssn',
         'recovery',
+        // spelled out: a bare `card` would take `card_type` with it
+        'cardnumber',
+        'creditcard',
+        'credit_card',
+        // not covered by `pass`, `passwd` or `pw`: `user_pwd` splits to `pwd`
+        'pwd',
 
-        // and a wildcard matches the whole key, for names that are one word
+        // a wildcard matches the whole key, and the bare form with it - so a
+        // word listed here is not repeated above
         '*token*',
         '*password*',
         '*secret*',
@@ -453,28 +446,16 @@ htmx- или Turbo-эндпоинт, — это валидная разметк�
         '*recovery_code*',
     ],
 
-    // a value under a matching key keeps two characters at each end, so two
-    // records still look different. these identify a person rather than
-    // authenticate one - never put a secret here.
+    // two characters kept at each end, so two records still look different.
+    // these identify a person rather than authenticate one - never a secret here.
     //
-    // a bare `name` is not one of them, however common it is as a person's: it is
-    // matched as a word component too, and most of what a trace is made of is
-    // named by one - `job.name` holds a job class, `listeners[].name` a listener
-    // class, an uploaded file's `name` its filename, and in a `{"name": ...,
-    // "value": ...}` pair `name` names the value rather than being one. so the
-    // person's name is spelled out instead.
+    // no bare `name`: it is matched as a word component, and `job.name` holds a
+    // job class, `listeners[].name` a listener class, a file's `name` its filename
     'partial_keys' => [
-        'email',
-        'phone',
-        'recipient',
         'username',
         'user_name',
         'nickname',
         'surname',
-        'firstname',
-        'first_name',
-        'lastname',
-        'last_name',
         'middlename',
         'middle_name',
         'fullname',
@@ -489,31 +470,21 @@ htmx- или Turbo-эндпоинт, — это валидная разметк�
         '*last_name*',
     ],
 
-    // matched against the value instead of the key, and masked in place, keeping
-    // the rest of the string readable. some things identify a person or a secret
-    // by their own shape wherever they turn up - an address inside a notifiable
-    // string, a key inside an exception message - and no key name points at those.
-    // an invalid pattern is ignored, not fatal.
+    // matched against the value and masked in place, for what no key name points
+    // at - an address in a log line. an invalid pattern is ignored, not fatal.
     //
-    // order matters: the first pattern to match a stretch of text wins, so the
-    // narrow ones come before the broad one. a pattern with a capture group masks
-    // the group and keeps the rest.
+    // order matters: first match wins, so narrow before broad. a capture group
+    // masks the group and keeps the rest.
     'value_patterns' => [
-        // a password written into a url's authority: postgres://app:secret@db.
-        // a scheme is required, so `//assets:v2@2x.png` in a path is left alone,
-        // and the group runs to the last `@` of the authority, so a password
-        // containing one goes whole rather than in part
+        // postgres://app:secret@db. a scheme is required, so `//assets:v2@2x.png`
+        // is left alone; the group runs to the last `@`
         'url_credentials' => '/\b[a-z][a-z0-9+.-]*:\/\/[^\/\s:@]+:([^\/\s]+)@/i',
 
-        // a secret written into a url, wherever that url turns up: a Location
-        // header, an exception message, a log line
-        // the parameter name is matched as a word, not as a substring: an
-        // unbounded alternation took `?author=`, `?design=`, `?monkey=` and
-        // `?country_code=` with it
+        // a secret in a url, wherever it turns up. the parameter name is a word,
+        // not a substring: unbounded, it took `?author=` and `?country_code=`
         'url_secret' => '/[?&](?:[\w.-]*[_-])?(?:token|apikey|api_key|api-key|secret|password|passwd|auth|authorization|signature|credential|session|sessionid)(?:[_-][\w.-]*)?=([^&\s"\'<>]+)/i',
 
-        // an oauth authorization code, matched as a whole parameter name only:
-        // with affixes allowed it would also take `country_code` and `zip_code`
+        // whole parameter name only, or it takes `country_code` and `zip_code`
         'url_oauth_code' => '/[?&]code=([^&\s"\'<>]+)/i',
 
         'email' => '/[\w.+-]+@[\w-]+\.[\w.-]*[\w-]/u',

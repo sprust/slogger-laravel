@@ -26,6 +26,12 @@ class MaskHelper
     public const MAX_READABLE_BYTES = 1000000;
 
     /**
+     * A backstop: a self-referencing array exhausts memory, which is a fatal error and
+     * not something the dispatcher job can catch.
+     */
+    private const MAX_DEPTH = 64;
+
+    /**
      * Characters kept at each end, and the shortest string that keeps any.
      */
     private const PARTIAL_VISIBLE  = 2;
@@ -41,9 +47,8 @@ class MaskHelper
     ];
 
     /**
-     * `$fullKeys` are masked whole, `$partialKeys` keep a couple of characters at each
-     * end, and a key in both is masked whole. `$valuePatterns` match the value instead
-     * - an address in a log message has no key naming it.
+     * `$fullKeys` mask whole, `$partialKeys` keep two characters at each end, a key in
+     * both masks whole. `$valuePatterns` match the value: a log line has no key.
      *
      * The top level is the watcher's own structure and is never matched; the traced
      * data starts one level in. Value patterns apply at every level.
@@ -148,6 +153,10 @@ class MaskHelper
         int $mode,
         int $depth
     ): array {
+        if ($depth > self::MAX_DEPTH) {
+            return [self::FULL_MASK];
+        }
+
         $result = [];
 
         foreach ($data as $key => $value) {
@@ -208,12 +217,10 @@ class MaskHelper
     }
 
     /**
-     * What `json_encode` would make of it, so the masker sees the shape the receiver
-     * will. Null when there is nothing to walk.
-     *
-     * @return array<int|string, mixed>|null
+     * What `json_encode` would make of it, so the masker sees what the receiver will.
+     * Null when there is nothing to look at.
      */
-    private static function unfoldObject(object $value): ?array
+    private static function unfoldObject(object $value): mixed
     {
         $encoded = json_encode($value, JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
 
@@ -223,7 +230,12 @@ class MaskHelper
 
         $decoded = json_decode($encoded, true);
 
-        return is_array($decoded) && $decoded !== [] ? $decoded : null;
+        if (is_array($decoded)) {
+            return $decoded === [] ? null : $decoded;
+        }
+
+        // the scalar is what ships, so it is what has to be masked
+        return $decoded;
     }
 
     /**
@@ -288,9 +300,8 @@ class MaskHelper
     }
 
     /**
-     * Rebuilt by offset, never by searching the match for the captured text: a
-     * credential is routinely a substring of the thing that names it
-     * (`postgres:postgres@`), and searching masked the name and shipped the secret.
+     * By offset, never by searching the match for the captured text: in
+     * `postgres:postgres@` searching masked the name and shipped the secret.
      */
     private static function applyValuePattern(string $value, string $pattern): string
     {
@@ -308,7 +319,12 @@ class MaskHelper
             // optional group reports offset -1
             $group = $matches[1][$index] ?? null;
 
-            if (is_array($group) && $group[0] !== '' && $group[1] >= $matchedOffset) {
+            $groupFitsInside = is_array($group)
+                && $group[0] !== ''
+                && $group[1] >= $matchedOffset
+                && $group[1] + strlen($group[0]) <= $matchedOffset + strlen($matched);
+
+            if ($groupFitsInside) {
                 $groupOffset = $group[1] - $matchedOffset;
 
                 /** @var string $maskedGroup */
@@ -339,22 +355,24 @@ class MaskHelper
      */
     private static function maskJsonString(string $value, MaskingRules $rules): string
     {
-        $trimmed = ltrim($value);
+        // trimForParsing(), not ltrim(): a byte order mark is not whitespace, and it
+        // hid the `{` from the sniff below
+        $trimmed = rtrim(BodyDecoder::trimForParsing($value));
 
-        if ($trimmed === '' || ($trimmed[0] !== '{' && $trimmed[0] !== '[')) {
+        // opens *and* closes like one, so prose starting with `{` is still prose
+        $looksLikeDocument = str_starts_with($trimmed, '{') && str_ends_with($trimmed, '}')
+            || str_starts_with($trimmed, '[') && str_ends_with($trimmed, ']');
+
+        if (!$looksLikeDocument) {
             return $value;
         }
 
-        $decoded = json_decode($value, true);
+        $decoded = json_decode($trimmed, true);
 
         if (!is_array($decoded)) {
-            if (json_last_error() === JSON_ERROR_DEPTH) {
-                // a document deeper than json_decode() reads: handing it back whole
-                // would ship every key in it untouched
-                return self::FULL_MASK;
-            }
-
-            return $value;
+            // NDJSON, a raw control character, too deep to decode: nothing has read
+            // it, so nothing can vouch for it
+            return self::FULL_MASK;
         }
 
         // depth 2: unlike trace data, a document is the application's own all the
@@ -371,9 +389,14 @@ class MaskHelper
             return $value;
         }
 
-        $encoded = json_encode($masked, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $encoded = json_encode(
+            $masked,
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR
+        );
 
-        return $encoded === false ? $value : $encoded;
+        // never the original: `1e999` decodes to INF, which json_encode refuses, and
+        // falling back shipped the document with nothing masked
+        return $encoded === false ? self::FULL_MASK : $encoded;
     }
 
     /**
@@ -387,8 +410,13 @@ class MaskHelper
     {
         $trimmed = BodyDecoder::trimForParsing($value);
 
-        if ($trimmed === '' || $trimmed[0] !== '<' || !class_exists(DOMDocument::class)) {
+        if ($trimmed === '' || $trimmed[0] !== '<') {
             return $value;
+        }
+
+        if (!class_exists(DOMDocument::class)) {
+            // no ext-dom: a body recorded as a document must not ship unread
+            return $mustParse ? self::FULL_MASK : $value;
         }
 
         $document = new DOMDocument();
@@ -412,9 +440,8 @@ class MaskHelper
                 return self::FULL_MASK;
             }
 
-            // unparseable prose starting with `<` is fine to keep; an unparseable
-            // internal subset is where values hide, and a bare `<!DOCTYPE html>`
-            // declares nothing
+            // unparseable prose is fine to keep; an internal subset is where values
+            // hide, and a bare `<!DOCTYPE html>` declares nothing
             return preg_match('/<!DOCTYPE[^>\[]*\[/i', $trimmed) === 1
                 || stripos($trimmed, '<!ENTITY') !== false
                     ? self::FULL_MASK
@@ -465,9 +492,8 @@ class MaskHelper
 
         $thisMode = max($mode, $rules->modeFor($name));
 
-        // no iterator_to_array: a wrapper object per node turns 4 MB of DOM into
-        // tens of MB and kills the worker. Changing text does not change structure,
-        // so the live list is safe to walk
+        // no iterator_to_array: a wrapper per node turns 4 MB of DOM into tens, and
+        // changing text does not change structure, so the live list is safe
         foreach ($element->attributes ?? [] as $attribute) {
             $attributeName = $attribute->localName ?: $attribute->nodeName;
 
@@ -543,8 +569,7 @@ class MaskHelper
      * token. Masking it whole would hide which parameters were sent at all.
      *
      * Split by hand: a parse_str()/http_build_query() round trip rewrites the string
-     * even where nothing matched - `user.name` comes back as `user_name`, a valueless
-     * flag gains an `=`, a repeated parameter loses all but its last value.
+     * even where nothing matched - `user.name` comes back as `user_name`.
      */
     private static function maskQueryString(string $value, MaskingRules $rules): string
     {
@@ -574,7 +599,8 @@ class MaskHelper
             $decoded = urldecode($rawValue);
 
             $masked = $mode === MaskingRules::MODE_NONE
-                ? self::maskByValuePatterns($decoded, $rules->valuePatterns)
+                // the path every other leaf gets: a parameter can hold a document
+                ? self::maskUnmatchedString($decoded, $name, $rules)
                 : self::mask($decoded, $mode);
 
             if (!is_string($masked) || $masked === $decoded) {
@@ -608,6 +634,12 @@ class MaskHelper
         if (preg_match('/[;{][OCE]:\d+:"/', $value)) {
             // an object inside becomes an incomplete one, which cannot be inspected
             // without throwing nor put back together. Left to the value patterns
+            return $value;
+        }
+
+        if (preg_match('/[;{][Rr]:\d+;/', $value)) {
+            // a back-reference unserialises into an array that contains itself, and
+            // walking one exhausts memory - see MAX_DEPTH
             return $value;
         }
 

@@ -68,7 +68,7 @@ class RequestWatcher implements WatcherInterface
     /**
      * Requests started and not yet handled, outermost first.
      *
-     * @var list<array{trace_id: string, boot_time: float, started_at: Carbon, logged_at: Carbon}>
+     * @var list<array{trace_id: string, request_id: int, boot_time: float, started_at: Carbon, logged_at: Carbon}>
      */
     protected array $requests = [];
 
@@ -147,6 +147,7 @@ class RequestWatcher implements WatcherInterface
 
         $this->requests[] = [
             'trace_id'   => $traceId,
+            'request_id' => spl_object_id($event->request),
             'boot_time'  => $bootTime,
             'started_at' => $startedAt,
             'logged_at'  => $loggedAt,
@@ -163,7 +164,7 @@ class RequestWatcher implements WatcherInterface
             return;
         }
 
-        $requestData = array_pop($this->requests);
+        $requestData = $this->takeRequest($event->request);
 
         if (!$requestData) {
             return;
@@ -204,6 +205,31 @@ class RequestWatcher implements WatcherInterface
             duration: TraceHelper::calcDuration($startedAt),
             parentLoggedAt: $loggedAt,
         );
+    }
+
+    /**
+     * By identity: `RequestHandled` fires for every request, `RequestHandling` only
+     * for the routed ones, so the top entry was not always this request's.
+     *
+     * @return array{trace_id: string, request_id: int, boot_time: float, started_at: Carbon, logged_at: Carbon}|null
+     */
+    protected function takeRequest(Request $request): ?array
+    {
+        $requestId = spl_object_id($request);
+
+        for ($index = count($this->requests) - 1; $index >= 0; $index--) {
+            if ($this->requests[$index]['request_id'] !== $requestId) {
+                continue;
+            }
+
+            $found = $this->requests[$index];
+
+            $this->requests = array_slice($this->requests, 0, $index);
+
+            return $found;
+        }
+
+        return null;
     }
 
     /**
@@ -545,9 +571,8 @@ class RequestWatcher implements WatcherInterface
 
         $parameters = array_replace_recursive($request->input(), $files);
 
-        // Laravel parses form and JSON bodies into input() and leaves XML alone. Not
-        // conditional on input() being empty: it merges the query bag, and a single
-        // `?wsdl` would then suppress the body
+        // Laravel leaves XML out of input(). Not conditional on input() being empty:
+        // it merges the query bag, and a single `?wsdl` would suppress the body
         $body = $this->readXmlRequestBody($request);
 
         $parameters = $body ? [...$parameters, ...$body] : $parameters;

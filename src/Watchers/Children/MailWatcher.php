@@ -10,10 +10,8 @@ use SLoggerLaravel\Watchers\WatcherInterface;
 use Symfony\Component\Mime\Address;
 
 /**
- * Addresses are nested under `message` and carried as `email`/`full_name` pairs: the
- * dispatcher job matches key names, so an address has to sit in a value under a key
- * that says what it is. The previous shape - the address as the key, the name as the
- * value - put it somewhere no key list could reach.
+ * Addresses are carried as `email`/`full_name` pairs: the masker matches key names,
+ * so an address has to sit in a value under a key that says what it is.
  */
 class MailWatcher implements WatcherInterface
 {
@@ -62,9 +60,8 @@ class MailWatcher implements WatcherInterface
     }
 
     /**
-     * Symfony's Mime addresses, which is what every supported Laravel version hands
-     * over: the `[address => name]` shape came from Swift Mailer, dropped in Laravel
-     * 6, and the branch reading it had not been reachable for years.
+     * Symfony Mime addresses: the `[address => name]` shape came from Swift Mailer,
+     * dropped in Laravel 6.
      *
      * @param Address[]|null $addresses
      *

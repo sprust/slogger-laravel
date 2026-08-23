@@ -19,10 +19,8 @@ use SLoggerLaravel\Watchers\Parents\JobWatcher;
 class DatabaseWatcherTest extends BaseChildWatcherTestCase
 {
     /**
-     * Bindings are positional, so no key list can reach them and nothing here says
-     * which of them is a password and which is a page number. Length is not a signal
-     * either: a PIN, an OTP and an account number are short and numeric, and those
-     * were exactly what a length or a type check let through.
+     * Bindings are positional, so nothing says which is a password and which a page
+     * number - and length is no signal either: a PIN is short and numeric.
      */
     public function testBindingsAreNotRecordedWhileMaskingIsOn(): void
     {
@@ -38,9 +36,8 @@ class DatabaseWatcherTest extends BaseChildWatcherTestCase
 
         $data = $creating[0]->data;
 
-        // masking every one of them left a list of `********` and `0` as long as the
-        // query has placeholders - no information, and work the traced application
-        // did on every single query
+        // masking each left a list of `********` and `0` as long as the query has
+        // placeholders: no information, and work paid for on every query
         self::assertArrayNotHasKey('bindings', $data);
         self::assertSame(2, $data['bindings_count']);
 

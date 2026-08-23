@@ -54,7 +54,7 @@ class DumpWatcher implements WatcherInterface
     /**
      * @return array<int|string, mixed>|scalar|null
      */
-    protected static function prepareDump(mixed $dump): mixed
+    protected function prepareDump(mixed $dump): mixed
     {
         if (is_scalar($dump) || is_null($dump) || is_array($dump)) {
             return $dump;
@@ -68,15 +68,20 @@ class DumpWatcher implements WatcherInterface
 
         $decoded = $encoded === false ? null : json_decode($encoded, true);
 
-        // an object with no public state encodes to `{}`; its class says more
-        return is_array($decoded) && $decoded !== [] ? $decoded : $dump::class;
+        if (is_array($decoded)) {
+            // an object with no public state encodes to `{}`; its class says more
+            return $decoded === [] ? $dump::class : $decoded;
+        }
+
+        // a backed enum, or a scalar jsonSerialize(): `dump($status)` wants the value
+        return is_null($decoded) ? $dump::class : $decoded;
     }
 
     protected function onHandleDump(mixed $dump): void
     {
         $data = [
             // not print_r(): flattening destroys the structure the masker walks
-            'dump' => self::prepareDump($dump),
+            'dump' => $this->prepareDump($dump),
         ];
 
         $this->processor->push(

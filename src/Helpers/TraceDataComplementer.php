@@ -57,9 +57,8 @@ class TraceDataComplementer
     /**
      * Adds a value to every trace of the current unit of work, under `__add`.
      *
-     * A callback is a rule for computing the value - `fn() => auth()->id()` - so it is
-     * registered once for the process. A value is this unit's own and is dropped when
-     * the unit ends.
+     * A callback is a rule - `fn() => auth()->id()` - registered once for the process.
+     * A value is this unit's own and is dropped when the unit ends.
      */
     public function add(string $key, mixed $value): void
     {

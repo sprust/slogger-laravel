@@ -139,9 +139,8 @@ class CommandWatcher implements WatcherInterface
     }
 
     /**
-     * This command's own entry, not merely the innermost one: a nested command that
-     * never reported finishing would otherwise be closed in its place. What sits
-     * above the match is abandoned, and the processor sweeps those traces.
+     * This command's own entry, not merely the innermost: a nested command that never
+     * finished would be closed in its place. What sits above it the processor sweeps.
      *
      * @return array{trace_id: string, command: string|null, started_at: Carbon}|null
      */

@@ -30,9 +30,8 @@ class TracesObject
     }
 
     /**
-     * Reading, and only reading: these used to array_shift() their way through the
-     * batch, so a second pass saw nothing and count() lied once anything had
-     * serialised it. Whatever masks or sends a batch reads it more than once.
+     * Reading, and only reading: these used to array_shift() through the batch, so a
+     * second pass saw nothing. Whatever masks or sends one reads it twice.
      *
      * @return Generator<int, TraceCreateObject>
      */

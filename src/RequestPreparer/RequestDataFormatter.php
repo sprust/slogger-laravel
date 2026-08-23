@@ -118,9 +118,8 @@ class RequestDataFormatter
     /**
      * Whether this formatter would discard the parameters of that url outright.
      *
-     * Asked before the body is read: reading and parsing a request body only to
-     * replace it with `__cleaned` costs the traced application the whole cost of
-     * doing so, and with the shipped `hidden_paths => ['*']` that is every request.
+     * Asked before the body is read: parsing one only to replace it with `__cleaned`
+     * is a cost the traced application pays for nothing.
      */
     public function hidesRequestParameters(string $url): bool
     {

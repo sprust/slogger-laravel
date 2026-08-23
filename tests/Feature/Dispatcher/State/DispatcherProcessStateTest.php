@@ -77,9 +77,8 @@ class DispatcherProcessStateTest extends BaseTestCase
         $file = $this->getApp()->make(LocalStorage::class)
             ->makePath('dispatcher-state-678ed0bcb2d2c.json');
 
-        // valid JSON, written by an older version with a different shape. Building
-        // the DTO from it used to be a TypeError that took down `start`, `stop` and
-        // the recovery path alike, until someone deleted the file by hand
+        // valid JSON of an older shape: building the DTO from it was a TypeError
+        // that took down both commands until someone deleted the file
         file_put_contents(
             $file,
             json_encode(

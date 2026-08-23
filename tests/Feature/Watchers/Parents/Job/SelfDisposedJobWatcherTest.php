@@ -14,9 +14,8 @@ use SLoggerLaravel\Tests\Feature\Watchers\BaseWatcherTestCase;
 use SLoggerLaravel\Watchers\Parents\JobWatcher;
 
 /**
- * `Worker::process()` emits neither JobProcessed nor JobFailed nor
- * JobReleasedAfterException for a job that disposes of itself and then throws -
- * the release in its `finally` is skipped for an already released job.
+ * `Worker::process()` emits none of the three terminal events for a job that
+ * disposes of itself and then throws.
  */
 class SelfDisposedJobWatcherTest extends BaseWatcherTestCase
 {

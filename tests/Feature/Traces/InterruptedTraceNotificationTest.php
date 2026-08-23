@@ -17,9 +17,8 @@ use Symfony\Component\Console\Input\ArrayInput;
 use Symfony\Component\Console\Output\BufferedOutput;
 
 /**
- * A trace closed by the sweep never reaches the watcher that started it. Unless the
- * watcher is told, its bookkeeping entry stays behind and the next finish takes that
- * stale one instead of its own.
+ * A swept trace never reaches the watcher that started it: unless told, its entry
+ * stays behind and the next finish takes that stale one.
  */
 class InterruptedTraceNotificationTest extends BaseWatcherTestCase
 {

@@ -60,9 +60,8 @@ class LogWatcherTest extends BaseChildWatcherTestCase
             parentLoggedAt: Carbon::now(),
         );
 
-        // every listener registered after this package - Sentry, Bugsnag, Telescope -
-        // reads the same event object, and flattening the Throwable in place handed
-        // them an array where an exception should be
+        // Sentry and Telescope read the same event object, and flattening the
+        // Throwable in place handed them an array where an exception should be
         self::assertSame($exception, $seenByALaterListener);
 
         $creating = $this->dispatcher->findCreating(type: 'log');

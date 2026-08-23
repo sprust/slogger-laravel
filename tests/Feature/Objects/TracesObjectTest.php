@@ -40,9 +40,8 @@ class TracesObjectTest extends BaseTestCase
         self::assertSame([$createTrace], iterator_to_array($traces->iterateCreating()));
         self::assertSame([$updateTrace], iterator_to_array($traces->iterateUpdating()));
 
-        // the iterators used to array_shift() their way through: the masker walked
-        // the batch and handed the sender an empty one, and count() - the drop
-        // statistics - reported zero for a batch that had just been serialised
+        // the iterators used to array_shift() through: the masker walked the batch
+        // and handed the sender an empty one, and count() then reported zero
         self::assertSame([$createTrace], iterator_to_array($traces->iterateCreating()));
         self::assertSame([$updateTrace], iterator_to_array($traces->iterateUpdating()));
         self::assertSame(2, $traces->count());

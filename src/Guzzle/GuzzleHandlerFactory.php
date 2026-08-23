@@ -50,9 +50,8 @@ readonly class GuzzleHandlerFactory
                 array $options,
                 PromiseInterface $response
             ) use ($formatters): void {
-                // never wait() here: tap's `after` runs synchronously right after the
-                // handler, so waiting would finish every request before the next one is
-                // even started and quietly turn Http::pool() into a serial loop
+                // never wait() here: tap's `after` is synchronous, and waiting turns
+                // Http::pool() into a serial loop
                 $response->then(
                     function (ResponseInterface $responseResolved) use ($request, $options, $formatters) {
                         $this->httpClientWatcher->handleResponse(

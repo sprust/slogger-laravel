@@ -7,13 +7,11 @@ use Illuminate\Support\Str;
 /**
  * Turns a request or response body into the array a trace carries.
  *
- * JSON becomes the structure it describes. XML cannot - that loses attributes,
- * repeated elements and namespaces - so it is carried as the document itself, under
- * one key, where the masker knows how to look inside it.
+ * JSON becomes the structure it describes. XML is carried as the document itself,
+ * under one key: an array of it loses attributes, repeated elements and namespaces.
  *
  * Anything else is dropped. A body is XML only if the sender said so and it does not
- * look like a page: a framework error page carries CSRF tokens and, with a debug page
- * installed, environment values, and the masker cannot read any of it.
+ * look like a page - an error page carries tokens the masker cannot read.
  */
 class BodyDecoder
 {
@@ -105,9 +103,8 @@ class BodyDecoder
     /**
      * Whether this is a document worth recording rather than a page.
      *
-     * Sniffed, not parsed: a DOM of up to a megabyte would be built in the traced
-     * application's own request path, and the masker builds it again in the worker
-     * anyway. The sender has already said this is XML; a page is what that gets wrong.
+     * Sniffed, not parsed: a megabyte of DOM in the application's own request path,
+     * and the masker builds it again anyway. A page is what the content type gets wrong.
      */
     public static function isXml(string $contents): bool
     {

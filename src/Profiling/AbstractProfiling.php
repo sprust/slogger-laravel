@@ -10,9 +10,8 @@ abstract class AbstractProfiling
     private bool $profilingEnabled;
 
     /**
-     * The trace the running profile belongs to. A profiler measures the process, so
-     * only one run is in flight at a time and the profile goes to whoever started it -
-     * a nested `Artisan::call()` used to walk off with the outer trace's.
+     * A profiler measures the process, so one run is in flight at a time and the
+     * profile goes to whoever started it - not to a nested `Artisan::call()`.
      */
     private ?string $ownerTraceId = null;
 

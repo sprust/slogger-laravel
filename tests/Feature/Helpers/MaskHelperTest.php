@@ -248,9 +248,8 @@ class MaskHelperTest extends BaseTestCase
 
         $elapsed = microtime(true) - $startedAt;
 
-        // ~60 masks per key through Str::is, which rebuilds its regex every call, is
-        // seconds of a worker's time on a megabyte of JSON. The ceiling is loose on
-        // purpose: it catches a return to per-key compilation, not a slow machine
+        // ~60 masks per key through Str::is is seconds on a megabyte of JSON. The
+        // ceiling is loose: it catches per-key compilation, not a slow machine
         self::assertLessThan(2.0, $elapsed);
     }
 
@@ -1103,14 +1102,88 @@ class MaskHelperTest extends BaseTestCase
 
     public function testMaskArrayByKeysLeavesStringsThatOnlyLookLikeJson(): void
     {
+        // prose is prose: a document opens and closes, so neither of these is one
         $data = [
             'context' => [
                 'note'  => '{not json at all',
+                'open'  => '[still prose',
                 'plain' => 'nothing to see',
             ],
         ];
 
         self::assertSame($data, MaskHelper::maskArrayByKeys($data, ['email', 'token']));
+    }
+
+    public function testADocumentThatCannotBeReadIsMaskedWholeRatherThanShipped(): void
+    {
+        // each opens and closes like a document and cannot be decoded as one, and
+        // handing them back untouched shipped every key in them
+        foreach (
+            [
+                '{"password":"a"}' . "\n" . '{"password":"b"}',
+                '{"password":"hunter2",}',
+                "{\"password\":\"hunter2\",\"x\":\"a\tb\"}",
+            ] as $document
+        ) {
+            $masked = MaskHelper::maskArrayByKeys(
+                ['context' => ['body' => $document]],
+                ['*password*']
+            );
+
+            self::assertSame(MaskHelper::FULL_MASK, $masked['context']['body'], $document);
+        }
+    }
+
+    public function testADocumentBehindAByteOrderMarkIsStillRead(): void
+    {
+        // a BOM is not whitespace, so an ltrim() left the sniff looking at `\xEF`
+        $masked = MaskHelper::maskArrayByKeys(
+            ['context' => ['body' => "\xEF\xBB\xBF" . '{"password":"hunter2","page":2}']],
+            ['*password*']
+        );
+
+        self::assertStringNotContainsString('hunter2', $masked['context']['body']);
+        self::assertStringContainsString('"page":2', $masked['context']['body']);
+    }
+
+    public function testADocumentThatCannotBeReEncodedIsMaskedWholeRatherThanShipped(): void
+    {
+        // `1e999` decodes to INF, which json_encode refuses; falling back to the
+        // original handed the document back with nothing masked
+        $masked = MaskHelper::maskArrayByKeys(
+            ['context' => ['body' => '{"password":"hunter2","n":1e999}']],
+            ['*password*']
+        );
+
+        self::assertStringNotContainsString('hunter2', $masked['context']['body']);
+    }
+
+    public function testASelfReferencingSerializedBlobDoesNotTakeTheProcessDown(): void
+    {
+        // a back-reference unserialises into an array that contains itself, and
+        // walking one exhausts memory - a fatal error, not a Throwable
+        $blob = 'a:1:{i:0;R:1;}';
+
+        $masked = MaskHelper::maskArrayByKeys(['context' => ['blob' => $blob]], ['*token*']);
+
+        self::assertSame($blob, $masked['context']['blob']);
+    }
+
+    public function testTheWalkGivesUpBeforeItRunsOutOfMemory(): void
+    {
+        $deep = [];
+
+        for ($level = 0; $level < 200; $level++) {
+            $deep = ['next' => $deep];
+        }
+
+        $masked = MaskHelper::maskArrayByKeys(['context' => $deep], ['*token*']);
+
+        $encoded = json_encode($masked, JSON_THROW_ON_ERROR);
+
+        // past the backstop the walk stops and masks what is left whole
+        self::assertStringContainsString('["' . MaskHelper::FULL_MASK . '"]', $encoded);
+        self::assertLessThan(200, substr_count($encoded, '"next"'));
     }
 
     public function testMaskArrayByKeysMasksAJsonStringWholeWhenItsOwnKeyMatches(): void

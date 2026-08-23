@@ -5,7 +5,12 @@ declare(strict_types=1);
 namespace SLoggerLaravel\Tests\Feature\Watchers\Parents\Request;
 
 use App\Events\NestedEvent;
+use Illuminate\Foundation\Http\Events\RequestHandled;
+use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use SLoggerLaravel\Configs\WatchersConfig;
+use SLoggerLaravel\Enums\TraceStatusEnum;
+use SLoggerLaravel\Events\RequestHandling;
 use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Helpers\TraceDataMasker;
 use SLoggerLaravel\Objects\TraceCreateObject;
@@ -136,6 +141,34 @@ class RequestWatcherTest extends BaseParentWatcherTestCase
 
         // null leaves them alone; [] would leave a 404 untagged
         self::assertNull($tags);
+    }
+
+    /**
+     * `RequestHandling` comes from the middleware, `RequestHandled` from the kernel
+     * for every request - so taking the top entry closed the wrong request.
+     */
+    public function testARequestHandledWithoutItsOwnHandlingLeavesTheOpenRequestAlone(): void
+    {
+        $outer = Request::create('/slogger/outer', 'GET');
+        $inner = Request::create('/no-slogger/inner', 'GET');
+
+        event(new RequestHandling(request: $outer, parentTraceId: null));
+
+        // an untraced sub-request finishing inside the traced one
+        event(new RequestHandled($inner, new Response('', 500)));
+
+        $creating = $this->dispatcher->findCreating(type: 'request');
+
+        self::assertCount(1, $creating);
+        self::assertCount(0, $this->dispatcher->findUpdating(traceId: $creating[0]->traceId));
+
+        event(new RequestHandled($outer, new Response('', 200)));
+
+        $updating = $this->dispatcher->findUpdating(traceId: $creating[0]->traceId);
+
+        self::assertCount(1, $updating);
+        self::assertSame(200, ($updating[0]->data ?? [])['response']['status']);
+        self::assertSame(TraceStatusEnum::Success->value, $updating[0]->status);
     }
 
     protected function getTraceType(): string

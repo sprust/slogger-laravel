@@ -45,9 +45,8 @@ readonly class QueueDispatcherProcessor implements DispatcherProcessorInterface
     }
 
     /**
-     * `exec` is load-bearing: without it `sh -c` is what Symfony reports the pid of,
-     * and `sh` forwards no signals - the master would kill the shell, call the worker
-     * stopped, and leave an orphan draining the queue.
+     * `exec` is load-bearing: without it Symfony reports the pid of `sh -c`, which
+     * forwards no signals - the master would leave an orphan draining the queue.
      */
     public function createProcess(): Process
     {

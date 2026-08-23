@@ -10,10 +10,8 @@ use SLoggerLaravel\Tests\Feature\BaseTestCase;
 class QueueDispatcherProcessorTest extends BaseTestCase
 {
     /**
-     * Without `exec` the shell stays between the master and the worker: the pid the
-     * master saves and signals is the shell's, `sh` does not forward signals, and the
-     * worker - sharing the master's process group, which the group-kill guard skips -
-     * survives the master and keeps draining the queue.
+     * Without `exec` the pid the master saves is the shell's, `sh` forwards no
+     * signals, and the worker survives to keep draining the queue.
      */
     public function testTheWorkerIsExecedSoThePidIsTheWorkersOwn(): void
     {

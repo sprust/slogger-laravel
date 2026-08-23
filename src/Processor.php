@@ -227,7 +227,7 @@ class Processor
             return;
         }
 
-        $this->traceDataComplementer->inject($data);
+        $this->complement($data);
 
         $this->dispatchPushTrace(
             new TraceCreateObject(
@@ -312,6 +312,10 @@ class Processor
         );
 
         if ($this->tracesStack === []) {
+            // a call made with no trace around it has no owner to name it, and under
+            // FPM the process ends long before any TTL
+            $this->stopOwnerlessDetached();
+
             // one `queue:work` process runs job after job, and this is the only thing
             // that separates them. After the final update, which still carries them
             $this->traceDataComplementer->endUnitOfWork();
@@ -331,7 +335,7 @@ class Processor
     ): string {
         $traceId = TraceHelper::makeTraceId();
 
-        $this->traceDataComplementer->inject($data);
+        $this->complement($data);
 
         $this->dispatchPushTrace(
             new TraceCreateObject(
@@ -366,7 +370,7 @@ class Processor
         Carbon $parentLoggedAt,
     ): void {
         if (!is_null($data)) {
-            $this->traceDataComplementer->inject($data);
+            $this->complement($data);
         }
 
         $this->dispatchUpdateTrace(
@@ -450,8 +454,22 @@ class Processor
     }
 
     /**
-     * Age is the only thing that reaches a detached trace nobody will close by name:
-     * a call made with no trace around it, a promise that never settles.
+     * Closes the detached traces that never had an owner, once nothing is open here.
+     */
+    private function stopOwnerlessDetached(): void
+    {
+        foreach ($this->detachedTraces as $traceId => $detachedTrace) {
+            if (!is_null($detachedTrace['owner_trace_id'])) {
+                continue;
+            }
+
+            $this->closeInterruptedDetached($traceId, $detachedTrace);
+        }
+    }
+
+    /**
+     * Age is what reaches a detached trace nobody will close by name: a promise that
+     * never settles inside a unit of work that keeps going.
      */
     private function sweepExpiredDetached(): void
     {
@@ -504,6 +522,19 @@ class Processor
                 // a bookkeeping callback must never break the sweep
             }
         }
+    }
+
+    /**
+     * Paused: a registered callback runs application code, and an unpaused query in
+     * one is watched, pushed, complemented and run again until memory runs out.
+     *
+     * @param array<string, mixed> $data
+     */
+    private function complement(array &$data): void
+    {
+        $this->handleWithoutTracing(function () use (&$data): void {
+            $this->traceDataComplementer->inject($data);
+        });
     }
 
     private function dispatchPushTrace(TraceCreateObject $trace): void

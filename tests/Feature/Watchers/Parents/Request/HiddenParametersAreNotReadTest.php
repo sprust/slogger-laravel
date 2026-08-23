@@ -13,9 +13,7 @@ use SLoggerLaravel\Watchers\Parents\RequestWatcher;
 
 /**
  * With the shipped `input.hidden_paths => ['*']` the parameters are discarded, so
- * reading the body at all is pure cost paid by the traced application - and an XML
- * body is DOM-parsed on the way. The response side has always been lazy through
- * DataResolver; this pins the request side.
+ * reading the body at all is cost the traced application pays for nothing.
  */
 class HiddenParametersAreNotReadTest extends BaseWatcherTestCase
 {

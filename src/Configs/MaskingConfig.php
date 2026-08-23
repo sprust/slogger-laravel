@@ -5,9 +5,8 @@ namespace SLoggerLaravel\Configs;
 class MaskingConfig
 {
     /**
-     * Case-insensitive masks matched against a trace data key - the whole of it and
-     * each of its word components, never as a substring. An empty list turns full
-     * masking off.
+     * Case-insensitive masks matched against a key and each of its word components,
+     * never as a substring. An empty list turns full masking off.
      *
      * @return string[]
      */

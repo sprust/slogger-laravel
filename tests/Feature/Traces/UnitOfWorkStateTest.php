@@ -5,14 +5,15 @@ declare(strict_types=1);
 namespace SLoggerLaravel\Tests\Feature\Traces;
 
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Helpers\TraceDataComplementer;
 use SLoggerLaravel\Tests\Feature\Watchers\BaseWatcherTestCase;
+use SLoggerLaravel\Watchers\Children\DatabaseWatcher;
 
 /**
- * One process serves job after job, so a `queue:work` worker runs every one of them
- * through the same objects. What a unit of work leaves in them is what the next unit
- * starts with.
+ * A `queue:work` worker runs job after job through the same objects, so what one
+ * unit leaves in them is what the next starts with.
  */
 class UnitOfWorkStateTest extends BaseWatcherTestCase
 {
@@ -115,6 +116,56 @@ class UnitOfWorkStateTest extends BaseWatcherTestCase
             ['user_id' => 4242],
             $updates[0]->data[TraceDataComplementer::ADDITIONAL_KEY] ?? null
         );
+    }
+
+    /**
+     * A callback runs application code, and an unpaused query in one is watched,
+     * pushed, complemented and run again until memory runs out.
+     */
+    public function testACallbackCannotTraceItself(): void
+    {
+        $this->registerWatcher(DatabaseWatcher::class, null);
+
+        $complementer = $this->getApp()->make(TraceDataComplementer::class);
+
+        $calls = 0;
+
+        $complementer->add('probe', function () use (&$calls): int {
+            $calls++;
+
+            DB::select('select 1');
+
+            return $calls;
+        });
+
+        $traceId = $this->processor->startAndGetTraceId(
+            type: 'job',
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now(),
+            customParentTraceId: null,
+        );
+
+        $this->processor->push(
+            type: 'log',
+            status: TraceStatusEnum::Success->value,
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now(),
+        );
+
+        $this->processor->stop(
+            traceId: $traceId,
+            status: TraceStatusEnum::Success->value,
+            tags: null,
+            data: null,
+            duration: 1.0,
+            parentLoggedAt: Carbon::now(),
+        );
+
+        // not traced, and run once per trace rather than feeding itself
+        self::assertSame([], $this->dispatcher->findCreating(type: 'database'));
+        self::assertLessThanOrEqual(4, $calls);
     }
 
     /**

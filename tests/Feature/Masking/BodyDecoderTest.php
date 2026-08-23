@@ -118,9 +118,8 @@ class BodyDecoderTest extends BaseTestCase
 
     public function testANonUtf8BodyIsNotCarriedAtAll(): void
     {
-        // invalid UTF-8 made json_encode fail and replaced the *whole* trace payload
-        // with an encoding error. The declaration is what makes libxml accept it -
-        // without one the document fails to parse and this guard is never reached
+        // invalid UTF-8 made json_encode fail and blanked the whole trace payload.
+        // The declaration is what makes libxml accept the document at all
         $cp1251 = '<?xml version="1.0" encoding="windows-1251"?><r><a>'
             . mb_convert_encoding('привет', 'windows-1251', 'UTF-8')
             . '</a></r>';

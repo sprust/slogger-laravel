@@ -114,6 +114,63 @@ class ProcessHelperTest extends BaseTestCase
         self::assertSame(0, $received);
     }
 
+    public function testSendStopSignalDoesNotReachTheTargetsProcessGroup(): void
+    {
+        $helper = new ProcessHelper();
+
+        // a group of its own with two members, the shape an entrypoint script leaves
+        $script = tempnam(sys_get_temp_dir(), 'slogger-group-') . '.sh';
+
+        file_put_contents(
+            $script,
+            "#!/bin/sh\nsleep 30 &\necho TARGET=\$!\nsleep 30 &\necho BYSTANDER=\$!\nwait\n"
+        );
+
+        chmod($script, 0755);
+
+        $output = [];
+
+        exec('setsid ' . escapeshellarg($script) . ' > ' . escapeshellarg($script . '.out') . ' 2>&1 &');
+
+        usleep(300000);
+
+        $reported = (string) @file_get_contents($script . '.out');
+
+        $target    = [];
+        $bystander = [];
+
+        preg_match('/TARGET=(\d+)/', $reported, $target);
+        preg_match('/BYSTANDER=(\d+)/', $reported, $bystander);
+
+        $targetPid    = (int) ($target[1] ?? 0);
+        $bystanderPid = (int) ($bystander[1] ?? 0);
+
+        self::assertGreaterThan(0, $targetPid, 'the helper script did not report its pids');
+        self::assertGreaterThan(0, $bystanderPid);
+
+        try {
+            $helper->sendStopSignal($targetPid);
+
+            usleep(300000);
+
+            // never named, and a group kill took it anyway
+            self::assertTrue(
+                $this->isAlive($bystanderPid),
+                'sendStopSignal() signalled a process it was not given'
+            );
+        } finally {
+            @posix_kill($targetPid, SIGKILL);
+            @posix_kill($bystanderPid, SIGKILL);
+            @unlink($script);
+            @unlink($script . '.out');
+        }
+    }
+
+    private function isAlive(int $pid): bool
+    {
+        return is_dir("/proc/$pid");
+    }
+
     /**
      * @param callable(): void $callback
      */

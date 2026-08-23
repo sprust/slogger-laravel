@@ -7,9 +7,8 @@ use SLoggerLaravel\Objects\TracesObject;
 use Throwable;
 
 /**
- * Masks trace data by the globally configured key lists, in the dispatcher job and
- * never in the traced application - which should not pay for it. Traces therefore sit
- * in the queue unmasked; see the security note in the README.
+ * In the dispatcher job, never in the traced application - which should not pay for
+ * it. Traces sit in the queue unmasked; see the security note in the README.
  */
 class TraceDataMasker
 {
@@ -38,9 +37,8 @@ class TraceDataMasker
     }
 
     /**
-     * Masks a batch in place. A trace that cannot be masked is replaced by a note
-     * saying so: masking is deterministic, so letting the exception out cost the whole
-     * batch and every one of its retries.
+     * In place. A trace that cannot be masked is replaced by a note: masking is
+     * deterministic, so letting the exception out cost the batch and every retry.
      */
     public function maskTraces(TracesObject $traces): TracesObject
     {
@@ -50,7 +48,7 @@ class TraceDataMasker
 
         foreach ($traces->iterateCreating() as $trace) {
             $trace->data = $this->maskTraceData($trace->data);
-            $trace->tags = $this->maskTags($trace->tags);
+            $trace->tags = $this->maskTraceTags($trace->tags);
         }
 
         foreach ($traces->iterateUpdating() as $trace) {
@@ -59,7 +57,7 @@ class TraceDataMasker
             }
 
             if (!is_null($trace->tags)) {
-                $trace->tags = $this->maskTags($trace->tags);
+                $trace->tags = $this->maskTraceTags($trace->tags);
             }
         }
 
@@ -116,6 +114,23 @@ class TraceDataMasker
             return [
                 self::MASK_ERROR_KEY => $exception->getMessage(),
             ];
+        }
+    }
+
+    /**
+     * Under the same guard as the data: a tag that is not a string threw straight out
+     * of maskTraces() and cost the batch.
+     *
+     * @param string[] $tags
+     *
+     * @return string[]
+     */
+    private function maskTraceTags(array $tags): array
+    {
+        try {
+            return $this->maskTags($tags);
+        } catch (Throwable) {
+            return [self::MASK_ERROR_KEY];
         }
     }
 }

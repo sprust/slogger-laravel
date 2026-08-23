@@ -38,9 +38,8 @@ class NotificationWatcherTest extends BaseChildWatcherTestCase
             config()->set('mail.default', 'array');
             config()->set('mail.mailers.array', ['transport' => 'array']);
 
-            // the documented addressed form: the key is the address, the value only
-            // names it. Joining the values shipped `John Doe` and dropped the one
-            // thing the notification was actually sent to
+            // the documented addressed form: joining the values shipped `John Doe`
+            // and dropped the address
             Notification::route('mail', ['to@example.test' => 'John Doe'])->notify(
                 new TestNotification()
             );
