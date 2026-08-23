@@ -124,8 +124,6 @@ class Processor
     /**
      * Runs something the watchers must not see - pushing a trace fires watchable
      * events of its own, and tracing those is how a storm starts.
-     *
-     * @throws Throwable
      */
     public function handleWithoutTracing(Closure $callback): mixed
     {

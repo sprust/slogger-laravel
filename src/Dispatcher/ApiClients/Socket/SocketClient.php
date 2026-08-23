@@ -20,6 +20,7 @@ class SocketClient implements ApiClientInterface
     }
 
     /**
+     * @throws Throwable
      * @throws JsonException
      */
     public function sendTraces(TracesObject $traces): void
@@ -94,6 +95,9 @@ class SocketClient implements ApiClientInterface
         }
     }
 
+    /**
+     * @throws Throwable
+     */
     protected function exchange(string $payloadJson): string
     {
         try {
