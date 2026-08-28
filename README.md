@@ -77,11 +77,13 @@ Masking moved out of the traced application and into the dispatcher job.
   and was never true: the suite installs there and 152 of its tests error out, because
   the testbench that pairs with 10.17 does not know how to discover the workbench
   config, so the package reads itself as disabled.
-- API changes if you build formatters yourself: `RequestDataFormatter` lost its
+- API changes if you build formatters yourself: `RequestDataFormatter` keeps its
   `requestHeaders`, `requestParameters`, `responseHeaders` and `responseFields`
-  arguments along with the matching `add*()` methods, and
-  `MaskHelper::maskArrayByList()`/`maskArrayByPatterns()` are gone.
-  `MaskHelper::maskValue()` now masks a string whole; `maskValuePartially()` is the
+  arguments and the matching `add*()` methods, but each of them now takes a plain list
+  of full masks **or** a `RequestPreparer\Masks` - full keys, partial keys and value
+  patterns, the same three lists the global section has.
+  `MaskHelper::maskArrayByList()`/`maskArrayByPatterns()` are gone;
+  `MaskHelper::maskValue()` now masks a string whole, and `maskValuePartially()` is the
   one that keeps a couple of characters.
 - API changes if you extend the core: `Processor::stopDetached()` is gone - `stop()`
   closes a parent trace whichever way it was started - and so are
@@ -369,8 +371,8 @@ Large responses are skipped and marked with:
 
 ## Masking Rules
 
-Masking runs **in the dispatcher job**, right before a batch is sent, and never in the
-traced application. Building a trace costs the application only what it takes to
+The global lists run **in the dispatcher job**, right before a batch is sent, and never
+in the traced application. Building a trace costs the application only what it takes to
 collect and hand off the data; walking a payload key by key is paid for by the
 dispatcher workers instead. Two consequences follow:
 
@@ -381,14 +383,20 @@ dispatcher workers instead. Two consequences follow:
 - The `memory` dispatcher never masks - it has no job. It is a development and testing
   aid and sends nothing anywhere.
 
-Watchers do not mask. What they do at runtime is hide and truncate: `only_paths`,
+A single outbound client is the one exception: the formatter it is built with can name
+masks of its own, and those **are** applied in the traced application, to the headers
+and the body of that call - see [Masks for one client](#masks-for-one-client). They are
+extra rather than instead: the global lists still run afterwards over every trace, and
+a formatter that names nothing pays nothing.
+
+What watchers otherwise do at runtime is hide and truncate: `only_paths`,
 `excepted_paths`, `hidden_paths`, `max_content_length`, per-watcher `excepted` lists.
-The one exception is the database watcher: query bindings are positional, so no key list
-can reach them and the dispatcher job has nothing to decide by. It masks them itself, by
-length - a string of more than five characters becomes `********`, a shorter one and a
-numeric binding are recorded as they were. Nothing in a binding says whether it is a
-password or a page number, so a short or numeric secret - a PIN, an OTP, a card number
-held as an integer - does reach the receiver. Do not keep those in cleartext columns, or
+The database watcher masks on its own too, for a different reason: query bindings are
+positional, so no key list can reach them and the dispatcher job has nothing to decide
+by. It masks them by length - a string of more than five characters becomes `********`,
+a shorter one and a numeric binding are recorded as they were. Nothing in a binding says
+whether it is a password or a page number, so a short or numeric secret - a PIN, an OTP,
+a card number held as an integer - does reach the receiver. Do not keep those in cleartext columns, or
 turn the watcher off.
 
 ### The key lists
@@ -660,6 +668,50 @@ data too when the application chooses them - a cache key is `otp:<address>` ofte
 enough - so `value_patterns` are applied to array keys and to tags as well, the two
 places no key list can reach.
 
+### Masks for one client
+
+The lists above are global: every trace loses those keys. What only one outbound client
+has to lose goes on the formatter that client is built with, and is applied in the
+application, before the trace is handed off - the global lists still run afterwards, in
+the dispatcher job.
+
+Use them for a key that is a secret at one partner and a plain identifier everywhere
+else: `account_number` at a payment gateway, `pan` on one checkout call. Putting those
+in `masking.full_keys` would mask them in every trace that happens to use the same word.
+
+A `RequestDataFormatter` takes four of them - the request headers, the request
+parameters, the response headers and the response fields - and each applies only to the
+urls that formatter matches:
+
+```php
+use SLoggerLaravel\RequestPreparer\Masks;
+use SLoggerLaravel\RequestPreparer\RequestDataFormatter;
+
+new RequestDataFormatter(
+    urlPatterns: ['*partner.example/*'],
+    requestHeaders: ['x-partner-signature'],
+    requestParameters: new Masks(
+        fullKeys: ['pan'],
+        partialKeys: ['holder'],
+        valuePatterns: ['/\d{16}/']
+    ),
+    responseHeaders: ['x-partner-token'],
+    responseFields: ['account_number']
+);
+```
+
+A plain list is a list of full masks - the common case, and the shape the pre-2.0
+arguments had. A `Masks` names all three lists, and they mean exactly what they mean in
+the `masking` section: whole-key matching against the key and each of its word
+components, `*` as in `Str::is`, patterns matched against the value. The `add*()`
+methods widen what was configured rather than replace it.
+
+Unlike the global lists, these are matched from the **top level** of what they are
+given: a header bag and a decoded body are the application's own all the way up.
+
+The formatter goes to the handler the client is built with - see the Guzzle section
+below.
+
 ## Guzzle / HTTP Client tracing
 
 You can attach the SLogger handler to Guzzle:
@@ -680,8 +732,38 @@ new \GuzzleHttp\Client([
 ])
 ```
 
-Formatters hide and truncate; sensitive values are masked later, by the
-dispatcher job.
+A formatter also carries the masks of that client - what this partner calls a secret
+and nobody else does:
+
+```php
+new \GuzzleHttp\Client([
+    'base_uri' => 'https://partner.example',
+    'handler'  => app(\SLoggerLaravel\Guzzle\GuzzleHandlerFactory::class)->prepareHandler(
+        (new \SLoggerLaravel\RequestPreparer\RequestDataFormatters())
+            ->add(
+                new \SLoggerLaravel\RequestPreparer\RequestDataFormatter(
+                    urlPatterns: ['*partner.example/*'],
+                    requestHeaders: ['x-partner-signature'],
+                    requestParameters: new \SLoggerLaravel\RequestPreparer\Masks(
+                        fullKeys: ['pan'],
+                        partialKeys: ['holder'],
+                        valuePatterns: ['/\d{16}/']
+                    ),
+                    responseHeaders: ['x-partner-token'],
+                    responseFields: ['account_number']
+                )
+            )
+    ),
+])
+```
+
+Each of the four takes a plain list of full masks or a `Masks`, and applies only to the
+urls the formatter matches - see [Masks for one client](#masks-for-one-client). The
+global lists still run afterwards, in the dispatcher job, so what belongs here is what
+only this client needs.
+
+Without masks the response body is not decoded at all: a formatter that only hides
+never reads what it is about to throw away.
 
 ## Dispatchers
 
