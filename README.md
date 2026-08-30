@@ -157,12 +157,15 @@ SLOGGER_ENABLED=false
 SLOGGER_TOKEN=
 SLOGGER_TRACE_ID_PREFIX=
 SLOGGER_LOG_CHANNEL=daily
+SLOGGER_CONTEXT=array
 ```
 
 - `SLOGGER_ENABLED`: globally toggle all tracing.
 - `SLOGGER_TOKEN`: API token for dispatchers.
 - `SLOGGER_TRACE_ID_PREFIX`: custom prefix for trace IDs. If empty, uses slugged `app.name` or `app`.
 - `SLOGGER_LOG_CHANNEL`: where internal errors are logged.
+- `SLOGGER_CONTEXT`: where the state of one unit of work is kept - `array` unless you run
+  several requests or jobs at once in one process. See [Concurrency](#concurrency).
 
 ### Dispatchers
 
@@ -682,6 +685,199 @@ new \GuzzleHttp\Client([
 
 Formatters hide and truncate; sensitive values are masked later, by the
 dispatcher job.
+
+## Concurrency
+
+A trace has state while it runs: which trace is the current parent, which parent traces
+are still open, whether the watchers are paused, what `add()` said about this request.
+Where a process handles one request, one job or one command at a time, that state is the
+process's, and keeping it in fields on a few singletons is correct.
+
+Under a runtime that handles several at once in one process - coroutines, an event loop,
+fibers - a field is shared by all of them. A second request reads the first one's parent
+id and files itself underneath it; a request inside a paused section silences the
+watchers of every other request in flight; one request's `user_id` is written onto
+another's traces.
+
+So the state lives in a store, and the store decides what "current" means.
+
+### Choosing a store
+
+```dotenv
+# array (default) | fiber | App\Tracing\YourStore
+SLOGGER_CONTEXT=array
+```
+
+- **`array`** is a single map for the whole process - what every version before this one
+  did, and the right answer for php-fpm, `artisan` and `queue:work`. It is the default,
+  so upgrading changes nothing.
+- **`fiber`** keeps a map per running `Fiber`, and a single map when none is running.
+  Set it when your runtime gives each request or each job its own **PHP fiber**.
+- **anything else** is taken for the class name of a store you brought yourself.
+
+**Check that `fiber` is the right answer before setting it.** It tells units apart by
+`Fiber::getCurrent()`, so under a runtime whose coroutines are not PHP fibers - Swoole,
+or a scheduler outside PHP - it silently degrades to `array` and nothing is fixed. One
+line inside a request settles it:
+
+```php
+Log::debug('slogger: in a fiber?', ['yes' => Fiber::getCurrent() !== null]);
+```
+
+If that is `false`, write a store instead.
+
+### Writing your own store
+
+Two methods, no dependencies:
+
+```php
+namespace App\Tracing;
+
+use SLoggerLaravel\Context\TraceContextInterface;
+
+class CoroutineTraceContext implements TraceContextInterface
+{
+    public function get(string $key, mixed $default = null): mixed { /* ... */ }
+
+    public function set(string $key, mixed $value): void { /* ... */ }
+}
+```
+
+Then `SLOGGER_CONTEXT=App\Tracing\CoroutineTraceContext`. Four things it has to honour:
+
+- **The store is a singleton and holds no state of its own.** It works out where to look
+  on every call. Watchers are built once at bootstrap and keep the objects they were
+  given, so a store that decided its scope in its constructor would keep answering for
+  whichever unit of work happened to build it.
+- **A key holding `null` is not an absent key.** `get()` must return `null` for the first
+  and the default only for the second. Writing `$value ?? $default` conflates them, and
+  "no parent trace" is written as `null`.
+- **Writing must actually write.** If the underlying context has a "do not replace an
+  existing key" mode, do not use it: a store that quietly keeps the first value ever
+  written to a key reproduces the bug this exists to fix.
+- **Values must come back by value.** Everything kept here is an array or a scalar, so
+  handing a unit of work a copy is enough - but a store that hands two units the same
+  mutable object shares their state again.
+
+There is deliberately no way to remove a key. A store whose reads fall through to an
+enclosing unit of work - a coroutine context with inheritance usually does - would
+uncover the enclosing unit's value; "there is nothing here" is written as `null` or as
+an empty list instead.
+
+### What `fiber` does not do
+
+Reads do not fall through to the fiber that created the current one. PHP cannot say
+which fiber that was, and guessing is how unrelated traces get stitched into one tree.
+
+The consequence is worth knowing before you switch: **a fiber started inside a traced
+request begins with no state of its own, so child traces pushed from inside it are
+dropped** - a query, a log line or an event recorded there has no open parent trace in
+that fiber, and `push()` returns early. Parent traces started there are recorded, as
+roots rather than nested under the request, and so is anything a watcher marks as able
+to stand alone (`can_be_orphan`). If your host code runs fibers *inside* a unit of work
+(amphp/revolt and anything built on them), `fiber` will cost you that telemetry; a store
+that can name the enclosing coroutine will not.
+
+The same applies to an outbound HTTP call whose response is handled somewhere other than
+where the call was made. Guzzle's response hook runs wherever the promise is resolved:
+with curl and `wait()` that is the fiber that made the call, and everything works - but
+under a runtime that settles promises on a loop fiber of its own, the call is opened in
+one unit of work and answered in another, and the trace is never closed. This is not
+about which map the watcher keeps its entry in; the processor's own record of the call
+lives with the unit that made it either way.
+
+### A unit of work that never reports back
+
+Any store that scopes state to a unit of work - this one, or your own - changes what
+happens when a unit ends without saying so. Worth knowing before you switch.
+
+An exception is not that case: the framework still fires `RequestHandled`, `JobFailed`
+or `CommandFinished`, so the trace closes as failed and everything below is irrelevant.
+The case is a unit **dropped while suspended** - the scheduler killed it, a timeout took
+it, the process is shutting down.
+
+Nothing the store holds is leaked. The state goes with the unit: PHP unwinds a
+destroyed fiber's stack, and the store releases its map along with it - the open traces,
+the parent id, the outbound calls, the values `add()` collected. (The profiler is not in
+the store and could not survive this, which is why it is refused outright - see below.)
+
+What is lost is the closing update. The parent trace stays `started` in the backend, and
+the outbound calls it left in flight are never tagged `__interrupted`, because the
+processor's sweeps only ever see the current unit and no later unit can reach them. With
+`array` a later request or job in the same process swept them, which is the one thing
+this gives up.
+
+It cannot be fixed from inside the package. Cleanup during a fiber's destruction is not
+allowed to do I/O - `Fiber::suspend()` throws `Cannot suspend in a force-closed fiber`
+from a `finally` there, and `Cannot suspend outside of a fiber` from a destructor after
+it - while dispatching a trace is exactly a suspension point under such a runtime.
+
+**Age them out on the receiver instead**: a trace with no update for some minutes is
+over, whatever happened to the process that started it. That is the only place still
+looking after the process is gone, and it covers a fatal error or an out-of-memory kill
+too, which nothing running inside the process ever will.
+
+### What is per unit of work, and what is not
+
+Per unit of work: the current parent trace id, the stack of open parent traces, the
+pause flag, the map of detached (outbound) traces, the requests and commands a parent
+watcher has open, the outbound calls the HTTP-client watcher has open, the jobs the job
+watcher is processing, and the values `add()` collected.
+
+Per process, on purpose: which watchers are enabled, the callbacks registered with
+`add(fn() => ...)`, and the trace dispatcher's batching buffer - per unit it would stop
+batching and multiply the jobs.
+
+Those callbacks are shared, which is what makes them rules rather than values - so
+register them once, from a service provider, and let them read what they need when they
+run: `add('tenant', fn() => tenant()?->id())`. A closure registered per request, closing
+over that request's own objects, is evaluated for every other unit's traces too, and
+puts one request's data on another's - the very thing the rest of this section is about.
+A plain value is this unit's own and is safe anywhere.
+
+The socket client is neither: it keeps a small pool of connections - the one it was
+built with, plus any it opens through `Connection::fresh()` - and a sender holds one from
+the first byte written to the last byte read. A process sending one batch at a time opens
+exactly one and keeps it, as before; concurrent senders each get one of their own rather
+than interleaving frames on a shared stream, and up to eight are kept for reuse, the rest
+closed on the way back. None of it is aware of fibers, so it holds for any way of running
+things at once.
+
+Whether senders can get inside each other's exchange at all is a property of the runtime,
+not of this package: a bare PHP fiber suspends only where it says so, and `Connection`
+says so nowhere. A runtime that turns a stream call into a suspension point - which is
+what makes coroutines worth having in the first place - can. The pool costs nothing where
+they cannot.
+
+### Two watchers that concurrency does not suit
+
+- **Profiling** (`SLOGGER_PROFILING_ENABLED`) measures the *process*, so it is refused
+  outright unless the store is `array` - the config asks and the answer is no. A run
+  covers everything the process did while it lasted, every other unit's work included,
+  filed under the one trace that started it; and a unit that ends without stopping owns
+  the profiler for good, leaving the extension instrumenting every call the process
+  makes and no later trace ever profiled.
+- **The dump watcher** swaps `VarDumper`'s handler, which is global to PHP, for the
+  length of one `dump()`. A `dump()` from another unit of work inside that window is not
+  traced. Harmless, but it is telemetry you will not see.
+
+### Upgrading to 2.1
+
+The default behaviour does not change, and neither does any public method. Two
+constructors did, which matters only if you build one yourself or override one in a
+subclass:
+
+| Class | Change |
+| --- | --- |
+| `TraceIdContainer` | now takes `TraceContextInterface`; it had no constructor before |
+| `HttpMiddleware` | now takes `TraceIdContainer` as a second argument |
+
+`Connection` gained `fresh()`, and `SocketClient` and `ApiClientFactory` kept their
+arguments.
+
+`Processor`, `RequestWatcher`, `CommandWatcher`, `JobWatcher`, `HttpClientWatcher` and
+`TraceDataComplementer` each take a `TraceContextInterface` as their **last** argument.
+All of these are resolved from the container, so nothing else has to change.
 
 ## Dispatchers
 

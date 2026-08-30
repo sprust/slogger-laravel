@@ -12,6 +12,7 @@ use Illuminate\Queue\Events\JobTimedOut;
 use Illuminate\Queue\Queue;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
+use SLoggerLaravel\Context\TraceContextInterface;
 use SLoggerLaravel\Dispatcher\Items\Queue\Jobs\SendTracesJob;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
@@ -22,8 +23,22 @@ use SLoggerLaravel\Traces\TraceIdContainer;
 use SLoggerLaravel\Watchers\WatcherInterface;
 use Throwable;
 
+/**
+ * @phpstan-type OpenJob array{trace_id: string, started_at: Carbon}
+ */
 class JobWatcher implements WatcherInterface
 {
+    /**
+     * Jobs being processed, by the uuid their payload carries.
+     *
+     * Kept with the delivery, not on the watcher: the uuids are unique, so entries
+     * never took each other's place, but an entry for a job that never reports back is
+     * only ever removed by the processor's sweep. Under a pool of consumers in one
+     * long-lived process, a delivery that ends without reporting would leave it behind.
+     *
+     * @see getOpenJobs()
+     */
+    protected const CONTEXT_KEY_JOBS = 'slogger.watcher.job.open';
     /**
      * Jobs that must never be traced regardless of the published config:
      * tracing the trace-sender job spawns new trace jobs recursively.
@@ -39,16 +54,10 @@ class JobWatcher implements WatcherInterface
      */
     protected array $exceptedJobs = self::ALWAYS_EXCEPTED_JOBS;
 
-    /**
-     * Jobs being processed, by the uuid their payload carries.
-     *
-     * @var array<string, array{trace_id: string, started_at: Carbon}>
-     */
-    protected array $jobs = [];
-
     public function __construct(
         protected readonly Processor $processor,
         protected readonly TraceIdContainer $traceIdContainer,
+        protected readonly TraceContextInterface $context,
     ) {
     }
 
@@ -58,9 +67,11 @@ class JobWatcher implements WatcherInterface
         // never comes back here; without this the entry outlives the worker
         $this->processor->onTraceInterrupted(
             function (string $traceId): void {
-                $this->jobs = array_filter(
-                    $this->jobs,
-                    static fn(array $job): bool => $job['trace_id'] !== $traceId
+                $this->setOpenJobs(
+                    array_filter(
+                        $this->getOpenJobs(),
+                        static fn(array $job): bool => $job['trace_id'] !== $traceId
+                    )
                 );
             }
         );
@@ -121,10 +132,16 @@ class JobWatcher implements WatcherInterface
             customParentTraceId: $parentTraceId,
         );
 
-        $this->jobs[$uuid] = [
+        // read after the trace was started, not before: starting it dispatches, and
+        // dispatching suspends
+        $jobs = $this->getOpenJobs();
+
+        $jobs[$uuid] = [
             'trace_id'   => $traceId,
             'started_at' => $loggedAt,
         ];
+
+        $this->setOpenJobs($jobs);
     }
 
     public function handleJobProcessed(JobProcessed $event): void
@@ -208,7 +225,9 @@ class JobWatcher implements WatcherInterface
             return;
         }
 
-        $jobData = $this->jobs[$uuid] ?? null;
+        $jobs = $this->getOpenJobs();
+
+        $jobData = $jobs[$uuid] ?? null;
 
         if (!$jobData) {
             return;
@@ -216,7 +235,9 @@ class JobWatcher implements WatcherInterface
 
         // forgotten before the trace is stopped: a worker can report the same job
         // twice - the timeout handler fails one that has just been processed
-        unset($this->jobs[$uuid]);
+        unset($jobs[$uuid]);
+
+        $this->setOpenJobs($jobs);
 
         $data = [
             'connection_name' => $connectionName,
@@ -239,6 +260,25 @@ class JobWatcher implements WatcherInterface
             duration: TraceHelper::calcDuration($startedAt),
             parentLoggedAt: $startedAt,
         );
+    }
+
+    /**
+     * @return array<string, OpenJob>
+     */
+    protected function getOpenJobs(): array
+    {
+        /** @var array<string, OpenJob> $jobs */
+        $jobs = $this->context->get(static::CONTEXT_KEY_JOBS, []);
+
+        return $jobs;
+    }
+
+    /**
+     * @param array<string, OpenJob> $jobs
+     */
+    protected function setOpenJobs(array $jobs): void
+    {
+        $this->context->set(static::CONTEXT_KEY_JOBS, $jobs);
     }
 
     /**

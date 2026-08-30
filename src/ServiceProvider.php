@@ -11,6 +11,9 @@ use SLoggerLaravel\Configs\DispatcherQueueConfig;
 use SLoggerLaravel\Configs\GeneralConfig;
 use SLoggerLaravel\Configs\MaskingConfig;
 use SLoggerLaravel\Configs\WatchersConfig;
+use SLoggerLaravel\Context\ArrayTraceContext;
+use SLoggerLaravel\Context\TraceContextFactory;
+use SLoggerLaravel\Context\TraceContextInterface;
 use SLoggerLaravel\Dispatcher\ApiClients\ApiClientFactory;
 use SLoggerLaravel\Dispatcher\ApiClients\ApiClientInterface;
 use SLoggerLaravel\Dispatcher\Items\DispatcherFactory;
@@ -36,6 +39,26 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
     public function register(): void
     {
         $this->app->singleton(GeneralConfig::class);
+
+        // bound whether or not tracing is enabled: HttpMiddleware sits in the
+        // application's middleware stack either way, and what it resolves reaches here
+        $this->app->singleton(
+            TraceContextInterface::class,
+            static function (Application $app) {
+                $config = $app->make(GeneralConfig::class);
+
+                // nothing reads a store while tracing is off, and the configured name
+                // is not consulted then either: a misspelt one would otherwise answer
+                // every route of an application that has this package switched off
+                if (!$config->isEnabled()) {
+                    return new ArrayTraceContext();
+                }
+
+                return $app->make(TraceContextFactory::class)->create(
+                    $config->getContextName()
+                );
+            }
+        );
 
         if (!$this->app->make(GeneralConfig::class)->isEnabled()) {
             return;

@@ -13,10 +13,30 @@ use Throwable;
 
 class SocketClient implements ApiClientInterface
 {
+    /**
+     * Sending a batch is one write followed by one read on a length-prefixed stream,
+     * and the protocol has no way to tell whose reply is whose. Under a runtime that
+     * can switch coroutines inside an I/O call, senders sharing a connection would tear
+     * each other's frames and read each other's answers, so each holds one for the
+     * whole exchange.
+     *
+     * Where batches are sent one at a time - php-fpm, `queue:work`, the dispatcher's
+     * own workers - the connection this was built with is handed out every time, and
+     * nothing else is ever opened.
+     */
+    private readonly ConnectionPool $connections;
+
     public function __construct(
         protected string $apiToken,
         protected Connection $connection,
     ) {
+        $this->connections = new ConnectionPool(
+            fn(): Connection => $this->connection->fresh()
+        );
+
+        // free from the start: anything beyond it is opened only when a second sender
+        // wants one while this is taken
+        $this->connections->release($connection);
     }
 
     /**
@@ -25,7 +45,24 @@ class SocketClient implements ApiClientInterface
      */
     public function sendTraces(TracesObject $traces): void
     {
-        $this->connectIfNeed();
+        // held from the first byte written to the last byte read, so that a sender
+        // running beside this one never writes into the middle of this exchange
+        $connection = $this->connections->acquire();
+
+        try {
+            $this->send($connection, $traces);
+        } finally {
+            $this->connections->release($connection);
+        }
+    }
+
+    /**
+     * @throws Throwable
+     * @throws JsonException
+     */
+    protected function send(Connection $connection, TracesObject $traces): void
+    {
+        $this->connectIfNeed($connection);
 
         $iterator = $traces->iterateCreating();
 
@@ -75,19 +112,19 @@ class SocketClient implements ApiClientInterface
         $payloadJson = json_encode($payload, JSON_THROW_ON_ERROR);
 
         try {
-            $response = $this->exchange($payloadJson);
+            $response = $this->exchange($connection, $payloadJson);
         } catch (ConnectionClosedException) {
             // exactly one retry, and only for a peer-closed connection:
             // retrying timeouts would turn a saturated receiver into a reconnect storm
-            $this->connection->connect(
+            $connection->connect(
                 apiToken: $this->apiToken
             );
 
-            $response = $this->exchange($payloadJson);
+            $response = $this->exchange($connection, $payloadJson);
         }
 
         if ($response !== 'received') {
-            $this->connection->disconnect();
+            $connection->disconnect();
 
             throw new RuntimeException(
                 'Unexpected response from socket server: ' . $response
@@ -98,16 +135,16 @@ class SocketClient implements ApiClientInterface
     /**
      * @throws Throwable
      */
-    protected function exchange(string $payloadJson): string
+    protected function exchange(Connection $connection, string $payloadJson): string
     {
         try {
-            $this->connection->write($payloadJson);
+            $connection->write($payloadJson);
 
-            return $this->connection->read();
+            return $connection->read();
         } catch (Throwable $exception) {
             // a half-written frame or an unread response leaves the stream desynchronized:
             // drop the connection so the next attempt starts from a clean one
-            $this->connection->disconnect();
+            $connection->disconnect();
 
             throw $exception;
         }
@@ -116,10 +153,10 @@ class SocketClient implements ApiClientInterface
     /**
      * @throws JsonException
      */
-    protected function connectIfNeed(): void
+    protected function connectIfNeed(Connection $connection): void
     {
-        if (!$this->connection->isConnected()) {
-            $this->connection->connect(
+        if (!$connection->isConnected()) {
+            $connection->connect(
                 apiToken: $this->apiToken
             );
         }

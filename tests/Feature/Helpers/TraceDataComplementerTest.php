@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace SLoggerLaravel\Tests\Feature\Helpers;
 
 use SLoggerLaravel\Configs\WatchersConfig;
+use SLoggerLaravel\Context\ArrayTraceContext;
 use SLoggerLaravel\Helpers\MaskHelper;
 use SLoggerLaravel\Helpers\TraceDataComplementer;
 use SLoggerLaravel\Helpers\TraceDataMasker;
@@ -18,7 +19,8 @@ class TraceDataComplementerTest extends BaseTestCase
 
         $complementer = new TraceDataComplementer(
             app: $this->getApp(),
-            watchersConfig: new WatchersConfig()
+            watchersConfig: new WatchersConfig(),
+            context: new ArrayTraceContext()
         );
 
         $complementer->add('foo', 'bar');
@@ -47,7 +49,8 @@ class TraceDataComplementerTest extends BaseTestCase
     {
         $complementer = new TraceDataComplementer(
             app: $this->getApp(),
-            watchersConfig: new WatchersConfig()
+            watchersConfig: new WatchersConfig(),
+            context: new ArrayTraceContext()
         );
 
         $complementer->add('customer_email', 'john.doe@example.com');
@@ -84,7 +87,8 @@ class TraceDataComplementerTest extends BaseTestCase
     {
         return new TraceDataComplementer(
             app: $this->getApp(),
-            watchersConfig: new WatchersConfig()
+            watchersConfig: new WatchersConfig(),
+            context: new ArrayTraceContext()
         );
     }
 }

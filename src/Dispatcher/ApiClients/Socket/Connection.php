@@ -23,7 +23,13 @@ class Connection
 
     protected int $lengthPrefixLength = 4;
 
-    public function __construct(
+    /**
+     * Final so that `fresh()` can build another of whatever this is: a subclass is free
+     * to change how a connection behaves, not what it takes to open one.
+     *
+     * @see fresh()
+     */
+    final public function __construct(
         protected string $socketAddress,
         protected LoggerInterface $logger,
         protected int $timeoutSeconds = 10,
@@ -93,6 +99,23 @@ class Connection
 
         $this->logger->debug(
             "connected to [$this->socketAddress]"
+        );
+    }
+
+    /**
+     * Another connection to the same receiver, not yet opened.
+     *
+     * A sender holds its connection from the first byte written to the last byte read,
+     * so a sender running beside it needs one of its own rather than a turn at this.
+     *
+     * @see ConnectionPool
+     */
+    public function fresh(): static
+    {
+        return new static(
+            socketAddress: $this->socketAddress,
+            logger: $this->logger,
+            timeoutSeconds: $this->timeoutSeconds,
         );
     }
 

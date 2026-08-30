@@ -8,6 +8,7 @@ use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamInterface;
 use SLoggerLaravel\Configs\WatchersConfig;
+use SLoggerLaravel\Context\TraceContextInterface;
 use SLoggerLaravel\DataResolver;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Guzzle\GuzzleHandlerFactory;
@@ -20,6 +21,9 @@ use SLoggerLaravel\RequestPreparer\RequestDataFormatters;
 use SLoggerLaravel\Watchers\WatcherInterface;
 use Throwable;
 
+/**
+ * @phpstan-type OpenOutboundRequest array{started_at: Carbon}
+ */
 class HttpClientWatcher implements WatcherInterface
 {
     /**
@@ -27,19 +31,26 @@ class HttpClientWatcher implements WatcherInterface
      * double the memory a request needs. The masker's own limit.
      */
     protected const MAX_BODY_BYTES = MaskHelper::MAX_READABLE_BYTES;
-    protected string $headerTraceIdKey;
-    protected ?string $headerParentTraceIdKey;
 
     /**
      * Outbound requests in flight, by the trace id their header carries.
      *
-     * @var array<string, array{started_at: Carbon}>
+     * Kept with the unit of work that made them, not on the watcher: the trace ids are
+     * unique, so entries never took each other's place, but an entry whose response
+     * never arrives is only ever removed by the processor's sweep. Under a runtime
+     * where units come and go inside one long-lived process, a unit that ends with a
+     * call still in flight would leave that entry behind for good.
+     *
+     * @see getOpenRequests()
      */
-    protected array $requests = [];
+    protected const CONTEXT_KEY_REQUESTS = 'slogger.watcher.http_client.open';
+    protected string $headerTraceIdKey;
+    protected ?string $headerParentTraceIdKey;
 
     public function __construct(
         protected Processor $processor,
-        WatchersConfig $watchersConfig
+        WatchersConfig $watchersConfig,
+        protected readonly TraceContextInterface $context
     ) {
         $this->headerTraceIdKey       = Str::random(20);
         $this->headerParentTraceIdKey = $watchersConfig->requestsHeaderParentTraceIdKey();
@@ -53,7 +64,11 @@ class HttpClientWatcher implements WatcherInterface
         // response hook runs to clear its entry
         $this->processor->onTraceInterrupted(
             function (string $traceId): void {
-                unset($this->requests[$traceId]);
+                $requests = $this->getOpenRequests();
+
+                unset($requests[$traceId]);
+
+                $this->setOpenRequests($requests);
             }
         );
     }
@@ -119,7 +134,13 @@ class HttpClientWatcher implements WatcherInterface
             loggedAt: $loggedAt,
         );
 
-        $this->requests[$traceId] = ['started_at' => $loggedAt];
+        // read after the trace was started, not before: starting it dispatches, and
+        // dispatching suspends
+        $requests = $this->getOpenRequests();
+
+        $requests[$traceId] = ['started_at' => $loggedAt];
+
+        $this->setOpenRequests($requests);
 
         $request = $request->withHeader($this->headerTraceIdKey, $traceId);
 
@@ -231,15 +252,38 @@ class HttpClientWatcher implements WatcherInterface
             return null;
         }
 
-        $requestData = $this->requests[$traceId] ?? null;
+        $requests = $this->getOpenRequests();
+
+        $requestData = $requests[$traceId] ?? null;
 
         if (is_null($requestData)) {
             return null;
         }
 
-        unset($this->requests[$traceId]);
+        unset($requests[$traceId]);
+
+        $this->setOpenRequests($requests);
 
         return ['trace_id' => $traceId, ...$requestData];
+    }
+
+    /**
+     * @return array<string, OpenOutboundRequest>
+     */
+    protected function getOpenRequests(): array
+    {
+        /** @var array<string, OpenOutboundRequest> $requests */
+        $requests = $this->context->get(static::CONTEXT_KEY_REQUESTS, []);
+
+        return $requests;
+    }
+
+    /**
+     * @param array<string, OpenOutboundRequest> $requests
+     */
+    protected function setOpenRequests(array $requests): void
+    {
+        $this->context->set(static::CONTEXT_KEY_REQUESTS, $requests);
     }
 
     /**

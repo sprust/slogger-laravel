@@ -5,6 +5,7 @@ namespace SLoggerLaravel;
 use Closure;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Support\Carbon;
+use SLoggerLaravel\Context\TraceContextInterface;
 use SLoggerLaravel\Dispatcher\Items\TraceDispatcherInterface;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Events\WatcherErrorEvent;
@@ -18,6 +19,10 @@ use SLoggerLaravel\Profiling\Dto\ProfilingObjects;
 use SLoggerLaravel\Traces\TraceIdContainer;
 use Throwable;
 
+/**
+ * @phpstan-type TraceStackItem array{trace_id: string, pre_parent_trace_id: string|null, tags: string[], logged_at: Carbon}
+ * @phpstan-type DetachedTrace array{owner_trace_id: string|null, tags: string[], logged_at: Carbon}
+ */
 class Processor
 {
     /**
@@ -33,23 +38,31 @@ class Processor
     /**
      * Open parent traces, outermost first.
      *
-     * @var list<array{trace_id: string, pre_parent_trace_id: string|null, tags: string[], logged_at: Carbon}>
+     * @see getTracesStack()
      */
-    private array $tracesStack = [];
+    private const CONTEXT_KEY_TRACES_STACK = 'slogger.processor.traces_stack';
 
-    /** @see handleWithoutTracing() */
-    private bool $paused = false;
+    /**
+     * Per unit of work, not per process: while one request is inside
+     * handleWithoutTracing(), the watchers of every other one must keep working.
+     *
+     * @see handleWithoutTracing()
+     */
+    private const CONTEXT_KEY_PAUSED = 'slogger.processor.paused';
 
     /**
      * Open detached traces, by trace id: kept off the stack because they are closed
      * in no particular order.
      *
-     * @var array<string, array{owner_trace_id: string|null, tags: string[], logged_at: Carbon}>
+     * @see getDetachedTraces()
      */
-    private array $detachedTraces = [];
+    private const CONTEXT_KEY_DETACHED_TRACES = 'slogger.processor.detached_traces';
 
     /**
      * Notified of every trace closed by the sweep rather than by its own watcher.
+     *
+     * Registered at bootstrap and shared by everything this process runs, which is
+     * what these are: the state they clean up is the caller's own.
      *
      * @var list<Closure(string): void>
      */
@@ -60,18 +73,19 @@ class Processor
         private readonly TraceDispatcherInterface $traceDispatcher,
         private readonly TraceIdContainer $traceIdContainer,
         private readonly AbstractProfiling $profiler,
-        private readonly TraceDataComplementer $traceDataComplementer
+        private readonly TraceDataComplementer $traceDataComplementer,
+        private readonly TraceContextInterface $context
     ) {
     }
 
     public function isActive(): bool
     {
-        return $this->tracesStack !== [];
+        return $this->getTracesStack() !== [];
     }
 
     public function isPaused(): bool
     {
-        return $this->paused;
+        return $this->context->get(self::CONTEXT_KEY_PAUSED, false) === true;
     }
 
     /**
@@ -127,15 +141,20 @@ class Processor
      */
     public function handleWithoutTracing(Closure $callback): mixed
     {
-        $previousPaused = $this->paused;
+        if ($this->isPaused()) {
+            // these nest, and the innermost one has nothing to take or to give back.
+            // Writing anyway would matter to a store whose reads fall through to an
+            // enclosing unit of work: the restore is local, so a nested unit would
+            // stamp `false` over a pause it never took
+            return $callback();
+        }
 
-        $this->paused = true;
+        $this->context->set(self::CONTEXT_KEY_PAUSED, true);
 
         try {
             return $callback();
         } finally {
-            // restore rather than clear: these nest
-            $this->paused = $previousPaused;
+            $this->context->set(self::CONTEXT_KEY_PAUSED, false);
         }
     }
 
@@ -160,12 +179,18 @@ class Processor
             parentTraceId: $customParentTraceId ?? $parentTraceId,
         );
 
-        $this->tracesStack[] = [
+        // read after the dispatch, not before: dispatching is a suspension point, and
+        // a stack read across one is a stack as it was before the trace above started
+        $tracesStack = $this->getTracesStack();
+
+        $tracesStack[] = [
             'trace_id'            => $traceId,
             'pre_parent_trace_id' => $parentTraceId,
             'tags'                => $tags,
             'logged_at'           => $loggedAt->clone(),
         ];
+
+        $this->setTracesStack($tracesStack);
 
         $this->traceIdContainer->setParentTraceId($traceId);
 
@@ -199,11 +224,15 @@ class Processor
             parentTraceId: $ownerTraceId,
         );
 
-        $this->detachedTraces[$traceId] = [
+        $detachedTraces = $this->getDetachedTraces();
+
+        $detachedTraces[$traceId] = [
             'owner_trace_id' => $ownerTraceId,
             'tags'           => $tags,
             'logged_at'      => $loggedAt->clone(),
         ];
+
+        $this->setDetachedTraces($detachedTraces);
 
         return $traceId;
     }
@@ -259,8 +288,12 @@ class Processor
         ?float $duration,
         Carbon $parentLoggedAt,
     ): void {
-        if (isset($this->detachedTraces[$traceId])) {
-            unset($this->detachedTraces[$traceId]);
+        $detachedTraces = $this->getDetachedTraces();
+
+        if (isset($detachedTraces[$traceId])) {
+            unset($detachedTraces[$traceId]);
+
+            $this->setDetachedTraces($detachedTraces);
 
             // no profiler: it profiles the enclosing trace, which is still running
             $this->dispatchStopTrace(
@@ -276,7 +309,7 @@ class Processor
             return;
         }
 
-        $index = $this->findStackIndex($traceId);
+        $index = $this->findStackIndex($this->getTracesStack(), $traceId);
 
         if (is_null($index)) {
             // already stopped: a worker can report the same job twice - the timeout
@@ -292,9 +325,20 @@ class Processor
 
         $this->sweepExpiredDetached();
 
-        $stackItem = $this->tracesStack[$index];
+        // taken again rather than carried across the sweeps above: each of them
+        // dispatches, and dispatching suspends, so an index from before one of those
+        // is a claim about a stack that no longer has to hold
+        $tracesStack = $this->getTracesStack();
 
-        array_pop($this->tracesStack);
+        $index = $this->findStackIndex($tracesStack, $traceId);
+
+        if (is_null($index)) {
+            return;
+        }
+
+        $stackItem = $tracesStack[$index];
+
+        $this->setTracesStack(array_slice($tracesStack, 0, $index));
 
         // back to whatever this trace was started under
         $this->traceIdContainer->setParentTraceId($stackItem['pre_parent_trace_id']);
@@ -309,7 +353,7 @@ class Processor
             parentLoggedAt: $parentLoggedAt,
         );
 
-        if ($this->tracesStack === []) {
+        if ($this->getTracesStack() === []) {
             // a call made with no trace around it has no owner to name it, and under
             // FPM the process ends long before any TTL
             $this->stopOwnerlessDetached();
@@ -386,10 +430,11 @@ class Processor
         );
     }
 
-    private function findStackIndex(string $traceId): ?int
+    /**
+     * @param list<TraceStackItem> $tracesStack
+     */
+    private function findStackIndex(array $tracesStack, string $traceId): ?int
     {
-        $tracesStack = $this->tracesStack;
-
         for ($index = count($tracesStack) - 1; $index >= 0; $index--) {
             if ($tracesStack[$index]['trace_id'] === $traceId) {
                 return $index;
@@ -405,9 +450,13 @@ class Processor
      */
     private function stopInterruptedNested(int $parentIndex): void
     {
-        $interrupted = array_slice($this->tracesStack, $parentIndex + 1);
+        $tracesStack = $this->getTracesStack();
 
-        $this->tracesStack = array_slice($this->tracesStack, 0, $parentIndex + 1);
+        $interrupted = array_slice($tracesStack, $parentIndex + 1);
+
+        // truncated before anything below dispatches, so a suspension cannot come
+        // between reading the stack and writing back what is left of it
+        $this->setTracesStack(array_slice($tracesStack, 0, $parentIndex + 1));
 
         foreach (array_reverse($interrupted) as $stackItem) {
             $this->stopInterruptedDetached(ownerTraceId: $stackItem['trace_id']);
@@ -442,7 +491,7 @@ class Processor
      */
     private function stopInterruptedDetached(string $ownerTraceId): void
     {
-        foreach ($this->detachedTraces as $traceId => $detachedTrace) {
+        foreach ($this->getDetachedTraces() as $traceId => $detachedTrace) {
             if ($detachedTrace['owner_trace_id'] !== $ownerTraceId) {
                 continue;
             }
@@ -456,7 +505,7 @@ class Processor
      */
     private function stopOwnerlessDetached(): void
     {
-        foreach ($this->detachedTraces as $traceId => $detachedTrace) {
+        foreach ($this->getDetachedTraces() as $traceId => $detachedTrace) {
             if (!is_null($detachedTrace['owner_trace_id'])) {
                 continue;
             }
@@ -471,7 +520,7 @@ class Processor
      */
     private function sweepExpiredDetached(): void
     {
-        foreach ($this->detachedTraces as $traceId => $detachedTrace) {
+        foreach ($this->getDetachedTraces() as $traceId => $detachedTrace) {
             $expiresAt = $detachedTrace['logged_at']
                 ->clone()
                 ->addSeconds(self::DETACHED_TRACE_TTL_SECONDS);
@@ -485,11 +534,15 @@ class Processor
     }
 
     /**
-     * @param array{owner_trace_id: string|null, tags: string[], logged_at: Carbon} $detachedTrace
+     * @param DetachedTrace $detachedTrace
      */
     private function closeInterruptedDetached(string $traceId, array $detachedTrace): void
     {
-        unset($this->detachedTraces[$traceId]);
+        $detachedTraces = $this->getDetachedTraces();
+
+        unset($detachedTraces[$traceId]);
+
+        $this->setDetachedTraces($detachedTraces);
 
         $this->dispatchStopTrace(
             traceId: $traceId,
@@ -520,6 +573,44 @@ class Processor
                 // a bookkeeping callback must never break the sweep
             }
         }
+    }
+
+    /**
+     * @return list<TraceStackItem>
+     */
+    private function getTracesStack(): array
+    {
+        /** @var list<TraceStackItem> $tracesStack */
+        $tracesStack = $this->context->get(self::CONTEXT_KEY_TRACES_STACK, []);
+
+        return $tracesStack;
+    }
+
+    /**
+     * @param list<TraceStackItem> $tracesStack
+     */
+    private function setTracesStack(array $tracesStack): void
+    {
+        $this->context->set(self::CONTEXT_KEY_TRACES_STACK, $tracesStack);
+    }
+
+    /**
+     * @return array<string, DetachedTrace>
+     */
+    private function getDetachedTraces(): array
+    {
+        /** @var array<string, DetachedTrace> $detachedTraces */
+        $detachedTraces = $this->context->get(self::CONTEXT_KEY_DETACHED_TRACES, []);
+
+        return $detachedTraces;
+    }
+
+    /**
+     * @param array<string, DetachedTrace> $detachedTraces
+     */
+    private function setDetachedTraces(array $detachedTraces): void
+    {
+        $this->context->set(self::CONTEXT_KEY_DETACHED_TRACES, $detachedTraces);
     }
 
     /**
