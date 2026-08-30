@@ -138,9 +138,19 @@ class RequestWatcher implements WatcherInterface
 
         // the process spent that time booting for this request, so it is this
         // request's - both the time it took and the point it started from
-        $bootTime = is_null($laravelStart)
+        $sinceLaravelStart = is_null($laravelStart)
+            ? null
+            : microtime(true) - $laravelStart;
+
+        $bootTime = is_null($sinceLaravelStart)
             ? -1
-            : TraceHelper::roundDuration(microtime(true) - $laravelStart);
+            : TraceHelper::roundDuration($sinceLaravelStart);
+
+        // counted back from a Carbon rather than built from the float: Laravel 10 types
+        // the constructor `DateTimeInterface|string|null`, and it is the same instant
+        $startedAt = is_null($sinceLaravelStart)
+            ? $loggedAt->clone()
+            : $loggedAt->clone()->subMicroseconds((int) round($sinceLaravelStart * 1000000));
 
         $traceId = $this->processor->startAndGetTraceId(
             type: TraceTypeEnum::Request->value,
@@ -169,9 +179,7 @@ class RequestWatcher implements WatcherInterface
             // duration covers the bootstrap. Otherwise the moment this watcher saw the
             // request - taken inside the request's own flow, unlike anything the whole
             // process shares
-            'started_at' => is_null($laravelStart)
-                ? $loggedAt->clone()
-                : new Carbon($laravelStart),
+            'started_at' => $startedAt,
             'logged_at'  => $loggedAt,
         ];
 

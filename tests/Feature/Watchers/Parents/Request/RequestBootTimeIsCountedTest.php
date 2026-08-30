@@ -7,22 +7,27 @@ namespace SLoggerLaravel\Tests\Feature\Watchers\Parents\Request;
 use Illuminate\Foundation\Http\Events\RequestHandled;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
-use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use SLoggerLaravel\Events\RequestHandling;
 use SLoggerLaravel\Tests\Feature\Watchers\BaseWatcherTestCase;
 use SLoggerLaravel\Watchers\Parents\RequestWatcher;
 
 /**
  * Where the process was started for this request - php-fpm, and the first request of a
- * worker under a SAPI that is not the console - the framework's bootstrap is part of
- * what the request took, and the duration says so.
+ * worker under a SAPI that is not the console - what it spent starting up is part of
+ * what the request took, and the duration says so rather than only `boot_time`.
  *
  * The suite runs from the console, so this asks the application to say otherwise, which
  * is the one thing `runningInConsole()` reads before the SAPI.
  */
 class RequestBootTimeIsCountedTest extends BaseWatcherTestCase
 {
-    private const BOOTSTRAP_SECONDS = 0.25;
+    /**
+     * Comfortably past anything a request here could take, so that finding it inside
+     * the duration can only mean the start-up went in with it.
+     *
+     * @see \LARAVEL_START as the suite defines it
+     */
+    private const CLEARLY_A_START_UP = 60;
 
     protected function setUp(): void
     {
@@ -45,15 +50,12 @@ class RequestBootTimeIsCountedTest extends BaseWatcherTestCase
         parent::tearDown();
     }
 
-    #[RunInSeparateProcess]
-    public function testTheBootstrapIsPartOfTheRequestItWasFor(): void
+    public function testWhatTheProcessSpentStartingIsPartOfTheRequestItWasFor(): void
     {
         self::assertFalse(
             $this->getApp()->runningInConsole(),
             'the application has to believe it is answering as a web process'
         );
-
-        define('LARAVEL_START', microtime(true) - self::BOOTSTRAP_SECONDS);
 
         $request = Request::create('/slogger/anything');
 
@@ -64,10 +66,12 @@ class RequestBootTimeIsCountedTest extends BaseWatcherTestCase
 
         self::assertCount(1, $creating);
 
-        self::assertGreaterThanOrEqual(
-            self::BOOTSTRAP_SECONDS,
-            $creating[0]->data['boot_time'],
-            'the bootstrap is reported'
+        $bootTime = $creating[0]->data['boot_time'];
+
+        self::assertGreaterThan(
+            self::CLEARLY_A_START_UP,
+            $bootTime,
+            'the start-up was claimed, and reported'
         );
 
         $updating = $this->dispatcher->findUpdating();
@@ -75,7 +79,7 @@ class RequestBootTimeIsCountedTest extends BaseWatcherTestCase
         self::assertCount(1, $updating);
 
         self::assertGreaterThanOrEqual(
-            self::BOOTSTRAP_SECONDS,
+            $bootTime,
             $updating[0]->duration,
             'and it is inside the duration, not only beside it'
         );
