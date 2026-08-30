@@ -819,30 +819,32 @@ too, which nothing running inside the process ever will.
 
 ### Durations in a long-lived process
 
-Two different things, kept apart.
+`LARAVEL_START` is defined once, in the entry script, where the *process* begins. Under
+php-fpm the process is this request, the bootstrap it measures is this request's, and
+both `boot_time` and the duration are counted from it. Under a server that boots once and
+then serves for hours - Octane, RoadRunner, FrankenPHP's worker mode, a coroutine runtime
+- it is the worker's start, and counting from it reports the worker's uptime as every
+request's duration: the same number on every trace, growing all day.
 
-**A request's duration** is measured from the moment the watcher sees the request, which
-it takes itself, inside that request's own flow. Nothing shared goes into it: not
-`LARAVEL_START`, which marks where the *process* began - under a server that boots once
-and serves for hours that is the worker's start, and measuring from it reports the
-worker's uptime as every request's duration - and not `Kernel::requestStartedAt()`, which
-is one field for a whole process, so a request starting beside this one replaces it.
+So the constant is taken only where it is this request's own start. A process booted from
+the console and answering HTTP is a long-lived server whatever it says about itself, and
+never takes it. Under any other SAPI it is spent by the first request the process traces
+and by no other. Everything else measures from the moment this package's middleware saw
+the request - taken inside that request's own flow, so it is the request's own - and
+reports `boot_time` as `-1`, since the boot it did not wait through is not its to claim.
 
-What that leaves out is the stretch from entering the kernel to reaching this package's
-middleware: the global middleware in front of it, a fraction of a millisecond. A runtime
-that wants that back has to hand over the moment it accepted the request; there is no
-earlier point a package can read for itself in a worker that booted hours ago
-(`REQUEST_TIME_FLOAT` is the process's start there too).
+Never from `Kernel::requestStartedAt()`, whichever runtime: it is one field for a whole
+process, and a request starting alongside replaces it with a later one - a start in the
+future, which is a negative duration.
 
-**`boot_time`** is a fact about the process, and it is reported for the one request that
-boot was for: under php-fpm every request, under a worker its first and no other, `-1`
-after that. A process booted from the console and answering HTTP is a long-lived server
-whatever it says about itself, and never claims it at all - the request that would be
-claiming it arrived long after the boot it would be measuring.
-
-Coming from an earlier version, a request's duration under php-fpm no longer includes
-the framework's bootstrap. Nothing is lost - that is what `boot_time` says - and a trace
-now begins on the timeline where its duration starts measuring, which it did not before.
+Two things this leaves out, both small and both unavoidable from inside a package. Where
+the constant is not taken, the stretch from entering the kernel to reaching this
+middleware - the global middleware in front of it - is not counted; a runtime that wants
+it back has to hand over the moment it accepted the request, because there is no earlier
+point to read in a worker that booted hours ago (`REQUEST_TIME_FLOAT` is the process's
+start there too). And under a worker whose SAPI is not the console, its first request
+counts a boot it did not wait through: one trace per worker, and nothing that can tell
+that boot from a slow one.
 
 ### What is per unit of work, and what is not
 
