@@ -136,8 +136,8 @@ class RequestWatcher implements WatcherInterface
 
         $laravelStart = $this->claimLaravelStart();
 
-        // the time this process spent booting is this request's own only when this
-        // request is what the process was started for
+        // the process spent that time booting for this request, so it is this
+        // request's - both the time it took and the point it started from
         $bootTime = is_null($laravelStart)
             ? -1
             : TraceHelper::roundDuration(microtime(true) - $laravelStart);
@@ -165,10 +165,13 @@ class RequestWatcher implements WatcherInterface
             'trace_id'   => $traceId,
             'request_id' => spl_object_id($event->request),
             'boot_time'  => $bootTime,
-            // the same moment as `logged_at`: this runs inside the request's own flow,
-            // so `now` is this request's own start - not a constant of the process, and
-            // not a field of a kernel the whole process shares
-            'started_at' => $loggedAt->clone(),
+            // where the process began, when the process began for this request, so the
+            // duration covers the bootstrap. Otherwise the moment this watcher saw the
+            // request - taken inside the request's own flow, unlike anything the whole
+            // process shares
+            'started_at' => is_null($laravelStart)
+                ? $loggedAt->clone()
+                : new Carbon($laravelStart),
             'logged_at'  => $loggedAt,
         ];
 
