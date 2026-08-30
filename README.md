@@ -861,7 +861,7 @@ they cannot.
   length of one `dump()`. A `dump()` from another unit of work inside that window is not
   traced. Harmless, but it is telemetry you will not see.
 
-### Upgrading
+### Upgrading to 2.1
 
 The default behaviour does not change, and neither does any public method. Two
 constructors did, which matters only if you build one yourself or override one in a
