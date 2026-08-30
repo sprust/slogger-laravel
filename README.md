@@ -817,6 +817,33 @@ over, whatever happened to the process that started it. That is the only place s
 looking after the process is gone, and it covers a fatal error or an out-of-memory kill
 too, which nothing running inside the process ever will.
 
+### Durations in a long-lived process
+
+Two different things, kept apart.
+
+**A request's duration** is measured from the moment the watcher sees the request, which
+it takes itself, inside that request's own flow. Nothing shared goes into it: not
+`LARAVEL_START`, which marks where the *process* began - under a server that boots once
+and serves for hours that is the worker's start, and measuring from it reports the
+worker's uptime as every request's duration - and not `Kernel::requestStartedAt()`, which
+is one field for a whole process, so a request starting beside this one replaces it.
+
+What that leaves out is the stretch from entering the kernel to reaching this package's
+middleware: the global middleware in front of it, a fraction of a millisecond. A runtime
+that wants that back has to hand over the moment it accepted the request; there is no
+earlier point a package can read for itself in a worker that booted hours ago
+(`REQUEST_TIME_FLOAT` is the process's start there too).
+
+**`boot_time`** is a fact about the process, and it is reported for the one request that
+boot was for: under php-fpm every request, under a worker its first and no other, `-1`
+after that. A process booted from the console and answering HTTP is a long-lived server
+whatever it says about itself, and never claims it at all - the request that would be
+claiming it arrived long after the boot it would be measuring.
+
+Coming from an earlier version, a request's duration under php-fpm no longer includes
+the framework's bootstrap. Nothing is lost - that is what `boot_time` says - and a trace
+now begins on the timeline where its duration starts measuring, which it did not before.
+
 ### What is per unit of work, and what is not
 
 Per unit of work: the current parent trace id, the stack of open parent traces, the
