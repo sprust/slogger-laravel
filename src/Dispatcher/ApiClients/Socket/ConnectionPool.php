@@ -9,22 +9,32 @@ use Closure;
 /**
  * Connections nobody is sending on, to be taken one at a time.
  *
- * Sending a batch is one write followed by one read on a length-prefixed stream, so it
- * has to have the stream to itself from end to end. Where the trace queue is served by
- * a pool of coroutine consumers, several batches are on their way at once: sharing a
- * single connection puts two frames on the wire interleaved and a sender reads the
- * answer to somebody else's.
+ * Sending a batch is one write followed by one read on a length-prefixed stream, and
+ * the protocol carries nothing to say whose reply is whose - so a sender has to have
+ * the stream to itself from end to end.
+ *
+ * Whether two senders can get inside each other's exchange depends on the runtime, not
+ * on this package: a bare PHP fiber suspends only where it says so, and `Connection`
+ * says so nowhere. A runtime that turns a stream call into a suspension point - which
+ * is what makes coroutines worth having - can, and then a shared connection gets its
+ * frames torn and its answers crossed.
  *
  * A sender takes a connection and gives it back, so a process that sends one batch at a
  * time opens exactly one and reuses it for good - the persistent connection this always
- * had. Concurrent senders each get one of their own, and however many the peak needed
- * stay here to be reused rather than reconnected.
+ * had. Concurrent senders each get one of their own.
  *
  * Nothing about this is aware of fibers, which is the point: it holds for any way of
  * running things at once.
  */
 class ConnectionPool
 {
+    /**
+     * How many are kept for reuse. A burst wider than this is served - `acquire()`
+     * always answers - but what it opened beyond this is closed on the way back
+     * instead of being held open for the rest of the process.
+     */
+    private const MAX_IDLE = 8;
+
     /**
      * @var list<Connection>
      */
@@ -49,6 +59,12 @@ class ConnectionPool
      */
     public function release(Connection $connection): void
     {
+        if (count($this->idle) >= self::MAX_IDLE) {
+            $connection->disconnect();
+
+            return;
+        }
+
         $this->idle[] = $connection;
     }
 }

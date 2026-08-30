@@ -12,11 +12,14 @@ class ConnectionPoolTest extends TestCase
 {
     private int $made = 0;
 
+    private int $closed = 0;
+
     protected function setUp(): void
     {
         parent::setUp();
 
-        $this->made = 0;
+        $this->made   = 0;
+        $this->closed = 0;
     }
 
     /**
@@ -67,13 +70,51 @@ class ConnectionPoolTest extends TestCase
         self::assertSame(3, $this->made, 'nothing new was opened for a load already seen');
     }
 
+    /**
+     * A burst wider than the pool keeps is served, and what it opened beyond that is
+     * closed rather than held open for the rest of the process.
+     */
+    public function testABurstIsServedAndThenGivenBack(): void
+    {
+        $pool = $this->makePool();
+
+        $held = [];
+
+        for ($i = 0; $i < 12; $i++) {
+            $held[] = $pool->acquire();
+        }
+
+        self::assertSame(12, $this->made, 'every sender got one of its own');
+
+        foreach ($held as $connection) {
+            $pool->release($connection);
+        }
+
+        self::assertSame(4, $this->closed, 'the ones past what is kept were closed');
+
+        // and the kept ones are handed out again rather than reconnected
+        for ($i = 0; $i < 8; $i++) {
+            $pool->acquire();
+        }
+
+        self::assertSame(12, $this->made);
+    }
+
     private function makePool(): ConnectionPool
     {
         return new ConnectionPool(
             function (): Connection {
                 $this->made++;
 
-                return $this->createMock(Connection::class);
+                $connection = $this->createMock(Connection::class);
+
+                $connection->method('disconnect')->willReturnCallback(
+                    function (): void {
+                        $this->closed++;
+                    }
+                );
+
+                return $connection;
             }
         );
     }

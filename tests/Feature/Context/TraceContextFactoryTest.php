@@ -97,8 +97,4 @@ class OwnTraceContext implements TraceContextInterface
     public function set(string $key, mixed $value): void
     {
     }
-
-    public function forget(string $key): void
-    {
-    }
 }

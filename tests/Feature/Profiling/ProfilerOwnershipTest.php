@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace SLoggerLaravel\Tests\Feature\Profiling;
 
 use SLoggerLaravel\Configs\WatchersConfig;
+use SLoggerLaravel\Context\ArrayTraceContext;
 use SLoggerLaravel\Profiling\AbstractProfiling;
 use SLoggerLaravel\Profiling\Dto\ProfilingObjects;
 use SLoggerLaravel\Tests\Feature\BaseTestCase;
@@ -46,7 +47,7 @@ class ProfilerOwnershipTest extends BaseTestCase
     {
         $this->getApp()['config']->set('slogger.profiling.enabled', true);
 
-        return new class(new WatchersConfig()) extends AbstractProfiling {
+        return new class(new WatchersConfig(), new ArrayTraceContext()) extends AbstractProfiling {
             protected function onStart(): bool
             {
                 return true;

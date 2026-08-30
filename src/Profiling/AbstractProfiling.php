@@ -3,6 +3,8 @@
 namespace SLoggerLaravel\Profiling;
 
 use SLoggerLaravel\Configs\WatchersConfig;
+use SLoggerLaravel\Context\ArrayTraceContext;
+use SLoggerLaravel\Context\TraceContextInterface;
 use SLoggerLaravel\Profiling\Dto\ProfilingObjects;
 
 abstract class AbstractProfiling
@@ -20,9 +22,17 @@ abstract class AbstractProfiling
     abstract protected function onStop(): ?ProfilingObjects;
 
     public function __construct(
-        private readonly WatchersConfig $loggerConfig
+        private readonly WatchersConfig $loggerConfig,
+        TraceContextInterface $context
     ) {
-        $this->profilingEnabled = $this->loggerConfig->profilingEnabled();
+        // Off wherever units of work do not run one at a time, whatever the config
+        // says. A profiler measures the process, and there is one process however many
+        // units share it: the run a unit starts covers what all the others did, and a
+        // unit that ends without stopping leaves the profiler running with nobody left
+        // to turn it off - for the rest of the process, which then profiles nothing
+        // else and instruments every call it makes.
+        $this->profilingEnabled = $this->loggerConfig->profilingEnabled()
+            && $context instanceof ArrayTraceContext;
     }
 
     public function start(string $traceId): void

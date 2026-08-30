@@ -23,7 +23,13 @@ class Connection
 
     protected int $lengthPrefixLength = 4;
 
-    public function __construct(
+    /**
+     * Final so that `fresh()` can build another of whatever this is: a subclass is free
+     * to change how a connection behaves, not what it takes to open one.
+     *
+     * @see fresh()
+     */
+    final public function __construct(
         protected string $socketAddress,
         protected LoggerInterface $logger,
         protected int $timeoutSeconds = 10,
@@ -104,9 +110,9 @@ class Connection
      *
      * @see ConnectionPool
      */
-    public function fresh(): self
+    public function fresh(): static
     {
-        return new self(
+        return new static(
             socketAddress: $this->socketAddress,
             logger: $this->logger,
             timeoutSeconds: $this->timeoutSeconds,

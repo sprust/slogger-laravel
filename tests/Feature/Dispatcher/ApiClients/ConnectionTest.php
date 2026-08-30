@@ -248,6 +248,31 @@ class ConnectionTest extends BaseTestCase
     }
 
     /**
+     * Another connection to the same receiver, so a second sender never has to wait
+     * for this one's exchange to finish.
+     */
+    public function testFreshGivesAnUnopenedConnectionOfTheSameKind(): void
+    {
+        $connection = new Connection('local', new NullLogger(), timeoutSeconds: 7);
+
+        $fresh = $connection->fresh();
+
+        self::assertNotSame($connection, $fresh);
+        self::assertFalse($fresh->isConnected());
+    }
+
+    /**
+     * And of the same kind means the subclass, not this: the pool would otherwise hand
+     * out plain connections the moment two senders overlapped.
+     */
+    public function testFreshKeepsTheSubclass(): void
+    {
+        $connection = new SubclassedConnection('local', new NullLogger());
+
+        self::assertInstanceOf(SubclassedConnection::class, $connection->fresh());
+    }
+
+    /**
      * @param resource $socket
      */
     private function waitForEof(mixed $socket): void
@@ -276,4 +301,8 @@ class ConnectionTest extends BaseTestCase
         $connectedProperty->setAccessible(true);
         $connectedProperty->setValue($connection, true);
     }
+}
+
+class SubclassedConnection extends Connection
+{
 }

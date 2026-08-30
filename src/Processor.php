@@ -309,7 +309,7 @@ class Processor
             return;
         }
 
-        $index = $this->findStackIndex($traceId);
+        $index = $this->findStackIndex($this->getTracesStack(), $traceId);
 
         if (is_null($index)) {
             // already stopped: a worker can report the same job twice - the timeout
@@ -325,15 +325,20 @@ class Processor
 
         $this->sweepExpiredDetached();
 
-        // re-read: everything above closed traces of its own, and each of those
-        // dispatches, which suspends
+        // taken again rather than carried across the sweeps above: each of them
+        // dispatches, and dispatching suspends, so an index from before one of those
+        // is a claim about a stack that no longer has to hold
         $tracesStack = $this->getTracesStack();
+
+        $index = $this->findStackIndex($tracesStack, $traceId);
+
+        if (is_null($index)) {
+            return;
+        }
 
         $stackItem = $tracesStack[$index];
 
-        array_pop($tracesStack);
-
-        $this->setTracesStack($tracesStack);
+        $this->setTracesStack(array_slice($tracesStack, 0, $index));
 
         // back to whatever this trace was started under
         $this->traceIdContainer->setParentTraceId($stackItem['pre_parent_trace_id']);
@@ -425,10 +430,11 @@ class Processor
         );
     }
 
-    private function findStackIndex(string $traceId): ?int
+    /**
+     * @param list<TraceStackItem> $tracesStack
+     */
+    private function findStackIndex(array $tracesStack, string $traceId): ?int
     {
-        $tracesStack = $this->getTracesStack();
-
         for ($index = count($tracesStack) - 1; $index >= 0; $index--) {
             if ($tracesStack[$index]['trace_id'] === $traceId) {
                 return $index;

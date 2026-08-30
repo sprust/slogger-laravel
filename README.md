@@ -704,7 +704,7 @@ So the state lives in a store, and the store decides what "current" means.
 ### Choosing a store
 
 ```dotenv
-# array (default) | fiber | \App\Tracing\YourStore
+# array (default) | fiber | App\Tracing\YourStore
 SLOGGER_CONTEXT=array
 ```
 
@@ -773,9 +773,18 @@ The consequence is worth knowing before you switch: **a fiber started inside a t
 request begins with no state of its own, so child traces pushed from inside it are
 dropped** - a query, a log line or an event recorded there has no open parent trace in
 that fiber, and `push()` returns early. Parent traces started there are recorded, as
-roots rather than nested under the request. If your host code runs fibers *inside* a
-unit of work (amphp/revolt and anything built on them), `fiber` will cost you that
-telemetry; a store that can name the enclosing coroutine will not.
+roots rather than nested under the request, and so is anything a watcher marks as able
+to stand alone (`can_be_orphan`). If your host code runs fibers *inside* a unit of work
+(amphp/revolt and anything built on them), `fiber` will cost you that telemetry; a store
+that can name the enclosing coroutine will not.
+
+The same applies to an outbound HTTP call whose response is handled somewhere other than
+where the call was made. Guzzle's response hook runs wherever the promise is resolved:
+with curl and `wait()` that is the fiber that made the call, and everything works - but
+under a runtime that settles promises on a loop fiber of its own, the call is opened in
+one unit of work and answered in another, and the trace is never closed. This is not
+about which map the watcher keeps its entry in; the processor's own record of the call
+lives with the unit that made it either way.
 
 ### A unit of work that never reports back
 
@@ -787,9 +796,10 @@ or `CommandFinished`, so the trace closes as failed and everything below is irre
 The case is a unit **dropped while suspended** - the scheduler killed it, a timeout took
 it, the process is shutting down.
 
-Nothing is leaked. The state goes with the unit: PHP unwinds a destroyed fiber's stack,
-and the store releases its map along with it - the open traces, the parent id, the
-outbound calls, the values `add()` collected.
+Nothing the store holds is leaked. The state goes with the unit: PHP unwinds a
+destroyed fiber's stack, and the store releases its map along with it - the open traces,
+the parent id, the outbound calls, the values `add()` collected. (The profiler is not in
+the store and could not survive this, which is why it is refused outright - see below.)
 
 What is lost is the closing update. The parent trace stays `started` in the backend, and
 the outbound calls it left in flight are never tagged `__interrupted`, because the
@@ -818,20 +828,35 @@ Per process, on purpose: which watchers are enabled, the callbacks registered wi
 `add(fn() => ...)`, and the trace dispatcher's batching buffer - per unit it would stop
 batching and multiply the jobs.
 
+Those callbacks are shared, which is what makes them rules rather than values - so
+register them once, from a service provider, and let them read what they need when they
+run: `add('tenant', fn() => tenant()?->id())`. A closure registered per request, closing
+over that request's own objects, is evaluated for every other unit's traces too, and
+puts one request's data on another's - the very thing the rest of this section is about.
+A plain value is this unit's own and is safe anywhere.
+
 The socket client is neither: it keeps a small pool of connections - the one it was
-built with, plus any it opens through `Connection::fresh()` - and a sender holds one
-from the first byte written to the last byte read. A process sending one batch at a
-time opens exactly one and keeps it, as before; concurrent senders each get one of their
-own rather than interleaving frames on a shared stream, and whatever the peak needed is
-reused afterwards rather than reconnected. This holds for any way of running things at
-once, fibers or not.
+built with, plus any it opens through `Connection::fresh()` - and a sender holds one from
+the first byte written to the last byte read. A process sending one batch at a time opens
+exactly one and keeps it, as before; concurrent senders each get one of their own rather
+than interleaving frames on a shared stream, and up to eight are kept for reuse, the rest
+closed on the way back. None of it is aware of fibers, so it holds for any way of running
+things at once.
+
+Whether senders can get inside each other's exchange at all is a property of the runtime,
+not of this package: a bare PHP fiber suspends only where it says so, and `Connection`
+says so nowhere. A runtime that turns a stream call into a suspension point - which is
+what makes coroutines worth having in the first place - can. The pool costs nothing where
+they cannot.
 
 ### Two watchers that concurrency does not suit
 
-- **Profiling** (`SLOGGER_PROFILING_ENABLED`) measures the *process*. The first unit of
-  work to start a run owns it, and the profile it collects covers everything the process
-  did while it ran - every other unit's work included - filed under that one trace.
-  Leave it off under a concurrent runtime.
+- **Profiling** (`SLOGGER_PROFILING_ENABLED`) measures the *process*, so it is refused
+  outright unless the store is `array` - the config asks and the answer is no. A run
+  covers everything the process did while it lasted, every other unit's work included,
+  filed under the one trace that started it; and a unit that ends without stopping owns
+  the profiler for good, leaving the extension instrumenting every call the process
+  makes and no later trace ever profiled.
 - **The dump watcher** swaps `VarDumper`'s handler, which is global to PHP, for the
   length of one `dump()`. A `dump()` from another unit of work inside that window is not
   traced. Harmless, but it is telemetry you will not see.
