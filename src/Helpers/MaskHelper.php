@@ -95,6 +95,29 @@ class MaskHelper
     }
 
     /**
+     * The same for an array whose own top level is the application's data - a header
+     * bag, a decoded body - rather than a watcher's structure. Everything in it is
+     * matched, first level included.
+     *
+     * @param array<int|string, mixed> $data
+     *
+     * @return array<int|string, mixed>
+     */
+    public static function maskDataByRules(array $data, MaskingRules $rules): array
+    {
+        if ($rules->isEmpty()) {
+            return $data;
+        }
+
+        return self::maskNode(
+            data: $data,
+            rules: $rules,
+            mode: MaskingRules::MODE_NONE,
+            depth: 2
+        );
+    }
+
+    /**
      * For a standalone string - a tag, an array key - which no key list can reach.
      *
      * @param array<mixed> $valuePatterns
