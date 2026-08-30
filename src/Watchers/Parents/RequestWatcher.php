@@ -4,7 +4,6 @@ namespace SLoggerLaravel\Watchers\Parents;
 
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Foundation\Http\Events\RequestHandled;
-use Illuminate\Foundation\Http\Kernel;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response as IlluminateResponse;
 use Illuminate\Http\UploadedFile;
@@ -51,6 +50,15 @@ class RequestWatcher implements WatcherInterface
      * would keep the token of `/{action}/{token}`.
      */
     private const UNROUTED_PATH_SEGMENTS = 1;
+
+    /**
+     * Whether the request entitled to `LARAVEL_START` has already had it. A fact about
+     * the process, so a field; claimed with no suspension point in between, so exactly
+     * one request gets it.
+     *
+     * @see claimLaravelStart()
+     */
+    protected bool $laravelStartSpent = false;
 
     /**
      * @var string[]
@@ -124,19 +132,15 @@ class RequestWatcher implements WatcherInterface
 
         $parentTraceId = $event->parentTraceId;
 
-        $bootTime = defined('LARAVEL_START')
-            ? TraceHelper::roundDuration((microtime(true) - LARAVEL_START))
-            : -1;
-
-        if (defined('LARAVEL_START')) {
-            $startedAt = new Carbon(LARAVEL_START);
-        } else {
-            $startedAt = $this->app->get(Kernel::class)->requestStartedAt();
-        }
-
-        $startedAt = $startedAt?->clone() ?? Carbon::now();
-
         $loggedAt = Carbon::now();
+
+        $laravelStart = $this->claimLaravelStart();
+
+        // the time this process spent booting is this request's own only when this
+        // request is what the process was started for
+        $bootTime = is_null($laravelStart)
+            ? -1
+            : TraceHelper::roundDuration(microtime(true) - $laravelStart);
 
         $traceId = $this->processor->startAndGetTraceId(
             type: TraceTypeEnum::Request->value,
@@ -161,7 +165,10 @@ class RequestWatcher implements WatcherInterface
             'trace_id'   => $traceId,
             'request_id' => spl_object_id($event->request),
             'boot_time'  => $bootTime,
-            'started_at' => $startedAt,
+            // the same moment as `logged_at`: this runs inside the request's own flow,
+            // so `now` is this request's own start - not a constant of the process, and
+            // not a field of a kernel the whole process shares
+            'started_at' => $loggedAt->clone(),
             'logged_at'  => $loggedAt,
         ];
 
@@ -246,6 +253,30 @@ class RequestWatcher implements WatcherInterface
         }
 
         return null;
+    }
+
+    /**
+     * How long the process spent booting, for the one request that boot was for.
+     *
+     * `LARAVEL_START` marks where the *process* began: under php-fpm that is this
+     * request, under a server that boots once and serves for hours it is the worker's
+     * start, hours ago. A console-booted process answering HTTP is such a server and
+     * never claims it; any other worker is caught by the claim being spendable once.
+     */
+    protected function claimLaravelStart(): ?float
+    {
+        if (
+            $this->laravelStartSpent
+            || $this->app->runningInConsole()
+            || !defined('LARAVEL_START')
+        ) {
+            return null;
+        }
+
+        $this->laravelStartSpent = true;
+
+        // via constant(): the entry script defines it, so the analyser never sees it
+        return (float) constant('LARAVEL_START');
     }
 
     /**
