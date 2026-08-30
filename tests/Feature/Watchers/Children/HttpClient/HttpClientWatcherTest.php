@@ -14,7 +14,7 @@ use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Utils as Psr7Utils;
 use GuzzleHttp\Promise\Utils;
 use GuzzleHttp\Psr7\Response;
-use ReflectionClass;
+use SLoggerLaravel\Context\TraceContextInterface;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Configs\WatchersConfig;
 use SLoggerLaravel\Guzzle\GuzzleHandlerFactory;
@@ -35,19 +35,19 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
     {
         $this->registerWatcher(JobWatcher::class, null);
 
-        $watcher = $this->bindSharedWatcher();
+        $this->bindSharedWatcher();
 
         dispatch($this->getSuccessCallback());
 
         // otherwise a long-running worker leaks one entry per outbound request
-        self::assertSame(0, $this->countTrackedRequests($watcher));
+        self::assertSame(0, $this->countTrackedRequests());
     }
 
     public function testDoesNotLeakTrackedRequestsOnFailure(): void
     {
         $this->registerWatcher(JobWatcher::class, null);
 
-        $watcher = $this->bindSharedWatcher();
+        $this->bindSharedWatcher();
 
         dispatch(static function (): void {
             $handlerStack = app(GuzzleHandlerFactory::class)->prepareHandler(
@@ -71,7 +71,7 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
             }
         });
 
-        self::assertSame(0, $this->countTrackedRequests($watcher));
+        self::assertSame(0, $this->countTrackedRequests());
     }
 
     public function testParentIsJob(): void
@@ -172,7 +172,7 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
 
     public function testRequestsAreNotSerializedByTracing(): void
     {
-        $watcher = $this->bindSharedWatcher();
+        $this->bindSharedWatcher();
 
         $handlerStack = app(GuzzleHandlerFactory::class)->prepareHandler(
             formatters: new RequestDataFormatters(),
@@ -200,14 +200,14 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
 
         self::assertCount(2, $this->dispatcher->findUpdating());
 
-        self::assertSame(0, $this->countTrackedRequests($watcher));
+        self::assertSame(0, $this->countTrackedRequests());
     }
 
     public function testDoesNotLeakTrackedRequestsSweptByTheProcessor(): void
     {
         $this->registerWatcher(JobWatcher::class, null);
 
-        $watcher = $this->bindSharedWatcher();
+        $this->bindSharedWatcher();
 
         dispatch(static function (): void {
             $handlerStack = app(GuzzleHandlerFactory::class)->prepareHandler(
@@ -232,7 +232,7 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
         );
 
         // and it told the watcher, which would otherwise keep the entry forever
-        self::assertSame(0, $this->countTrackedRequests($watcher));
+        self::assertSame(0, $this->countTrackedRequests());
     }
 
     public function testANonSeekableRequestBodyDoesNotBreakTheTrace(): void
@@ -569,12 +569,20 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
         return app(HttpClientWatcher::class);
     }
 
-    private function countTrackedRequests(HttpClientWatcher $watcher): int
+    /**
+     * The watcher's bookkeeping of the calls it has open. It lives in the store rather
+     * than on the watcher, so a process running several units of work at once keeps
+     * one of these per unit - and a unit that ends with a call still in flight takes
+     * its entry with it instead of leaving it behind for good.
+     *
+     * The key is pinned here on purpose: it is what a host inspecting the store reads.
+     *
+     * @see HttpClientWatcher::CONTEXT_KEY_REQUESTS
+     */
+    private function countTrackedRequests(): int
     {
-        $property = (new ReflectionClass($watcher))->getProperty('requests');
-
         /** @var array<string, mixed> $requests */
-        $requests = $property->getValue($watcher);
+        $requests = app(TraceContextInterface::class)->get('slogger.watcher.http_client.open', []);
 
         return count($requests);
     }

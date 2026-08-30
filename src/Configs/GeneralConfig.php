@@ -16,6 +16,20 @@ class GeneralConfig
         return $this->enabled;
     }
 
+    /**
+     * Falls back to the process-wide store rather than trusting the published config
+     * to carry the key: an application that published `config/slogger.php` before this
+     * existed has no `context` in it, and the answer for it is what it always did.
+     */
+    public function getContextName(): string
+    {
+        $context = config('slogger.context');
+
+        return is_string($context) && $context !== ''
+            ? $context
+            : 'array';
+    }
+
     public function getToken(): string
     {
         return (string) config('slogger.token');

@@ -71,6 +71,41 @@ class QueueDispatcherTest extends BaseTestCase
         Bus::assertDispatched(SendTracesJob::class);
     }
 
+    /**
+     * The buffer is handed over to the job and replaced before anything is dispatched.
+     * Dispatching publishes to a broker, which is a suspension point under a coroutine
+     * runtime: whatever a neighbour writes while this one is asleep has to land in the
+     * next batch, and not in the one already on its way or in the object about to be
+     * thrown away.
+     */
+    public function testTheBufferIsReplacedBeforeDispatchingSoNothingIsSentTwice(): void
+    {
+        Bus::fake();
+
+        $dispatcher = new QueueDispatcher($this->getApp());
+        $this->setMaxBatchSize($dispatcher, 2);
+
+        for ($i = 0; $i < 4; $i++) {
+            $dispatcher->create(
+                $this->makeCreateTrace(isParent: false, parentTraceId: 'parent-1')
+            );
+        }
+
+        $batchSizes = [];
+
+        Bus::assertDispatched(
+            SendTracesJob::class,
+            function (SendTracesJob $job) use (&$batchSizes) {
+                $batchSizes[] = $this->getJobTraces($job)->count();
+
+                return true;
+            }
+        );
+
+        // two batches of two, not a batch of two and a batch of four
+        self::assertSame([2, 2], $batchSizes);
+    }
+
     public function testUpdateDispatchesImmediately(): void
     {
         Bus::fake();

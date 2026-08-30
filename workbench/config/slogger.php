@@ -28,6 +28,14 @@ return [
     // trace id prefix. if empty, uses slugged app.name or "app".
     'trace_id_prefix' => env('SLOGGER_TRACE_ID_PREFIX', ''),
 
+    // where the state of one unit of work - one request, one job, one command - is kept.
+    // one of: array, fiber - or the class name of your own TraceContextInterface.
+    //   array: a single map for the whole process. the default, and right for anything
+    //          that handles one request, job or command at a time.
+    //   fiber: a map per running fiber, and a single map when none is running. set this
+    //          only under a runtime that gives each unit of work its own PHP fiber.
+    'context' => env('SLOGGER_CONTEXT', 'array'),
+
     // dispatcher selection and configuration.
     'dispatchers' => [
         // one of: queue, memory.

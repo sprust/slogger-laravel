@@ -96,6 +96,23 @@ class Connection
         );
     }
 
+    /**
+     * Another connection to the same receiver, not yet opened.
+     *
+     * A sender holds its connection from the first byte written to the last byte read,
+     * so a sender running beside it needs one of its own rather than a turn at this.
+     *
+     * @see ConnectionPool
+     */
+    public function fresh(): self
+    {
+        return new self(
+            socketAddress: $this->socketAddress,
+            logger: $this->logger,
+            timeoutSeconds: $this->timeoutSeconds,
+        );
+    }
+
     public function disconnect(): void
     {
         if ($this->socket) {

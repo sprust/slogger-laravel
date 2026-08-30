@@ -14,6 +14,7 @@ use Illuminate\Support\Str;
 use Illuminate\View\View;
 use Psr\Container\ContainerExceptionInterface;
 use Psr\Container\NotFoundExceptionInterface;
+use SLoggerLaravel\Context\TraceContextInterface;
 use SLoggerLaravel\DataResolver;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Enums\TraceTypeEnum;
@@ -31,9 +32,20 @@ use Symfony\Component\HttpFoundation\Response;
 
 /**
  * @see HttpMiddleware - required for a tracing of requests
+ *
+ * @phpstan-type OpenRequest array{trace_id: string, request_id: int, boot_time: float, started_at: Carbon, logged_at: Carbon}
  */
 class RequestWatcher implements WatcherInterface
 {
+    /**
+     * Requests started and not yet handled, outermost first.
+     *
+     * Per unit of work, not per process: a process handling two requests at once has
+     * two of these, and takeRequest() truncates whatever sits above the one it took.
+     *
+     * @see getOpenRequests()
+     */
+    protected const CONTEXT_KEY_REQUESTS = 'slogger.watcher.request.open';
     /**
      * How much of a path survives when there is no route to name it. Two segments
      * would keep the token of `/{action}/{token}`.
@@ -65,16 +77,10 @@ class RequestWatcher implements WatcherInterface
 
     protected int $maxRequestBytes = MaskHelper::MAX_READABLE_BYTES;
 
-    /**
-     * Requests started and not yet handled, outermost first.
-     *
-     * @var list<array{trace_id: string, request_id: int, boot_time: float, started_at: Carbon, logged_at: Carbon}>
-     */
-    protected array $requests = [];
-
     public function __construct(
         protected readonly Application $app,
         protected readonly Processor $processor,
+        protected readonly TraceContextInterface $context,
     ) {
         $this->formatters = new RequestDataFormatters();
     }
@@ -85,10 +91,12 @@ class RequestWatcher implements WatcherInterface
         // finish, closing the wrong trace
         $this->processor->onTraceInterrupted(
             function (string $traceId): void {
-                $this->requests = array_values(
-                    array_filter(
-                        $this->requests,
-                        static fn(array $request): bool => $request['trace_id'] !== $traceId
+                $this->setOpenRequests(
+                    array_values(
+                        array_filter(
+                            $this->getOpenRequests(),
+                            static fn(array $request): bool => $request['trace_id'] !== $traceId
+                        )
                     )
                 );
             }
@@ -145,13 +153,19 @@ class RequestWatcher implements WatcherInterface
             customParentTraceId: $parentTraceId
         );
 
-        $this->requests[] = [
+        // read after the trace was started, not before: starting it dispatches, and
+        // dispatching suspends
+        $requests = $this->getOpenRequests();
+
+        $requests[] = [
             'trace_id'   => $traceId,
             'request_id' => spl_object_id($event->request),
             'boot_time'  => $bootTime,
             'started_at' => $startedAt,
             'logged_at'  => $loggedAt,
         ];
+
+        $this->setOpenRequests($requests);
     }
 
     public function handleRequestHandled(RequestHandled $event): void
@@ -211,25 +225,46 @@ class RequestWatcher implements WatcherInterface
      * By identity: `RequestHandled` fires for every request, `RequestHandling` only
      * for the routed ones, so the top entry was not always this request's.
      *
-     * @return array{trace_id: string, request_id: int, boot_time: float, started_at: Carbon, logged_at: Carbon}|null
+     * @return OpenRequest|null
      */
     protected function takeRequest(Request $request): ?array
     {
         $requestId = spl_object_id($request);
 
-        for ($index = count($this->requests) - 1; $index >= 0; $index--) {
-            if ($this->requests[$index]['request_id'] !== $requestId) {
+        $requests = $this->getOpenRequests();
+
+        for ($index = count($requests) - 1; $index >= 0; $index--) {
+            if ($requests[$index]['request_id'] !== $requestId) {
                 continue;
             }
 
-            $found = $this->requests[$index];
+            $found = $requests[$index];
 
-            $this->requests = array_slice($this->requests, 0, $index);
+            $this->setOpenRequests(array_slice($requests, 0, $index));
 
             return $found;
         }
 
         return null;
+    }
+
+    /**
+     * @return list<OpenRequest>
+     */
+    protected function getOpenRequests(): array
+    {
+        /** @var list<OpenRequest> $requests */
+        $requests = $this->context->get(static::CONTEXT_KEY_REQUESTS, []);
+
+        return $requests;
+    }
+
+    /**
+     * @param list<OpenRequest> $requests
+     */
+    protected function setOpenRequests(array $requests): void
+    {
+        $this->context->set(static::CONTEXT_KEY_REQUESTS, $requests);
     }
 
     /**

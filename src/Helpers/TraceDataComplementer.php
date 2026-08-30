@@ -6,11 +6,21 @@ use Closure;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\Str;
 use SLoggerLaravel\Configs\WatchersConfig;
+use SLoggerLaravel\Context\TraceContextInterface;
 
 class TraceDataComplementer
 {
     /** One level in, which is where the dispatcher job's key list reaches them. */
     public const ADDITIONAL_KEY = '__add';
+
+    /**
+     * Per unit, not per process: `user_id`, `tenant`, `request_id` - what a request
+     * has and the next one does not. Kept in the store for that reason: a field here
+     * would put one request's user on another request's traces.
+     *
+     * @see getAdditional()
+     */
+    private const CONTEXT_KEY_ADDITIONAL = 'slogger.complementer.additional';
 
     private readonly string $basePathVendor;
     private readonly string $basePathPackages;
@@ -35,17 +45,10 @@ class TraceDataComplementer
      */
     private array $providers = [];
 
-    /**
-     * Per unit, not per process: `user_id`, `tenant`, `request_id` - what a request
-     * has and the next one does not.
-     *
-     * @var array<string, mixed>
-     */
-    private array $additional = [];
-
     public function __construct(
         private readonly Application $app,
-        WatchersConfig $watchersConfig
+        WatchersConfig $watchersConfig,
+        private readonly TraceContextInterface $context
     ) {
         $this->basePathVendor    = base_path('vendor' . DIRECTORY_SEPARATOR);
         $this->basePathPackages  = base_path('packages' . DIRECTORY_SEPARATOR);
@@ -67,18 +70,28 @@ class TraceDataComplementer
 
             // a value left under this key earlier would otherwise shadow the
             // callback that has just replaced it
-            unset($this->additional[$key]);
+            $additional = $this->getAdditional();
+
+            unset($additional[$key]);
+
+            $this->setAdditional($additional);
 
             return;
         }
 
-        $this->additional[$key] = $value;
+        $additional = $this->getAdditional();
+
+        $additional[$key] = $value;
+
+        $this->setAdditional($additional);
     }
 
     /** @see Processor::stop() */
     public function endUnitOfWork(): void
     {
-        $this->additional = [];
+        // an empty map, not a forgotten key: a store whose reads fall through to an
+        // enclosing unit would otherwise hand back that unit's values again
+        $this->setAdditional([]);
     }
 
     /**
@@ -132,7 +145,7 @@ class TraceDataComplementer
         // this unit's own values win over the process-wide rules
         $configured = [
             ...$this->providers,
-            ...$this->additional,
+            ...$this->getAdditional(),
         ];
 
         if (!$configured) {
@@ -150,5 +163,24 @@ class TraceDataComplementer
         }
 
         $data[self::ADDITIONAL_KEY] = $additional;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function getAdditional(): array
+    {
+        /** @var array<string, mixed> $additional */
+        $additional = $this->context->get(self::CONTEXT_KEY_ADDITIONAL, []);
+
+        return $additional;
+    }
+
+    /**
+     * @param array<string, mixed> $additional
+     */
+    private function setAdditional(array $additional): void
+    {
+        $this->context->set(self::CONTEXT_KEY_ADDITIONAL, $additional);
     }
 }

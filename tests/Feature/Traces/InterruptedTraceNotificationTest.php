@@ -7,7 +7,7 @@ namespace SLoggerLaravel\Tests\Feature\Traces;
 use Illuminate\Console\Events\CommandFinished;
 use Illuminate\Console\Events\CommandStarting;
 use Illuminate\Support\Facades\Event;
-use ReflectionProperty;
+use SLoggerLaravel\Context\TraceContextInterface;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Processor;
 use SLoggerLaravel\Tests\Feature\Watchers\BaseWatcherTestCase;
@@ -106,16 +106,23 @@ class InterruptedTraceNotificationTest extends BaseWatcherTestCase
     }
 
     /**
-     * The watcher's own bookkeeping of the commands it has open.
+     * The watcher's own bookkeeping of the commands it has open. It lives in the
+     * store rather than on the watcher, so a process running several units of work at
+     * once keeps one of these per unit.
+     *
+     * The key is pinned here on purpose: it is what a host inspecting the store reads,
+     * and a rename that went unnoticed would be a breaking change.
+     *
+     * @see CommandWatcher::CONTEXT_KEY_COMMANDS
      *
      * @return list<array{trace_id: string, command: string|null, started_at: mixed}>
      */
     private function openCommands(): array
     {
-        $watcher = $this->getApp()->make(CommandWatcher::class);
-
         /** @var list<array{trace_id: string, command: string|null, started_at: mixed}> $commands */
-        $commands = (new ReflectionProperty(CommandWatcher::class, 'commands'))->getValue($watcher);
+        $commands = $this->getApp()
+            ->make(TraceContextInterface::class)
+            ->get('slogger.watcher.command.open', []);
 
         return $commands;
     }
