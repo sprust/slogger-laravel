@@ -9,6 +9,8 @@ class FakeQueueJob
     public int $releaseCount = 0;
     public int $deleteCount  = 0;
 
+    public ?int $releaseDelay = null;
+
     public function __construct(private readonly int $attempts)
     {
     }
@@ -21,6 +23,8 @@ class FakeQueueJob
     public function release(int $delay = 0): void
     {
         $this->releaseCount++;
+
+        $this->releaseDelay = $delay;
     }
 
     public function delete(): void

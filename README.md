@@ -200,6 +200,12 @@ Send retries are fixed by design: 5 attempts with backoff of 5/10/30/60 seconds 
 After the attempts are exhausted the batch is **dropped** with a rate-limited warning in the
 SLogger log channel — telemetry never fills the `failed_jobs` storage.
 
+A failed attempt never reaches the application's exception handler: the job releases itself
+with the pause instead of throwing - the worker reports whatever escapes `handle()`, attempt by
+attempt, and a receiver restart used to become thousands of errors in the host's own
+monitoring. The exception is a `sync` connection, which has no later attempt, so the error is
+thrown there as before.
+
 ### Request parent trace header
 
 ```dotenv

@@ -6,6 +6,7 @@ use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\Jobs\SyncJob;
 use Illuminate\Support\Facades\Log;
 use JsonException;
 use RuntimeException;
@@ -86,7 +87,12 @@ class SendTracesJob implements ShouldQueue
                 fn() => $apiClient->sendTraces($traces)
             );
         } catch (Throwable $exception) {
-            if ($this->job && $this->job->attempts() >= $this->tries) {
+            // a sync job has no later attempt to be released to
+            if (!$this->job || $this->job instanceof SyncJob) {
+                throw $exception;
+            }
+
+            if ($this->job->attempts() >= $this->tries) {
                 // drop the batch: telemetry must not clutter the failed jobs storage
                 $this->job->delete();
 
@@ -95,8 +101,10 @@ class SendTracesJob implements ShouldQueue
                 return;
             }
 
-            // let Laravel release the job with the configured backoff
-            throw $exception;
+            // released here, not rethrown: the worker hands whatever escapes handle() to
+            // the application's exception handler, attempt by attempt - a receiver restart
+            // would flood the host's error reporting with telemetry's own retries
+            $this->release($this->backoffAfter($this->job->attempts()));
         }
     }
 
@@ -111,6 +119,19 @@ class SendTracesJob implements ShouldQueue
         self::$lastDropLogAt  = 0;
         self::$droppedTraces  = 0;
         self::$droppedBatches = 0;
+    }
+
+    /**
+     * The pause the worker would have picked: the one for this attempt, the last one
+     * past the end of the list.
+     *
+     * @see \Illuminate\Queue\Worker::calculateBackoff()
+     */
+    private function backoffAfter(int $attempts): int
+    {
+        $backoff = is_array($this->backoff) ? $this->backoff : [$this->backoff];
+
+        return $backoff[min($attempts, count($backoff)) - 1] ?? 0;
     }
 
     private function logDrop(GeneralConfig $config, ?Throwable $exception): void

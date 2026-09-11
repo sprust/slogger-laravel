@@ -4,8 +4,15 @@ declare(strict_types=1);
 
 namespace SLoggerLaravel\Tests\Feature\Dispatcher\Items;
 
+use Illuminate\Contracts\Debug\ExceptionHandler;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Queue\Jobs\SyncJob;
+use Illuminate\Queue\Worker;
+use Illuminate\Queue\WorkerOptions;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Psr\Log\NullLogger;
 use ReflectionClass;
 use RuntimeException;
@@ -86,26 +93,91 @@ class SendTracesJobTest extends BaseTestCase
     /**
      * @throws Throwable
      */
-    public function testHandleRethrowsWhenAttemptsLeft(): void
+    public function testHandleReleasesWithBackoffWhenAttemptsLeft(): void
+    {
+        // not rethrown: the worker would report every attempt to the host's handler
+        foreach ([1 => 5, 2 => 10, 3 => 30, 4 => 60] as $attempts => $expectedDelay) {
+            $job = new SendTracesJob($this->makeTraces());
+
+            $queueJob = $this->makeQueueJob(attempts: $attempts);
+
+            $this->setQueueJob($job, $queueJob);
+
+            $job->handle($this->makeProcessor(), $this->makeFailingApiClient(), new GeneralConfig(), $this->makeMasker());
+
+            self::assertSame(1, $queueJob->releaseCount, "attempt $attempts");
+            self::assertSame($expectedDelay, $queueJob->releaseDelay, "attempt $attempts");
+            self::assertSame(0, $queueJob->deleteCount, "attempt $attempts");
+        }
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testHandleThrowsOnSyncQueue(): void
+    {
+        // releasing a sync job is a no-op: the batch would vanish without a word
+        $job = new SendTracesJob($this->makeTraces());
+
+        $this->setQueueJob($job, new SyncJob($this->getApp(), '{}', 'sync', 'default'));
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('fail');
+
+        $job->handle($this->makeProcessor(), $this->makeFailingApiClient(), new GeneralConfig(), $this->makeMasker());
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testHandleReleasesWithIntBackoffAssignedByQueueDriver(): void
     {
         $job = new SendTracesJob($this->makeTraces());
 
-        $queueJob = $this->makeQueueJob(attempts: 1);
+        $job->backoff = 7;
+
+        $queueJob = $this->makeQueueJob(attempts: 3);
 
         $this->setQueueJob($job, $queueJob);
 
-        $exception = null;
+        $job->handle($this->makeProcessor(), $this->makeFailingApiClient(), new GeneralConfig(), $this->makeMasker());
 
-        try {
-            $job->handle($this->makeProcessor(), $this->makeFailingApiClient(), new GeneralConfig(), $this->makeMasker());
-        } catch (Throwable $exception) {
-            // keep for assertions below
-        }
+        self::assertSame(7, $queueJob->releaseDelay);
+    }
 
-        // the exception is rethrown: retries and backoff are managed by Laravel
-        self::assertInstanceOf(RuntimeException::class, $exception);
-        self::assertSame(0, $queueJob->releaseCount);
-        self::assertSame(0, $queueJob->deleteCount);
+    /**
+     * The regression itself: a failed attempt that escapes `handle()` reaches the
+     * application's exception handler, and a receiver restart becomes thousands of
+     * error reports in the host's own monitoring.
+     *
+     * @throws Throwable
+     */
+    public function testWorkerDoesNotReportFailedAttempt(): void
+    {
+        $this->useDatabaseQueue();
+
+        dispatch(new SendTracesJob($this->makeTraces()));
+
+        $this->getApp()->instance(ApiClientInterface::class, $this->makeFailingApiClient());
+
+        $handler = $this->createMock(ExceptionHandler::class);
+        $handler->expects(self::never())->method('report');
+
+        $this->getApp()->instance(ExceptionHandler::class, $handler);
+
+        $worker = $this->getApp()->make('queue.worker');
+
+        assert($worker instanceof Worker);
+
+        $worker->runNextJob('slogger-test', 'slogger', new WorkerOptions());
+
+        $row = DB::table('jobs')->first();
+
+        // still queued, released for the second attempt after the first pause
+        self::assertNotNull($row);
+        self::assertSame(1, (int) $row->attempts);
+        self::assertNull($row->reserved_at);
+        self::assertGreaterThanOrEqual(time() + 4, (int) $row->available_at);
     }
 
     /**
@@ -157,6 +229,30 @@ class SendTracesJobTest extends BaseTestCase
             ->andReturn(new NullLogger());
 
         $job->failed(new RuntimeException('fail'));
+    }
+
+    private function useDatabaseQueue(): void
+    {
+        config([
+            'queue.connections.slogger-test' => [
+                'driver'      => 'database',
+                'table'       => 'jobs',
+                'queue'       => 'slogger',
+                'retry_after' => 90,
+            ],
+            'slogger.dispatchers.queue.connection' => 'slogger-test',
+            'slogger.dispatchers.queue.name'       => 'slogger',
+        ]);
+
+        Schema::create('jobs', static function (Blueprint $table): void {
+            $table->bigIncrements('id');
+            $table->string('queue')->index();
+            $table->longText('payload');
+            $table->unsignedTinyInteger('attempts');
+            $table->unsignedInteger('reserved_at')->nullable();
+            $table->unsignedInteger('available_at');
+            $table->unsignedInteger('created_at');
+        });
     }
 
     private function makeProcessor(): Processor
