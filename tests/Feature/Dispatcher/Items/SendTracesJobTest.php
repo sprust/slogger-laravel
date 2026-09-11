@@ -25,6 +25,7 @@ use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TracesObject;
 use SLoggerLaravel\Processor;
 use SLoggerLaravel\Tests\Feature\BaseTestCase;
+use stdClass;
 use Throwable;
 
 class SendTracesJobTest extends BaseTestCase
@@ -174,7 +175,7 @@ class SendTracesJobTest extends BaseTestCase
         $row = DB::table('jobs')->first();
 
         // still queued, released for the second attempt after the first pause
-        self::assertNotNull($row);
+        self::assertInstanceOf(stdClass::class, $row);
         self::assertSame(1, (int) $row->attempts);
         self::assertNull($row->reserved_at);
         self::assertGreaterThanOrEqual(time() + 4, (int) $row->available_at);
