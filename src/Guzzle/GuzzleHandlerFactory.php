@@ -2,9 +2,11 @@
 
 namespace SLoggerLaravel\Guzzle;
 
+use Closure;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
 use GuzzleHttp\Promise\PromiseInterface;
+use GuzzleHttp\TransferStats;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 use RuntimeException;
@@ -44,36 +46,67 @@ readonly class GuzzleHandlerFactory
 
     private function response(RequestDataFormatters $formatters): callable
     {
-        return Middleware::tap(
-            after: function (
-                RequestInterface $request,
-                array $options,
-                PromiseInterface $response
-            ) use ($formatters): void {
-                // never wait() here: tap's `after` is synchronous, and waiting turns
-                // Http::pool() into a serial loop
+        return function (callable $handler) use ($formatters): callable {
+            return function (RequestInterface $request, array $options) use ($handler, $formatters): PromiseInterface {
+                // per call, not in the store: the handler reports the stats before the
+                // promise settles, and Http::pool() keeps several calls in flight
+                $transferStats = null;
+
+                $handlerOptions = [
+                    ...$options,
+                    'on_stats' => $this->collectStats($options['on_stats'] ?? null, $transferStats),
+                ];
+
+                /** @var PromiseInterface $response */
+                $response = $handler($request, $handlerOptions);
+
+                // never wait() here: waiting turns Http::pool() into a serial loop
                 $response->then(
-                    function (ResponseInterface $responseResolved) use ($request, $options, $formatters) {
+                    function (ResponseInterface $responseResolved) use (
+                        $request,
+                        $options,
+                        $formatters,
+                        &$transferStats
+                    ) {
                         $this->httpClientWatcher->handleResponse(
                             request: $request,
                             options: $options,
                             response: $responseResolved,
-                            formatters: $formatters
+                            formatters: $formatters,
+                            transferStats: $transferStats
                         );
 
                         return $responseResolved;
                     },
-                    function (mixed $reason) use ($request, $formatters): void {
+                    function (mixed $reason) use ($request, $formatters, &$transferStats): void {
                         $this->httpClientWatcher->handleInvalidResponse(
                             request: $request,
                             exception: $reason instanceof Throwable
                                 ? $reason
                                 : new RuntimeException((string) (is_scalar($reason) ? $reason : 'unknown error')),
-                            formatters: $formatters
+                            formatters: $formatters,
+                            transferStats: $transferStats
                         );
                     }
                 );
+
+                return $response;
+            };
+        };
+    }
+
+    /**
+     * The caller's own `on_stats` is called on: Laravel's Http client sets one and fills
+     * `$response->transferStats` from it.
+     */
+    private function collectStats(mixed $onStats, ?TransferStats &$transferStats): Closure
+    {
+        return static function (TransferStats $stats) use ($onStats, &$transferStats): void {
+            $transferStats = $stats;
+
+            if (is_callable($onStats)) {
+                $onStats($stats);
             }
-        );
+        };
     }
 }

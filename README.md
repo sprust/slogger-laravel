@@ -260,7 +260,7 @@ Watcher data highlights:
   the masker to read is recorded as `__skipped` instead
 - `db`: query, bindings, time. The watcher masks a binding itself, by length: a string
   longer than five characters becomes `********`, a shorter or numeric one is kept
-- `http-client`: method, url, query/query_string, request/response (concurrent requests are traced independently, so `Http::pool()` works)
+- `http-client`: method, url, query/query_string, request/response, connection timings under `transfer` (concurrent requests are traced independently, so `Http::pool()` works)
 - `schedule`: command, description, cron, output (read up to the masker's limit)
 - `dump`, `log`, `gate`: dump/message/ability info
 
@@ -691,6 +691,38 @@ new \GuzzleHttp\Client([
 
 Formatters hide and truncate; sensitive values are masked later, by the
 dispatcher job.
+
+### Connection timings
+
+When the call goes through curl (Guzzle's default handler), the trace carries what curl
+measured, under `transfer` - for a failed call too, so a server that accepted the
+connection and never answered is told apart from one that could not be reached:
+
+```json
+"transfer": {
+    "namelookup_time": 0.001234,
+    "connect_time": 0.021,
+    "appconnect_time": 0.063,
+    "pretransfer_time": 0.0631,
+    "starttransfer_time": 0.25,
+    "total_time": 0.3,
+    "primary_ip": "93.184.216.34"
+}
+```
+
+- **The times are cumulative from the start of the call, in seconds**, as curl reports
+  them: `connect_time` is how long it took to connect, DNS included; `appconnect_time`
+  is when the TLS handshake was done (`0` over plain http); `starttransfer_time` is the
+  first byte of the response.
+- **A reused connection reads `0`.** A keep-alive connection taken from curl's pool was
+  not looked up or connected again, so `namelookup_time` and `connect_time` are `0` -
+  that is not a measurement error.
+- **No curl, no `transfer`.** The stream handler and a mock report no handler stats, and
+  the key is left out rather than filled with zeros.
+
+The timings arrive through Guzzle's `on_stats` option. An `on_stats` of your own - or
+the one Laravel's `Http` client sets to fill `$response->transferStats` - is still
+called.
 
 ## Concurrency
 

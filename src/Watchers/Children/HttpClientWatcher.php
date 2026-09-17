@@ -2,6 +2,7 @@
 
 namespace SLoggerLaravel\Watchers\Children;
 
+use GuzzleHttp\TransferStats;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Psr\Http\Message\RequestInterface;
@@ -22,7 +23,7 @@ use SLoggerLaravel\Watchers\WatcherInterface;
 use Throwable;
 
 /**
- * @phpstan-type OpenOutboundRequest array{started_at: Carbon}
+ * @phpstan-type OpenOutboundRequest array{started_at: Carbon, transfer?: array<string, float|string>|null}
  */
 class HttpClientWatcher implements WatcherInterface
 {
@@ -44,6 +45,21 @@ class HttpClientWatcher implements WatcherInterface
      * @see getOpenRequests()
      */
     protected const CONTEXT_KEY_REQUESTS = 'slogger.watcher.http_client.open';
+
+    /**
+     * What curl measured, cumulative from the start of the call, in seconds. A
+     * connection reused from the pool was not looked up or connected again, so those
+     * read 0.
+     */
+    protected const TRANSFER_TIMINGS = [
+        'namelookup_time',
+        'connect_time',
+        'appconnect_time',
+        'pretransfer_time',
+        'starttransfer_time',
+        'total_time',
+    ];
+
     protected string $headerTraceIdKey;
     protected ?string $headerParentTraceIdKey;
 
@@ -91,10 +107,13 @@ class HttpClientWatcher implements WatcherInterface
         RequestInterface $request,
         array $options,
         ResponseInterface $response,
-        RequestDataFormatters $formatters
+        RequestDataFormatters $formatters,
+        ?TransferStats $transferStats = null
     ): void {
         $this->processor->handleWatcher(
-            function () use ($request, $options, $response, $formatters) {
+            function () use ($request, $options, $response, $formatters, $transferStats) {
+                $this->rememberTransferStats($request, $transferStats);
+
                 $this->onHandleResponse(
                     request: $request,
                     options: $options,
@@ -108,10 +127,13 @@ class HttpClientWatcher implements WatcherInterface
     final public function handleInvalidResponse(
         RequestInterface $request,
         Throwable $exception,
-        RequestDataFormatters $formatters
+        RequestDataFormatters $formatters,
+        ?TransferStats $transferStats = null
     ): void {
         $this->processor->handleWatcher(
-            function () use ($request, $exception, $formatters) {
+            function () use ($request, $exception, $formatters, $transferStats) {
+                $this->rememberTransferStats($request, $transferStats);
+
                 $this->onHandleInvalidResponse(
                     request: $request,
                     exception: $exception,
@@ -197,6 +219,7 @@ class HttpClientWatcher implements WatcherInterface
                     'headers'     => $this->prepareResponseHeaders($request, $response, $formatters),
                     'body'        => $this->prepareResponseBody($request, $response, $formatters),
                 ],
+                ...$this->getTransferData($requestData),
             ],
             duration: TraceHelper::calcDuration($startedAt),
             parentLoggedAt: $startedAt,
@@ -232,6 +255,7 @@ class HttpClientWatcher implements WatcherInterface
                     'payload' => $this->prepareRequestParameters($request, $formatters),
                 ],
                 'exception' => DataFormatter::exception($exception),
+                ...$this->getTransferData($requestData),
             ],
             duration: TraceHelper::calcDuration($startedAt),
             parentLoggedAt: $startedAt,
@@ -242,7 +266,7 @@ class HttpClientWatcher implements WatcherInterface
      * By the id the outbound request carries, since responses arrive in no particular
      * order. Taken before the trace is stopped, so a stop() that throws leaks nothing.
      *
-     * @return array{trace_id: string, started_at: Carbon}|null
+     * @return array{trace_id: string, started_at: Carbon, transfer?: array<string, float|string>|null}|null
      */
     protected function takeOpenRequest(RequestInterface $request): ?array
     {
@@ -265,6 +289,80 @@ class HttpClientWatcher implements WatcherInterface
         $this->setOpenRequests($requests);
 
         return ['trace_id' => $traceId, ...$requestData];
+    }
+
+    /**
+     * Kept with the open call rather than handed to the hooks: the response hooks are
+     * the extension point, and a parameter added to them breaks every override.
+     */
+    protected function rememberTransferStats(RequestInterface $request, ?TransferStats $transferStats): void
+    {
+        $transfer = $transferStats ? $this->prepareTransfer($transferStats) : null;
+
+        if (is_null($transfer)) {
+            return;
+        }
+
+        $traceId = $request->getHeader($this->headerTraceIdKey)[0] ?? null;
+
+        if (!is_string($traceId)) {
+            return;
+        }
+
+        $requests = $this->getOpenRequests();
+
+        if (!isset($requests[$traceId])) {
+            return;
+        }
+
+        $requests[$traceId]['transfer'] = $transfer;
+
+        $this->setOpenRequests($requests);
+    }
+
+    /**
+     * Only a handler that measured the connection has anything to say: curl does, the
+     * stream handler and a mock report no handler stats.
+     *
+     * @return array<string, float|string>|null
+     */
+    protected function prepareTransfer(TransferStats $transferStats): ?array
+    {
+        $stats = $transferStats->getHandlerStats();
+
+        $transfer = [];
+
+        foreach (static::TRANSFER_TIMINGS as $key) {
+            $value = $stats[$key] ?? null;
+
+            if (is_int($value) || is_float($value)) {
+                $transfer[$key] = TraceHelper::roundDuration((float) $value);
+            }
+        }
+
+        if (!$transfer) {
+            return null;
+        }
+
+        $primaryIp = $stats['primary_ip'] ?? null;
+
+        if (is_string($primaryIp) && $primaryIp !== '') {
+            $transfer['primary_ip'] = $primaryIp;
+        }
+
+        return $transfer;
+    }
+
+    /**
+     * @param array{transfer?: array<string, float|string>|null} $requestData
+     *
+     * @return array{transfer?: array<string, float|string>}
+     */
+    protected function getTransferData(array $requestData): array
+    {
+        $transfer = $requestData['transfer'] ?? null;
+
+        return $transfer ? ['transfer' => $transfer] : [];
     }
 
     /**
