@@ -89,11 +89,6 @@ class HttpClientTransferStatsTest extends BaseWatcherTestCase
             // on purpose
         }
 
-        // a handler that rejects synchronously, as curl's does, throws before the
-        // queued rejection hook runs; Guzzle runs the queue on the next wait or at
-        // shutdown
-        Utils::queue()->run();
-
         $data = $this->findStoppedData(TraceStatusEnum::Failed);
 
         self::assertArrayHasKey('exception', $data);

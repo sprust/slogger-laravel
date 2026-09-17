@@ -12,8 +12,12 @@ use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Psr7\NoSeekStream;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Utils as Psr7Utils;
+use GuzzleHttp\Promise\Create;
+use GuzzleHttp\Promise\PromiseInterface;
+use GuzzleHttp\Promise\RejectionException;
 use GuzzleHttp\Promise\Utils;
 use GuzzleHttp\Psr7\Response;
+use Psr\Http\Message\RequestInterface;
 use SLoggerLaravel\Context\TraceContextInterface;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Configs\WatchersConfig;
@@ -72,6 +76,68 @@ class HttpClientWatcherTest extends BaseChildWatcherTestCase
         });
 
         self::assertSame(0, $this->countTrackedRequests());
+    }
+
+    public function testASynchronousFailureIsClosedBeforeTheCallerSeesIt(): void
+    {
+        // curl's synchronous handler fails with an already rejected promise, and
+        // wait() throws it without running the queue the rejection hook waits in
+        $client = new Client([
+            'handler' => app(GuzzleHandlerFactory::class)->prepareHandler(
+                formatters: new RequestDataFormatters(),
+                handlerStack: HandlerStack::create(
+                    static fn(RequestInterface $request): PromiseInterface => Create::rejectionFor(
+                        new ConnectException('refused', $request)
+                    )
+                )
+            ),
+        ]);
+
+        $updating = null;
+
+        try {
+            $client->request('GET', 'https://example.test/alpha');
+        } catch (ConnectException) {
+            // not left to the next wait() or to shutdown: in a long-running worker
+            // that is whenever the next call happens to be made
+            $updating = $this->dispatcher->findUpdating();
+        }
+
+        self::assertNotNull($updating, 'the call must fail');
+        self::assertCount(1, $updating);
+        self::assertSame(TraceStatusEnum::Failed->value, $updating[0]->status);
+        self::assertSame('refused', ($updating[0]->data ?? [])['exception']['message'] ?? null);
+
+        self::assertSame(0, $this->countTrackedRequests());
+
+        // and the queue closes nothing a second time
+        Utils::queue()->run();
+
+        self::assertCount(1, $this->dispatcher->findUpdating());
+    }
+
+    public function testASynchronousRejectionWithoutAnExceptionIsClosed(): void
+    {
+        $client = new Client([
+            'handler' => app(GuzzleHandlerFactory::class)->prepareHandler(
+                formatters: new RequestDataFormatters(),
+                handlerStack: HandlerStack::create(
+                    static fn(): PromiseInterface => Create::rejectionFor('boom')
+                )
+            ),
+        ]);
+
+        try {
+            $client->request('GET', 'https://example.test/alpha');
+        } catch (RejectionException) {
+            // on purpose
+        }
+
+        $updating = $this->dispatcher->findUpdating();
+
+        self::assertCount(1, $updating);
+        self::assertSame(TraceStatusEnum::Failed->value, $updating[0]->status);
+        self::assertSame('boom', ($updating[0]->data ?? [])['exception']['message'] ?? null);
     }
 
     public function testParentIsJob(): void
