@@ -710,10 +710,22 @@ connection and never answered is told apart from one that could not be reached:
 }
 ```
 
-- **The times are cumulative from the start of the call, in seconds**, as curl reports
-  them: `connect_time` is how long it took to connect, DNS included; `appconnect_time`
-  is when the TLS handshake was done (`0` over plain http); `starttransfer_time` is the
-  first byte of the response.
+The times are in seconds and **cumulative from the start of the call**, as curl reports
+them: each includes every phase before it.
+
+| Field | What it is |
+|---|---|
+| `namelookup_time` | DNS lookup done |
+| `connect_time` | TCP connection to the server established - the connect time, DNS included |
+| `appconnect_time` | TLS handshake done (`0` over plain http) |
+| `pretransfer_time` | everything ready, the request started going out |
+| `starttransfer_time` | first byte of the response arrived (TTFB) |
+| `total_time` | the whole call done |
+| `primary_ip` | the IP address actually connected to |
+
+A single phase is the difference of neighbouring fields: over https, TLS took
+`appconnect_time - connect_time`, the server spent `starttransfer_time - pretransfer_time`.
+
 - **A reused connection reads `0`.** A keep-alive connection taken from curl's pool was
   not looked up or connected again, so `namelookup_time` and `connect_time` are `0` -
   that is not a measurement error.
