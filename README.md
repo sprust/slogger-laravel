@@ -972,7 +972,7 @@ The suite runs in Docker through the makefile:
 make setup                # once: build, start, composer install
 make test                 # phpunit
 make check                # cs-fixer + phpstan + phpunit
-make check-laravel-all    # `check` on Laravel 10, 11 and 12
+make check-laravel-all    # `check` on Laravel 10.26.* (the floor), 10, 11 and 12
 ```
 
 `vendor/bin/phpunit` works as well with the dependencies installed locally. `phpunit.xml`

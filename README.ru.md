@@ -982,7 +982,7 @@ php artisan queue:work slogger-rabbitmq --queue=slogger
 make setup                # once: build, start, composer install
 make test                 # phpunit
 make check                # cs-fixer + phpstan + phpunit
-make check-laravel-all    # `check` on Laravel 10, 11 and 12
+make check-laravel-all    # `check` on Laravel 10.26.* (the floor), 10, 11 and 12
 ```
 
 `vendor/bin/phpunit` тоже работает, если зависимости установлены локально. `phpunit.xml`

@@ -68,9 +68,11 @@ cs-fixer-fix:
 
 # set-laravel-* rewrite the constraint in composer.json, so the run restores it even
 # when a leg fails - otherwise the matrix leaves the package pinned to one version
+# the same legs as the CI matrix: a caret resolves to the newest release, so 10.26 pins
+# the floor composer.json claims
 check-laravel-all:
 	@trap 'make restore-composer' EXIT; \
-	for v in 10 11 12; do \
+	for v in 10.26 10 11 12; do \
 		make set-laravel-$$v || exit 1; \
 		make check || exit 1; \
 	done
@@ -79,8 +81,12 @@ restore-composer:
 	git checkout -- composer.json composer.lock
 	make composer c="install --no-interaction"
 
+set-laravel-10.26:
+	make composer c="require "laravel/framework:10.26.*" --no-update"
+	make composer c="update --with-all-dependencies --prefer-dist --no-interaction"
+
 set-laravel-10:
-	make composer c="require "laravel/framework:^10" --no-update"
+	make composer c="require "laravel/framework:^10.26" --no-update"
 	make composer c="update --with-all-dependencies --prefer-dist --no-interaction"
 
 set-laravel-11:
