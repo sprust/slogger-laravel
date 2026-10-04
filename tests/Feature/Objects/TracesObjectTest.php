@@ -257,7 +257,6 @@ class TracesObjectTest extends BaseTestCase
         return new TraceUpdateObject(
             traceId: 'trace-update',
             status: 'success',
-            profiling: null,
             tags: ['tag'],
             data: $data,
             duration: 1.2,

@@ -205,7 +205,6 @@ class QueueDispatcherTest extends BaseTestCase
         return new TraceUpdateObject(
             traceId: 'trace-1',
             status: 'success',
-            profiling: null,
             tags: ['tag'],
             data: ['key' => 'value'],
             duration: 1.2,

@@ -60,10 +60,6 @@ return [
         ],
     ],
 
-    'profiling' => [
-        'enabled' => env('SLOGGER_PROFILING_ENABLED', false),
-    ],
-
     // channel for internal errors/logs.
     'log_channel' => env('SLOGGER_LOG_CHANNEL', 'daily'),
 

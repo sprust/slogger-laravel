@@ -267,7 +267,6 @@ class GlobalMaskingTest extends BaseWatcherTestCase
                 new TraceUpdateObject(
                     traceId: 'trace-1',
                     status: TraceStatusEnum::Success->value,
-                    profiling: null,
                     tags: $tags,
                     data: $data,
                     duration: 1.0,

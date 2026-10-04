@@ -294,7 +294,6 @@ class SocketClientTest extends BaseTestCase
                 new TraceUpdateObject(
                     traceId: 'trace-1',
                     status: 'success',
-                    profiling: null,
                     tags: ['t2'],
                     data: ['updated' => true],
                     duration: 0.25,

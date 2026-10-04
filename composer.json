@@ -1,6 +1,6 @@
 {
     "name": "slogger/laravel",
-    "description": "Tracing and observability for Laravel with dispatchers, masking, and profiling.",
+    "description": "Tracing and observability for Laravel with dispatchers and masking.",
     "version": "2.1.4",
     "license": "MIT",
     "authors": [
@@ -15,7 +15,6 @@
         "observability",
         "logging",
         "monitoring",
-        "profiling",
         "debugging"
     ],
     "require": {

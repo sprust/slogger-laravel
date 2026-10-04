@@ -14,8 +14,6 @@ use SLoggerLaravel\Helpers\TraceDataComplementer;
 use SLoggerLaravel\Helpers\TraceHelper;
 use SLoggerLaravel\Objects\TraceCreateObject;
 use SLoggerLaravel\Objects\TraceUpdateObject;
-use SLoggerLaravel\Profiling\AbstractProfiling;
-use SLoggerLaravel\Profiling\Dto\ProfilingObjects;
 use SLoggerLaravel\Traces\TraceIdContainer;
 use Throwable;
 
@@ -74,7 +72,6 @@ class Processor
         private readonly Dispatcher $dispatcher,
         private readonly TraceDispatcherInterface $traceDispatcher,
         private readonly TraceIdContainer $traceIdContainer,
-        private readonly AbstractProfiling $profiler,
         private readonly TraceDataComplementer $traceDataComplementer,
         private readonly TraceContextInterface $context
     ) {
@@ -199,9 +196,6 @@ class Processor
 
         $this->traceIdContainer->setParentTraceId($traceId);
 
-        // after the id exists, so the profile belongs to this trace
-        $this->profiler->start($traceId);
-
         return $traceId;
     }
 
@@ -301,11 +295,9 @@ class Processor
 
             $this->setDetachedTraces($detachedTraces);
 
-            // no profiler: it profiles the enclosing trace, which is still running
             $this->dispatchStopTrace(
                 traceId: $traceId,
                 status: $status,
-                profiling: null,
                 tags: $tags,
                 data: $data,
                 duration: $duration,
@@ -352,7 +344,6 @@ class Processor
         $this->dispatchStopTrace(
             traceId: $traceId,
             status: $status,
-            profiling: $this->profiler->stop($traceId),
             tags: $tags,
             data: $data,
             duration: $duration,
@@ -412,7 +403,6 @@ class Processor
     private function dispatchStopTrace(
         string $traceId,
         string $status,
-        ?ProfilingObjects $profiling,
         ?array $tags,
         ?array $data,
         ?float $duration,
@@ -426,7 +416,6 @@ class Processor
             new TraceUpdateObject(
                 traceId: $traceId,
                 status: $status,
-                profiling: $profiling,
                 tags: $tags,
                 data: $data,
                 duration: $duration,
@@ -468,8 +457,6 @@ class Processor
         foreach (array_reverse($interrupted) as $stackItem) {
             $this->stopInterruptedDetached(ownerTraceId: $stackItem['trace_id']);
 
-            $this->profiler->release($stackItem['trace_id']);
-
             $this->notifyTraceInterrupted($stackItem['trace_id']);
 
             $loggedAt = $stackItem['logged_at'];
@@ -478,7 +465,6 @@ class Processor
                 new TraceUpdateObject(
                     traceId: $stackItem['trace_id'],
                     status: TraceStatusEnum::Failed->value,
-                    profiling: null,
                     tags: [
                         ...$stackItem['tags'],
                         self::INTERRUPTED_TAG,
@@ -554,7 +540,6 @@ class Processor
         $this->dispatchStopTrace(
             traceId: $traceId,
             status: TraceStatusEnum::Failed->value,
-            profiling: null,
             tags: [
                 ...$detachedTrace['tags'],
                 self::INTERRUPTED_TAG,

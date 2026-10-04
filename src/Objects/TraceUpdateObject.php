@@ -4,7 +4,6 @@ namespace SLoggerLaravel\Objects;
 
 use Illuminate\Support\Carbon;
 use JsonException;
-use SLoggerLaravel\Profiling\Dto\ProfilingObjects;
 
 class TraceUpdateObject
 {
@@ -15,7 +14,6 @@ class TraceUpdateObject
     public function __construct(
         public string $traceId,
         public string $status,
-        public ?ProfilingObjects $profiling,
         public ?array $tags,
         public ?array $data,
         public ?float $duration,
@@ -34,7 +32,6 @@ class TraceUpdateObject
             [
                 'tid'   => $this->traceId,
                 'st'    => $this->status,
-                'pr'    => null, // the receiver does not read it yet
                 'tg'    => $this->tags,
                 'dt'    => json_encode($this->data, JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR),
                 'du'    => $this->duration,
@@ -64,7 +61,6 @@ class TraceUpdateObject
         return new TraceUpdateObject(
             traceId: $jsonData['tid'],
             status: $jsonData['st'],
-            profiling: null, // see toJson()
             tags: $jsonData['tg'],
             data: $data,
             duration: isset($jsonData['du']) ? ((float) $jsonData['du']) : null,

@@ -25,8 +25,6 @@ use SLoggerLaravel\Dispatcher\StopDispatcherCommand;
 use SLoggerLaravel\Helpers\TraceDataComplementer;
 use SLoggerLaravel\Helpers\TraceDataMasker;
 use SLoggerLaravel\Middleware\HttpMiddleware;
-use SLoggerLaravel\Profiling\AbstractProfiling;
-use SLoggerLaravel\Profiling\XHProfProfiler;
 use SLoggerLaravel\Traces\TraceIdContainer;
 use SLoggerLaravel\Watchers\Children\HttpClientWatcher;
 use SLoggerLaravel\Watchers\WatcherInterface;
@@ -79,7 +77,6 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         // the Guzzle handler factory resolves this too, and a fresh instance there
         // would have its own request map, sweep callback and header key
         $this->app->singleton(HttpClientWatcher::class);
-        $this->app->singleton(AbstractProfiling::class, XHProfProfiler::class);
 
         $this->app->singleton(
             ApiClientInterface::class,

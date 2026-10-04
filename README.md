@@ -848,8 +848,7 @@ it, the process is shutting down.
 
 Nothing the store holds is leaked. The state goes with the unit: PHP unwinds a
 destroyed fiber's stack, and the store releases its map along with it - the open traces,
-the parent id, the outbound calls, the values `add()` collected. (The profiler is not in
-the store and could not survive this, which is why it is refused outright - see below.)
+the parent id, the outbound calls, the values `add()` collected.
 
 What is lost is the closing update. The parent trace stays `started` in the backend, and
 the outbound calls it left in flight are never tagged `__interrupted`, because the
@@ -928,17 +927,11 @@ says so nowhere. A runtime that turns a stream call into a suspension point - wh
 what makes coroutines worth having in the first place - can. The pool costs nothing where
 they cannot.
 
-### Two watchers that concurrency does not suit
+### A watcher that concurrency does not suit
 
-- **Profiling** (`SLOGGER_PROFILING_ENABLED`) measures the *process*, so it is refused
-  outright unless the store is `array` - the config asks and the answer is no. A run
-  covers everything the process did while it lasted, every other unit's work included,
-  filed under the one trace that started it; and a unit that ends without stopping owns
-  the profiler for good, leaving the extension instrumenting every call the process
-  makes and no later trace ever profiled.
-- **The dump watcher** swaps `VarDumper`'s handler, which is global to PHP, for the
-  length of one `dump()`. A `dump()` from another unit of work inside that window is not
-  traced. Harmless, but it is telemetry you will not see.
+**The dump watcher** swaps `VarDumper`'s handler, which is global to PHP, for the length
+of one `dump()`. A `dump()` from another unit of work inside that window is not traced.
+Harmless, but it is telemetry you will not see.
 
 ### Upgrading to 2.1
 
