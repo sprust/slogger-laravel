@@ -3,11 +3,8 @@
 namespace SLoggerLaravel\Dispatcher\Items\Queue;
 
 use Closure;
-use Illuminate\Contracts\Container\BindingResolutionException;
-use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\Facades\Log;
 use SLoggerLaravel\Configs\GeneralConfig;
-use SLoggerLaravel\Dispatcher\Items\DispatcherProcessorInterface;
 use SLoggerLaravel\Dispatcher\Items\Queue\Jobs\SendTracesJob;
 use SLoggerLaravel\Dispatcher\Items\TraceDispatcherInterface;
 use SLoggerLaravel\Objects\TraceCreateObject;
@@ -26,17 +23,9 @@ class QueueDispatcher implements TraceDispatcherInterface
     private int $lastDispatchFailLogAt = 0;
     private int $droppedDispatches     = 0;
 
-    public function __construct(protected readonly Application $app)
+    public function __construct()
     {
         $this->traces = new TracesObject();
-    }
-
-    /**
-     * @throws BindingResolutionException
-     */
-    public function getProcessor(): DispatcherProcessorInterface
-    {
-        return $this->app->make(QueueDispatcherProcessor::class);
     }
 
     public function create(TraceCreateObject $parameters): void
@@ -119,7 +108,7 @@ class QueueDispatcher implements TraceDispatcherInterface
         $this->droppedDispatches = 0;
 
         try {
-            Log::channel($this->app->make(GeneralConfig::class)->getLogChannel())
+            Log::channel(app(GeneralConfig::class)->getLogChannel())
                 ->warning(
                     sprintf(
                         'slogger: dropped %d trace dispatches in the last %ds: %s',

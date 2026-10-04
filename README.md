@@ -6,6 +6,25 @@ SLogger Laravel is a tracing/observability package for Laravel apps. It records 
 
 This README documents installation, configuration, watchers, masking, dispatchers, and usage patterns.
 
+## Upgrading from 2.1
+
+- **`slogger:dispatcher:start` and `slogger:dispatcher:stop` are gone.** The package no
+  longer runs queue workers of its own: run them the way you run any other queue -
+  Supervisor, systemd, Horizon - see [Queue dispatcher](#queue-dispatcher). Stop the old
+  dispatcher before upgrading, and drop it from your process manager.
+  `SLOGGER_DISPATCHER_QUEUE_WORKERS_COUNT` is no longer read, and `storage/slogger/`,
+  which held only the dispatcher's state, can be deleted. `horizon:work` joined the
+  command watcher's default `excepted` list; a published config does not get it - add it
+  by hand if you run Horizon.
+- **Profiling is gone**, with `SLOGGER_PROFILING_ENABLED` and the `profiling` config
+  section. A leftover in a published config is ignored.
+- `ext-pcntl`, `ext-posix` and `symfony/process` are no longer required by the package.
+- API changes if you extend the core: `TraceDispatcherInterface::getProcessor()`,
+  `DispatcherProcessorInterface`, `QueueDispatcherProcessor`,
+  `DispatcherQueueConfig::getWorkersNum()`, `WatchersConfig::profilingEnabled()` and
+  `LocalStorage` are gone, `TraceUpdateObject` lost its `profiling` argument, and
+  `QueueDispatcher` no longer takes the application.
+
 ## Upgrading to 2.0
 
 Masking moved out of the traced application and into the dispatcher job.
@@ -93,7 +112,6 @@ Masking moved out of the traced application and into the dispatcher job.
 ## Requirements
 
 - PHP >= 8.2
-- `ext-pcntl` and `ext-posix` - the dispatcher supervises worker processes
 - Laravel 10.26+ (tested on 10, 11 and 12)
 - Queue driver for `queue` dispatcher
 
@@ -126,10 +144,10 @@ SLOGGER_DISPATCHER_QUEUE_NAME=slogger
 SLOGGER_LOG_REQUESTS_ENABLED=true
 ```
 
-Then start dispatcher workers:
+Then run a queue worker on that connection and queue:
 
 ```bash
-php artisan slogger:dispatcher:start
+php artisan queue:work redis --queue=slogger
 ```
 
 ## Trace Collection Backend
@@ -173,14 +191,13 @@ SLOGGER_CONTEXT=array
 SLOGGER_DISPATCHER=queue
 SLOGGER_DISPATCHER_QUEUE_CONNECTION=slogger-rabbitmq
 SLOGGER_DISPATCHER_QUEUE_NAME=slogger
-SLOGGER_DISPATCHER_QUEUE_WORKERS_COUNT=3
 SLOGGER_DISPATCHER_QUEUE_API_CLIENT=socket
 SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL=tcp://0.0.0.0:0002
 SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TIMEOUT=10
 ```
 
 - `SLOGGER_DISPATCHER`: `queue` or `memory`.
-- `queue` dispatcher runs worker processes (similar to Horizon) and sends traces via HTTP or socket client.
+- `queue` dispatcher puts traces on a queue; your queue workers send them via the socket client.
 - `memory` dispatcher stores traces in memory (useful for tests/dev).
 
 `SLOGGER_DISPATCHER_QUEUE_CONNECTION` is **required** for the `queue` dispatcher — there is
@@ -381,7 +398,7 @@ Large responses are skipped and marked with:
 Masking runs **in the dispatcher job**, right before a batch is sent, and never in the
 traced application. Building a trace costs the application only what it takes to
 collect and hand off the data; walking a payload key by key is paid for by the
-dispatcher workers instead. Two consequences follow:
+queue workers instead. Two consequences follow:
 
 - **The queue holds unmasked trace data.** Whatever the watchers collected sits in the
   queue store until the batch is sent, so the slogger queue is as sensitive as the
@@ -955,47 +972,28 @@ All of these are resolved from the container, so nothing else has to change.
 
 ### Queue dispatcher
 
-Start the dispatcher (spawns queue workers):
+Traces are sent by `SendTracesJob`, queued on `SLOGGER_DISPATCHER_QUEUE_CONNECTION` and
+`SLOGGER_DISPATCHER_QUEUE_NAME`. The package does not run workers for it: keep at least one
+worker on that connection and queue the way you keep any other queue running -
+Supervisor, systemd, Horizon:
 
 ```bash
-php artisan slogger:dispatcher:start
+php artisan queue:work slogger-rabbitmq --queue=slogger
 ```
+
+The job carries its own tries and backoff, which take precedence over the worker's
+options, so the worker needs neither `--tries` nor `--backoff`. `queue:work` is excepted
+from the command watcher by default, and so is `horizon:work`, the worker under Horizon:
+a worker does not trace itself.
 
 - Parent traces are sent immediately.
 - Child traces are batched (default batch size: 5).
 - Orphan traces are sent immediately.
 - On shutdown, remaining traces are flushed.
 
-The master keeps every worker slot filled. One that keeps dying on boot is replaced
-with a growing delay rather than once a second, and a slot counts as settled only once
-its worker has stayed up a minute. Starting a second dispatcher takes over from the
-first: it stops the running one, then starts its own fleet.
-
-Stop the dispatcher:
-
-```bash
-php artisan slogger:dispatcher:stop
-```
-
 ### Memory dispatcher
 
 Stores traces in memory only. Intended for tests/local development.
-
-## Storage
-
-SLogger does not persist traces locally. The only local files are the dispatcher state
-file and the lock beside it:
-
-```text
-storage/slogger/dispatcher-state-*.json
-storage/slogger/dispatcher-state-*.json.lock
-```
-
-You may want to ignore the folder:
-
-```gitignore
-storage/slogger/*
-```
 
 ## Testing
 
@@ -1009,7 +1007,6 @@ The testbench config uses in-memory sqlite and `memory` dispatcher.
 
 ## Troubleshooting
 
-- Dispatcher not starting: verify `SLOGGER_ENABLED=true` and correct dispatcher name.
 - No traces: ensure watchers are enabled and middleware is applied for requests.
 - Queue dispatcher not sending: check queue workers and API client URL.
 - Socket client errors: verify socket address and backend availability.

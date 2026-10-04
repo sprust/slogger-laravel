@@ -20,8 +20,6 @@ use SLoggerLaravel\Dispatcher\Items\DispatcherFactory;
 use SLoggerLaravel\Dispatcher\Items\Memory\MemoryDispatcher;
 use SLoggerLaravel\Dispatcher\Items\Queue\QueueDispatcher;
 use SLoggerLaravel\Dispatcher\Items\TraceDispatcherInterface;
-use SLoggerLaravel\Dispatcher\StartDispatcherCommand;
-use SLoggerLaravel\Dispatcher\StopDispatcherCommand;
 use SLoggerLaravel\Helpers\TraceDataComplementer;
 use SLoggerLaravel\Helpers\TraceDataMasker;
 use SLoggerLaravel\Middleware\HttpMiddleware;
@@ -68,7 +66,6 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         $this->app->singleton(MaskingConfig::class);
         $this->app->singleton(TraceDataMasker::class);
         $this->app->singleton(WatchersConfig::class);
-        $this->app->singleton(LocalStorage::class);
         $this->app->singleton(State::class);
         $this->app->singleton(Processor::class);
         $this->app->singleton(TraceIdContainer::class);
@@ -165,11 +162,6 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         if (!$this->app->runningInConsole()) {
             return;
         }
-
-        $this->commands([
-            StartDispatcherCommand::class,
-            StopDispatcherCommand::class,
-        ]);
 
         $this->publishes(
             paths: [

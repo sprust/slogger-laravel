@@ -6,7 +6,6 @@ namespace SLoggerLaravel\Tests\Feature;
 
 use Illuminate\Support\Carbon;
 use RuntimeException;
-use SLoggerLaravel\Dispatcher\Items\DispatcherProcessorInterface;
 use SLoggerLaravel\Dispatcher\Items\Memory\MemoryDispatcher;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Events\WatcherErrorEvent;
@@ -24,11 +23,6 @@ class ProcessorTest extends BaseTestCase
 
             /** @var list<bool> */
             public array $pausedStates = [];
-
-            public function getProcessor(): DispatcherProcessorInterface
-            {
-                throw new RuntimeException('Not supported.');
-            }
 
             public function create(TraceCreateObject $parameters): void
             {

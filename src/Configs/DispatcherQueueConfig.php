@@ -28,11 +28,6 @@ class DispatcherQueueConfig
         return (string) config('slogger.dispatchers.queue.name');
     }
 
-    public function getWorkersNum(): int
-    {
-        return (int) config('slogger.dispatchers.queue.workers_num');
-    }
-
     public function getDefaultApiClient(): string
     {
         return (string) config('slogger.dispatchers.queue.api_clients.default');

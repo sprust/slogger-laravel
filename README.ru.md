@@ -6,6 +6,25 @@ SLogger Laravel — пакет трейсинга/наблюдаемости (ob
 
 Этот README описывает установку, конфигурацию, вотчеры, маскирование, диспатчеры и сценарии использования.
 
+## Обновление с 2.1
+
+- **`slogger:dispatcher:start` и `slogger:dispatcher:stop` удалены.** Пакет больше не
+  запускает собственные воркеры очереди: запускайте их так же, как любую другую очередь, —
+  Supervisor, systemd, Horizon, см. [Диспатчер queue](#диспатчер-queue). Остановите старый
+  диспатчер перед обновлением и уберите его из менеджера процессов.
+  `SLOGGER_DISPATCHER_QUEUE_WORKERS_COUNT` больше не читается, а `storage/slogger/`, где
+  лежало только состояние диспетчера, можно удалить. `horizon:work` добавлен в список
+  `excepted` вотчера команд по умолчанию; в опубликованный конфиг он сам не попадёт —
+  добавьте его вручную, если используете Horizon.
+- **Профилирование удалено** вместе с `SLOGGER_PROFILING_ENABLED` и секцией `profiling`
+  конфига. Оставшаяся в опубликованном конфиге секция игнорируется.
+- `ext-pcntl`, `ext-posix` и `symfony/process` пакету больше не нужны.
+- Изменения API, если вы расширяете ядро: удалены `TraceDispatcherInterface::getProcessor()`,
+  `DispatcherProcessorInterface`, `QueueDispatcherProcessor`,
+  `DispatcherQueueConfig::getWorkersNum()`, `WatchersConfig::profilingEnabled()` и
+  `LocalStorage`, `TraceUpdateObject` лишился аргумента `profiling`, а `QueueDispatcher`
+  больше не принимает приложение.
+
 ## Обновление до 2.0
 
 Маскирование переехало из отслеживаемого приложения в джобу диспетчера.
@@ -93,7 +112,6 @@ SLogger Laravel — пакет трейсинга/наблюдаемости (ob
 ## Требования
 
 - PHP >= 8.2
-- `ext-pcntl` и `ext-posix` — диспетчер надзирает за процессами воркеров
 - Laravel 10.26+ (протестировано на 10, 11 и 12)
 - Драйвер очередей для диспатчера `queue`
 
@@ -126,10 +144,10 @@ SLOGGER_DISPATCHER_QUEUE_NAME=slogger
 SLOGGER_LOG_REQUESTS_ENABLED=true
 ```
 
-Затем запустите воркеры диспатчера:
+Затем запустите воркер очереди на этом коннекшене и очереди:
 
 ```bash
-php artisan slogger:dispatcher:start
+php artisan queue:work redis --queue=slogger
 ```
 
 ## Бэкенд сбора трейсов
@@ -173,14 +191,13 @@ SLOGGER_CONTEXT=array
 SLOGGER_DISPATCHER=queue
 SLOGGER_DISPATCHER_QUEUE_CONNECTION=slogger-rabbitmq
 SLOGGER_DISPATCHER_QUEUE_NAME=slogger
-SLOGGER_DISPATCHER_QUEUE_WORKERS_COUNT=3
 SLOGGER_DISPATCHER_QUEUE_API_CLIENT=socket
 SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL=tcp://0.0.0.0:0002
 SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TIMEOUT=10
 ```
 
 - `SLOGGER_DISPATCHER`: `queue` или `memory`.
-- Диспатчер `queue` запускает воркер-процессы (по аналогии с Horizon) и отправляет трейсы через HTTP- или socket-клиент.
+- Диспатчер `queue` кладёт трейсы в очередь; ваши воркеры очереди отправляют их через socket-клиент.
 - Диспатчер `memory` хранит трейсы в памяти (удобно для тестов/разработки).
 
 `SLOGGER_DISPATCHER_QUEUE_CONNECTION` **обязателен** для диспатчера `queue` — фолбэка на
@@ -378,7 +395,7 @@ htmx- или Turbo-эндпоинт, — это валидная разметк�
 
 Маскирование выполняется **в джобе диспетчера**, прямо перед отправкой батча, и никогда
 не выполняется в отслеживаемом приложении. Приложение платит только за сбор данных и
-передачу их дальше; обход пейлоада ключ за ключом оплачивают воркеры диспетчера. Отсюда
+передачу их дальше; обход пейлоада ключ за ключом оплачивают воркеры очереди. Отсюда
 два следствия:
 
 - **В очереди лежат незамаскированные данные трейсов.** Всё, что собрали вотчеры, лежит
@@ -961,47 +978,27 @@ class CoroutineTraceContext implements TraceContextInterface
 
 ### Диспатчер queue
 
-Запуск диспатчера (порождает воркеры очереди):
+Трейсы отправляет `SendTracesJob`, который ставится в очередь на
+`SLOGGER_DISPATCHER_QUEUE_CONNECTION` и `SLOGGER_DISPATCHER_QUEUE_NAME`. Воркеры для неё
+пакет не запускает: держите хотя бы один воркер на этом коннекшене и очереди так же, как
+держите любую другую очередь, — Supervisor, systemd, Horizon:
 
 ```bash
-php artisan slogger:dispatcher:start
+php artisan queue:work slogger-rabbitmq --queue=slogger
 ```
+
+Джоба несёт свои tries и backoff, и они важнее опций воркера, поэтому ни `--tries`, ни
+`--backoff` воркеру не нужны. `queue:work` и `horizon:work` — воркер под Horizon — по
+умолчанию исключены из вотчера команд, так что воркер сам себя не трассирует.
 
 - Родительские трейсы отправляются немедленно.
 - Дочерние трейсы батчатся (размер батча по умолчанию: 5).
 - Осиротевшие (orphan) трейсы отправляются немедленно.
 - При завершении процесса оставшиеся трейсы флашатся.
 
-Мастер держит каждый слот воркера занятым. Тот, что падает на старте раз за разом,
-заменяется с растущей задержкой, а не раз в секунду, и слот считается устоявшимся
-только когда воркер прожил минуту. Второй запуск диспатчера перехватывает управление у
-первого: останавливает работающий и поднимает свой флот.
-
-Остановка диспатчера:
-
-```bash
-php artisan slogger:dispatcher:stop
-```
-
 ### Диспатчер memory
 
 Хранит трейсы только в памяти. Предназначен для тестов/локальной разработки.
-
-## Хранилище
-
-SLogger не сохраняет трейсы локально. Локальных файлов всего два — состояние диспетчера
-и лок рядом с ним:
-
-```text
-storage/slogger/dispatcher-state-*.json
-storage/slogger/dispatcher-state-*.json.lock
-```
-
-Папку имеет смысл добавить в ignore:
-
-```gitignore
-storage/slogger/*
-```
 
 ## Тестирование
 
@@ -1015,7 +1012,6 @@ vendor/bin/phpunit
 
 ## Диагностика проблем
 
-- Диспатчер не стартует: проверьте `SLOGGER_ENABLED=true` и корректное имя диспатчера.
 - Нет трейсов: убедитесь, что вотчеры включены, а middleware применён к запросам.
 - Диспатчер queue не отправляет: проверьте воркеры очереди и URL API-клиента.
 - Ошибки socket-клиента: проверьте адрес сокета и доступность бэкенда.

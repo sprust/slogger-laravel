@@ -2,8 +2,6 @@
 
 namespace SLoggerLaravel\Dispatcher\Items\Memory;
 
-use RuntimeException;
-use SLoggerLaravel\Dispatcher\Items\DispatcherProcessorInterface;
 use SLoggerLaravel\Dispatcher\Items\TraceDispatcherInterface;
 use SLoggerLaravel\Enums\TraceStatusEnum;
 use SLoggerLaravel\Objects\TraceCreateObject;
@@ -19,11 +17,6 @@ class MemoryDispatcher implements TraceDispatcherInterface
      * @var list<TraceUpdateObject>
      */
     private array $updatingTraces = [];
-
-    public function getProcessor(): DispatcherProcessorInterface
-    {
-        throw new RuntimeException('Not supported.');
-    }
 
     public function create(TraceCreateObject $parameters): void
     {

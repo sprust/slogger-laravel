@@ -46,8 +46,6 @@ return [
             // required, no fallback: telemetry must not share the application queue
             'connection' => env('SLOGGER_DISPATCHER_QUEUE_CONNECTION'),
             'name'       => env('SLOGGER_DISPATCHER_QUEUE_NAME', 'slogger'),
-            // number of worker processes.
-            'workers_num' => env('SLOGGER_DISPATCHER_QUEUE_WORKERS_COUNT', 3),
 
             'api_clients' => [
                 'default' => env('SLOGGER_DISPATCHER_QUEUE_API_CLIENT', 'socket'),
@@ -201,6 +199,7 @@ return [
                 'excepted' => [
                     'queue:work',
                     'queue:listen',
+                    'horizon:work',
                     'schedule:run',
                 ],
             ],

@@ -65,8 +65,7 @@ class ExceptedCommandWatcherTest extends BaseWatcherTestCase
             }
         );
 
-        // a traced command runs an excepted one, the way `slogger:dispatcher:start`
-        // runs `queue:work`
+        // a traced command runs an excepted one, the way a wrapper command runs `queue:work`
         $this->fireCommand('slogger:test-success', function (): void {
             $this->fireCommand('slogger:test-excepted', static fn() => null);
         });

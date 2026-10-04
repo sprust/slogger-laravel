@@ -23,7 +23,7 @@ class QueueDispatcherTest extends BaseTestCase
     {
         Bus::fake();
 
-        $dispatcher = new QueueDispatcher($this->getApp());
+        $dispatcher = new QueueDispatcher();
 
         $dispatcher->create(
             $this->makeCreateTrace(isParent: true, parentTraceId: null)
@@ -43,7 +43,7 @@ class QueueDispatcherTest extends BaseTestCase
     {
         Bus::fake();
 
-        $dispatcher = new QueueDispatcher($this->getApp());
+        $dispatcher = new QueueDispatcher();
 
         $dispatcher->create(
             $this->makeCreateTrace(isParent: false, parentTraceId: null)
@@ -56,7 +56,7 @@ class QueueDispatcherTest extends BaseTestCase
     {
         Bus::fake();
 
-        $dispatcher = new QueueDispatcher($this->getApp());
+        $dispatcher = new QueueDispatcher();
         $this->setMaxBatchSize($dispatcher, 2);
 
         $dispatcher->create(
@@ -84,7 +84,7 @@ class QueueDispatcherTest extends BaseTestCase
      */
     public function testABufferWrittenToDuringADispatchLosesNothing(): void
     {
-        $dispatcher = new QueueDispatcher($this->getApp());
+        $dispatcher = new QueueDispatcher();
         $this->setMaxBatchSize($dispatcher, 2);
 
         $batches = [];
@@ -143,7 +143,7 @@ class QueueDispatcherTest extends BaseTestCase
     {
         Bus::fake();
 
-        $dispatcher = new QueueDispatcher($this->getApp());
+        $dispatcher = new QueueDispatcher();
 
         $dispatcher->update(
             $this->makeUpdateTrace()
@@ -158,7 +158,7 @@ class QueueDispatcherTest extends BaseTestCase
         // dropped, never thrown into the caller
         config()->set('slogger.dispatchers.queue.connection', '');
 
-        $dispatcher = new QueueDispatcher($this->getApp());
+        $dispatcher = new QueueDispatcher();
 
         $dispatcher->create(
             $this->makeCreateTrace(isParent: true, parentTraceId: null)
@@ -172,7 +172,7 @@ class QueueDispatcherTest extends BaseTestCase
     {
         config()->set('slogger.dispatchers.queue.connection', '');
 
-        $dispatcher = new QueueDispatcher($this->getApp());
+        $dispatcher = new QueueDispatcher();
 
         $dispatcher->update(
             $this->makeUpdateTrace()
