@@ -212,7 +212,7 @@ class SocketClientTest extends BaseTestCase
     /**
      * @throws JsonException
      */
-    public function testSendTracesMarksOnlyParentsAndSendsPidOnlyWhenKnown(): void
+    public function testSendTracesMarksParentsAndSendsPidOnlyWhenKnown(): void
     {
         $connection = $this->createMock(Connection::class);
 
@@ -254,7 +254,7 @@ class SocketClientTest extends BaseTestCase
         self::assertTrue($creating[0]['isP']);
 
         self::assertArrayNotHasKey('pid', $creating[1]);
-        self::assertArrayNotHasKey('isP', $creating[1]);
+        self::assertFalse($creating[1]['isP']);
     }
 
     private function makeTraces(): TracesObject

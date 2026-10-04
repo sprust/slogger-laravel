@@ -80,7 +80,7 @@ class SocketClient implements ApiClientInterface
                 ...(is_null($trace->memory) ? [] : ['mem' => $trace->memory]),
                 ...(is_null($trace->cpu) ? [] : ['cpu' => $trace->cpu]),
                 ...(is_null($trace->pid) ? [] : ['pid' => $trace->pid]),
-                ...($trace->isParent ? ['isP' => true] : []),
+                'isP' => $trace->isParent,
                 'lat' => $this->prepareLoggedAt($trace->loggedAt),
             ];
         }
