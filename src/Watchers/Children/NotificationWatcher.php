@@ -37,8 +37,12 @@ class NotificationWatcher implements WatcherInterface
             'queued'       => $event->notification instanceof ShouldQueue,
             'notifiable'   => $this->formatNotifiable($event->notifiable),
             'channel'      => $event->channel,
-            'recipients'   => $this->getRecipients($event->notifiable),
-            'response'     => $event->response,
+            // a level down: the top level is never matched, and only the key list
+            // reaches a phone number or a webhook url
+            'delivery' => [
+                'recipients' => $this->getRecipients($event->notifiable),
+            ],
+            'response' => $event->response,
         ];
 
         $this->processor->push(

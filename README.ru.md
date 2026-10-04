@@ -223,7 +223,7 @@ average в процентах от мощности машины, нормиро
 - `event`: слушатели, broadcast, опционально сериализованный payload
 - `model`: действие, класс модели, ключ, изменения
 - `mail`: mailable/notification, queued, `message` (from/reply_to/to/cc/bcc парами `email`/`full_name`, тема)
-- `notification`: notification, notifiable, channel, queued, `recipients`, response
+- `notification`: notification, notifiable, channel, queued, `delivery.recipients`, response
 - `cache`: type (`hit`, `missed`, `set`, `forget`), key и `cache.<key>` (value, tags,
   expiration). Значение, которое маскеру слишком длинно читать, записывается вместо этого
   как `{"__skipped": "value_too_large"}`
@@ -605,19 +605,16 @@ XML-сущности не разворачиваются никогда, поэ�
 в `partial_keys` ловит телефон под `customer.phone`, который никакой адресный паттерн не
 увидит.
 
-Помните, где кончается первый уровень (см. ниже): `recipients` у вотчера уведомлений *и
-есть* первый уровень, поэтому до него достают только паттерны значений — адрес там
-маскируется, а телефон под `recipients.vonage` — нет.
-
 **Первый уровень `data` трейса не маскируется никогда.** Этот уровень принадлежит
 вотчеру, а не приложению: `connection_name`, `request`, `changes`, `context`, `bindings`
 и прочее — фиксированная структура, а отслеживаемые данные начинаются уровнем ниже.
 Поэтому сверка начинается внутри неё: `context.customer_email` и
-`job.data.customer_email` маскируются, а `recipients` у вотчера уведомлений остаётся
-нетронутым, хотя `*recipient*` есть в `partial_keys`. Вотчеры, у которых на первом уровне лежали данные приложения, были
-переделаны, чтобы правило работало и для них: значение кеша лежит под своим кеш-ключом
-(`cache.<key>.value` — и тогда список сверяется именно с ключом), а почтовые адреса — под
-`message` парами `email`/`full_name`.
+`job.data.customer_email` маскируются. Вотчеры, у которых на первом уровне лежали данные
+приложения, были переделаны, чтобы правило работало и для них: значение кеша лежит под
+своим кеш-ключом (`cache.<key>.value` — и тогда список сверяется именно с ключом),
+почтовые адреса — под `message` парами `email`/`full_name`, а маршруты уведомления — под
+`delivery.recipients`, где `*recipient*` достаёт телефон, который не увидит ни один
+паттерн значений.
 
 Расширяйте маску, если поставляемый список не покрывает что-то ваше — `*ssn*` вместо
 `ssn`, `*iban*` вместо `iban`, — и сужайте, если под неё попало нужное поле. Для
@@ -1022,6 +1019,10 @@ make check-laravel-all    # `check` on Laravel 10, 11 and 12
   `DispatcherQueueConfig::getWorkersNum()`, `WatchersConfig::profilingEnabled()` и
   `LocalStorage`, `TraceUpdateObject` лишился аргумента `profiling`, а `QueueDispatcher`
   больше не принимает приложение.
+- **Маршруты уведомления переехали** из `recipients` на первом уровне в
+  `delivery.recipients`. На первом уровне до них не доставал ни один список ключей, и
+  телефон там уходил незамаскированным. Всё, что читает это поле на принимающей стороне,
+  нужно обновить.
 
 ### До 2.1
 

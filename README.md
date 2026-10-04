@@ -221,7 +221,7 @@ Watcher data highlights:
 - `event`: listeners, broadcast, optional serialized payload
 - `model`: action, model class, key, changes
 - `mail`: mailable/notification, queued, `message` (from/reply_to/to/cc/bcc as `email`/`full_name` pairs, subject)
-- `notification`: notification, notifiable, channel, queued, `recipients`, response
+- `notification`: notification, notifiable, channel, queued, `delivery.recipients`, response
 - `cache`: type (`hit`, `missed`, `set`, `forget`), key, and `cache.<key>` (value, tags,
   expiration). A value too long for the masker to read is recorded as
   `{"__skipped": "value_too_large"}` instead
@@ -602,19 +602,16 @@ The key lists and the patterns cover different things and are meant to be used
 together - `*phone*` in `partial_keys` catches a phone number under `customer.phone`,
 which no address pattern would ever match.
 
-Mind where the top level ends (see below): the notification watcher's `recipients` *is*
-the top level, so only the value patterns reach it - an address there is masked, a phone
-number under `recipients.vonage` is not.
-
 **The top level of a trace's `data` is never masked.** That level belongs to the
 watcher, not to the application: `connection_name`, `request`, `changes`, `context`,
 `bindings` and so on are a fixed structure, and the traced data starts one level in.
 Matching therefore begins inside it - `context.customer_email` and
-`job.data.customer_email` are masked, while the notification watcher's `recipients` is
-left alone even though `*recipient*` is in `partial_keys`. Watchers whose own top level used to hold application data
-were reshaped so this rule holds for them too: a cache value sits under its cache key
-(`cache.<key>.value`, so the key itself is what the list matches against), and mail
-addresses sit under `message` as `email`/`full_name` pairs.
+`job.data.customer_email` are masked. Watchers whose own top level used to hold
+application data were reshaped so this rule holds for them too: a cache value sits under
+its cache key (`cache.<key>.value`, so the key itself is what the list matches against),
+mail addresses sit under `message` as `email`/`full_name` pairs, and a notification's
+routes under `delivery.recipients`, where `*recipient*` reaches a phone number no value
+pattern would.
 
 Widen a mask when the shipped list misses something of yours - `*ssn*` instead of
 `ssn`, `*iban*` instead of `iban` - and narrow one when it catches a field you need.
@@ -1012,6 +1009,10 @@ enables SLogger with the `memory` dispatcher, `BaseTestCase` sets in-memory sqli
   `DispatcherQueueConfig::getWorkersNum()`, `WatchersConfig::profilingEnabled()` and
   `LocalStorage` are gone, `TraceUpdateObject` lost its `profiling` argument, and
   `QueueDispatcher` no longer takes the application.
+- **A notification's routes moved** from the top-level `recipients` to
+  `delivery.recipients`. At the top level no key list reached them, so a phone number
+  there was sent unmasked. Anything reading the field on the receiving side needs
+  updating.
 
 ### To 2.1
 

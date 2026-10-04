@@ -27,7 +27,31 @@ class NotificationWatcherTest extends BaseChildWatcherTestCase
 
         $masked = app(TraceDataMasker::class)->mask($creating[0]->data);
 
-        self::assertSame('to***********st', $masked['recipients']['mail']);
+        self::assertSame('to***********st', $masked['delivery']['recipients']['mail']);
+    }
+
+    public function testARouteNoValuePatternMatchesIsMaskedByTheKeyList(): void
+    {
+        $this->registerWatcher(JobWatcher::class, null);
+
+        dispatch(static function (): void {
+            config()->set('mail.default', 'array');
+            config()->set('mail.mailers.array', ['transport' => 'array']);
+
+            Notification::route('mail', 'to@example.test')
+                ->route('vonage', '+15551234567')
+                ->notify(new TestNotification());
+        });
+
+        $creating = $this->dispatcher->findCreating(type: 'notification');
+
+        self::assertCount(1, $creating);
+
+        $masked = app(TraceDataMasker::class)->mask($creating[0]->data);
+
+        // a phone number has no shape a value pattern knows: only the key list
+        // reaches it, and the top level is out of its reach
+        self::assertSame('+1********67', $masked['delivery']['recipients']['vonage']);
     }
 
     public function testAnAddressedRouteKeepsTheAddressAndNotOnlyTheName(): void
@@ -51,14 +75,14 @@ class NotificationWatcherTest extends BaseChildWatcherTestCase
 
         self::assertSame(
             [['email' => 'to@example.test', 'full_name' => 'John Doe']],
-            $creating[0]->data['recipients']['mail']
+            $creating[0]->data['delivery']['recipients']['mail']
         );
 
         $masked = app(TraceDataMasker::class)->mask($creating[0]->data);
 
         // and in the shape the mail watcher uses, both halves are reachable
-        self::assertSame('to***********st', $masked['recipients']['mail'][0]['email']);
-        self::assertSame('Jo****oe', $masked['recipients']['mail'][0]['full_name']);
+        self::assertSame('to***********st', $masked['delivery']['recipients']['mail'][0]['email']);
+        self::assertSame('Jo****oe', $masked['delivery']['recipients']['mail'][0]['full_name']);
     }
 
     public function testAListOfRoutesIsKeptAsAList(): void
@@ -79,7 +103,7 @@ class NotificationWatcherTest extends BaseChildWatcherTestCase
 
         self::assertSame(
             ['first@example.test', 'second@example.test'],
-            $creating[0]->data['recipients']['mail']
+            $creating[0]->data['delivery']['recipients']['mail']
         );
     }
 
@@ -109,10 +133,10 @@ class NotificationWatcherTest extends BaseChildWatcherTestCase
     {
         $data = $creatingTrace->data;
 
-        // the notifiable says what it is; what addresses it lives under `recipients`,
-        // where the key list reaches it
+        // the notifiable says what it is; what addresses it lives under
+        // `delivery.recipients`, where the key list reaches it
         self::assertSame('Anonymous', $data['notifiable']);
-        self::assertSame(['mail' => 'to@example.test'], $data['recipients']);
+        self::assertSame(['mail' => 'to@example.test'], $data['delivery']['recipients']);
         self::assertSame('mail', $data['channel']);
 
         self::assertSame([TestNotification::class], $creatingTrace->tags);
