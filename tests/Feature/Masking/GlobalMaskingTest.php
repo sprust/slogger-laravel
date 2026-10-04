@@ -359,6 +359,7 @@ class GlobalMaskingTest extends BaseWatcherTestCase
             memory: null,
             cpu: null,
             isParent: false,
+            pid: null,
             loggedAt: Carbon::now()
         );
     }

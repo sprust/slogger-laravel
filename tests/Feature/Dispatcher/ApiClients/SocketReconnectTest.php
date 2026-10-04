@@ -116,6 +116,7 @@ class SocketReconnectTest extends BaseTestCase
                 memory: 1.0,
                 cpu: 1.0,
                 isParent: true,
+                pid: null,
                 loggedAt: $loggedAt
             )
         );

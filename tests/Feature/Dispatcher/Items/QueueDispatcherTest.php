@@ -194,6 +194,7 @@ class QueueDispatcherTest extends BaseTestCase
             memory: 12.0,
             cpu: 1.0,
             isParent: $isParent,
+            pid: null,
             loggedAt: Carbon::create(2024, 1, 1, 0, 0, 0)
                 ?: throw new RuntimeException('Failed to create Carbon instance')
         );

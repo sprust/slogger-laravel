@@ -22,7 +22,8 @@ class TraceCreateObject
         public ?float $memory,
         public ?float $cpu,
         public bool $isParent,
-        public Carbon $loggedAt
+        public ?int $pid,
+        public Carbon $loggedAt,
     ) {
     }
 
@@ -43,6 +44,7 @@ class TraceCreateObject
                 'mem'  => $this->memory,
                 'cpu'  => $this->cpu,
                 'isP'  => $this->isParent,
+                'pid'  => $this->pid,
                 'lat'  => $this->loggedAt->format('Y-m-d\TH:i:s.vP'),
             ],
             JSON_THROW_ON_ERROR
@@ -75,6 +77,7 @@ class TraceCreateObject
             memory: isset($jsonData['mem']) ? ((float) $jsonData['mem']) : null,
             cpu: isset($jsonData['cpu']) ? ((float) $jsonData['cpu']) : null,
             isParent: $jsonData['isP'],
+            pid: isset($jsonData['pid']) ? ((int) $jsonData['pid']) : null,
             loggedAt: Carbon::parse($jsonData['lat']),
         );
     }

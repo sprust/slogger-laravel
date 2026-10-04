@@ -145,6 +145,7 @@ class TracesObjectTest extends BaseTestCase
         self::assertSame(12.2, $creating[0]->memory);
         self::assertSame(1.2, $creating[0]->cpu);
         self::assertFalse($creating[0]->isParent);
+        self::assertSame(4321, $creating[0]->pid);
 
         self::assertSame('trace-update', $updating[0]->traceId);
         self::assertSame('success', $updating[0]->status);
@@ -152,6 +153,36 @@ class TracesObjectTest extends BaseTestCase
         self::assertSame(1.2, $updating[0]->duration);
         self::assertSame(12.2, $updating[0]->memory);
         self::assertSame(1.2, $updating[0]->cpu);
+    }
+
+    /**
+     * @throws JsonException
+     */
+    public function testFromJsonReadsABatchQueuedWithoutPid(): void
+    {
+        $tracesJson = (new TracesObject())
+            ->addCreating($this->makeCreateTrace([]))
+            ->toJson();
+
+        $payload = json_decode($tracesJson, true, flags: JSON_THROW_ON_ERROR);
+
+        // a job queued by a release that did not send the pid yet
+        $payload['c'] = array_map(
+            static function (string $item): string {
+                $item = json_decode($item, true, flags: JSON_THROW_ON_ERROR);
+
+                unset($item['pid']);
+
+                return json_encode($item, JSON_THROW_ON_ERROR);
+            },
+            $payload['c']
+        );
+
+        $restored = TracesObject::fromJson(json_encode($payload, JSON_THROW_ON_ERROR));
+
+        $creating = iterator_to_array($restored->iterateCreating());
+
+        self::assertNull($creating[0]->pid);
     }
 
     /**
@@ -212,6 +243,7 @@ class TracesObjectTest extends BaseTestCase
             memory: 12.2,
             cpu: 1.2,
             isParent: false,
+            pid: 4321,
             loggedAt: $loggedAt ?? Carbon::create(2024, 1, 1, 0, 0, 0)
                 ?: throw new RuntimeException('Failed to create Carbon instance')
         );

@@ -129,6 +129,41 @@ class ProcessorTest extends BaseTestCase
         self::assertNull($result);
     }
 
+    public function testCreatedTracesCarryTheProcessId(): void
+    {
+        $processor  = $this->getApp()->make(Processor::class);
+        $dispatcher = $this->getApp()->make(MemoryDispatcher::class);
+
+        $dispatcher->flush();
+
+        $parentTraceId = $processor->startAndGetTraceId(
+            type: 'job',
+            tags: [],
+            data: [],
+            loggedAt: Carbon::now(),
+            customParentTraceId: null
+        );
+
+        $processor->push(type: 'log', status: TraceStatusEnum::Success->value);
+
+        $processor->stop(
+            traceId: $parentTraceId,
+            status: TraceStatusEnum::Success->value,
+            tags: null,
+            data: null,
+            duration: null,
+            parentLoggedAt: Carbon::now()
+        );
+
+        $created = $dispatcher->findCreating();
+
+        self::assertCount(2, $created);
+
+        foreach ($created as $trace) {
+            self::assertSame(getmypid(), $trace->pid);
+        }
+    }
+
     public function testStopClosesInterruptedNestedTraces(): void
     {
         $processor  = $this->getApp()->make(Processor::class);

@@ -68,6 +68,8 @@ class Processor
      */
     private array $traceInterruptedListeners = [];
 
+    private ?int $pid;
+
     public function __construct(
         private readonly Dispatcher $dispatcher,
         private readonly TraceDispatcherInterface $traceDispatcher,
@@ -76,6 +78,9 @@ class Processor
         private readonly TraceDataComplementer $traceDataComplementer,
         private readonly TraceContextInterface $context
     ) {
+        $pid = getmypid();
+
+        $this->pid = is_int($pid) ? $pid : null;
     }
 
     public function isActive(): bool
@@ -268,7 +273,8 @@ class Processor
                 memory: MetricsHelper::getMemoryUsagePercent(),
                 cpu: MetricsHelper::getCpuAvgPercent(),
                 isParent: false,
-                loggedAt: ($loggedAt ?: Carbon::now())->clone()
+                pid: $this->pid,
+                loggedAt: ($loggedAt ?: Carbon::now())->clone(),
             )
         );
     }
@@ -391,7 +397,8 @@ class Processor
                 memory: MetricsHelper::getMemoryUsagePercent(),
                 cpu: MetricsHelper::getCpuAvgPercent(),
                 isParent: true,
-                loggedAt: $loggedAt->clone()
+                pid: $this->pid,
+                loggedAt: $loggedAt->clone(),
             )
         );
 

@@ -209,6 +209,54 @@ class SocketClientTest extends BaseTestCase
         $client->sendTraces($this->makeTraces());
     }
 
+    /**
+     * @throws JsonException
+     */
+    public function testSendTracesMarksOnlyParentsAndSendsPidOnlyWhenKnown(): void
+    {
+        $connection = $this->createMock(Connection::class);
+
+        $connection->method('isConnected')->willReturn(true);
+        $connection->method('read')->willReturn('received');
+
+        $creating = null;
+
+        $connection->expects(self::once())
+            ->method('write')
+            ->willReturnCallback(function (string $payloadJson) use (&$creating) {
+                $creating = json_decode(json_decode($payloadJson, true)['c'], true);
+            });
+
+        $traces = $this->makeTraces()->addCreating(
+            new TraceCreateObject(
+                traceId: 'trace-2',
+                parentTraceId: 'trace-1',
+                type: 'db',
+                status: 'success',
+                tags: [],
+                data: [],
+                duration: null,
+                memory: null,
+                cpu: null,
+                isParent: false,
+                pid: null,
+                loggedAt: Carbon::now()
+            )
+        );
+
+        $client = new SocketClient('token-1', $connection);
+
+        $client->sendTraces($traces);
+
+        self::assertIsArray($creating);
+
+        self::assertSame(4321, $creating[0]['pid']);
+        self::assertTrue($creating[0]['isP']);
+
+        self::assertArrayNotHasKey('pid', $creating[1]);
+        self::assertArrayNotHasKey('isP', $creating[1]);
+    }
+
     private function makeTraces(): TracesObject
     {
         /**
@@ -238,6 +286,7 @@ class SocketClientTest extends BaseTestCase
                     memory: 12.0,
                     cpu: 2.0,
                     isParent: true,
+                    pid: 4321,
                     loggedAt: $loggedAt->setMicroseconds(123000)
                 )
             )
