@@ -6,114 +6,11 @@ SLogger Laravel is a tracing/observability package for Laravel apps. It records 
 
 This README documents installation, configuration, watchers, masking, dispatchers, and usage patterns.
 
-## Upgrading from 2.1
-
-- **`slogger:dispatcher:start` and `slogger:dispatcher:stop` are gone.** The package no
-  longer runs queue workers of its own: run them the way you run any other queue -
-  Supervisor, systemd, Horizon - see [Queue dispatcher](#queue-dispatcher). Stop the old
-  dispatcher before upgrading, and drop it from your process manager.
-  `SLOGGER_DISPATCHER_QUEUE_WORKERS_COUNT` is no longer read, and `storage/slogger/`,
-  which held only the dispatcher's state, can be deleted. `horizon:work` joined the
-  command watcher's default `excepted` list; a published config does not get it - add it
-  by hand if you run Horizon.
-- **Profiling is gone**, with `SLOGGER_PROFILING_ENABLED` and the `profiling` config
-  section. A leftover in a published config is ignored.
-- `ext-pcntl`, `ext-posix` and `symfony/process` are no longer required by the package.
-- API changes if you extend the core: `TraceDispatcherInterface::getProcessor()`,
-  `DispatcherProcessorInterface`, `QueueDispatcherProcessor`,
-  `DispatcherQueueConfig::getWorkersNum()`, `WatchersConfig::profilingEnabled()` and
-  `LocalStorage` are gone, `TraceUpdateObject` lost its `profiling` argument, and
-  `QueueDispatcher` no longer takes the application.
-
-## Upgrading to 2.0
-
-Masking moved out of the traced application and into the dispatcher job.
-
-- **Per-watcher masking is gone.** `input.headers_masking`, `input.parameters_masking`,
-  `output.headers_masking`, `output.fields_masking` and the model watcher's `masks` are
-  no longer read. Leftovers in a published config are ignored, not an error - which
-  means any key you added there stops being masked. **Check your own keys against
-  `masking.full_keys`** and port over what the shipped list does not already cover -
-  it covers the shipped defaults plus `ssn`, `iban` and `card_number`, not whatever
-  else you added yourself.
-- **Keys are masks, not substrings.** A mask is matched against the whole key and
-  against each of its word components, so `auth` covers `php-auth-pw` and `x-auth-user`
-  and not `author`, and `*token*` covers `api_token` and `tokenizer`. If you ported
-  keys from the old per-watcher lists, they were `Str::is` patterns there too -
-  `*token*`, `*password*` - so they carry over unchanged.
-- **Global lists instead**, under `masking.full_keys`, `masking.partial_keys` and
-  `masking.value_patterns` - the last matching the value rather than the key. They are
-  read from your config, so **republish the config** (or add the `masking` section by
-  hand): a published config from before 2.0 has no section at all, and a list that is
-  missing is a list that masks nothing.
-- **A masked secret keeps nothing.** A value under a `masking.full_keys` key becomes
-  `********` - the previous release left the first and last third of every string
-  readable, which for a token or a password is not a mask. Values under
-  `masking.partial_keys` (addresses, phone numbers, names) keep two characters at each
-  end, which is what tells two records apart.
-- **Restart the slogger workers together with the application.** Masking happens in the
-  worker now, so a worker still running 1.x drains a 2.0 queue and ships those batches
-  unmasked. Deploy the workers first, or drain the slogger queue across the switch.
-- **The slogger queue now holds unmasked trace data.** Masking happens on the way out,
-  so whatever the watchers collected sits in the queue store until the batch is sent.
-  Give that queue the retention and access rules the data deserves - a separate Redis
-  database or queue connection, and no long-lived `failed_jobs` rows for it.
-- **Trace data changed shape** where the old shape put application data out of the
-  masker's reach, or into a tag, which nothing masks:
-  - cache values are nested under their cache key (`cache.<key>.value`);
-  - mail addresses are nested under `message` and carried as `email`/`full_name` pairs
-    instead of address-as-key;
-  - an anonymous notifiable's routes moved out of the `Anonymous:...` string into
-    `recipients` (and an address left in a string like that is now masked by a
-    value pattern anyway);
-  - a url's query string is split off into `query` and `query_string`;
-  - **route parameter values are no longer tags, and no longer the `uri`.** A request
-    is tagged and titled with the route pattern - `/reset/{token}` - and the values
-    live in `route_parameters`, where the key list reaches them by parameter name.
-  - the outbound `uri` loses its userinfo, so credentials written into a url do not
-    reach a tag;
-  - values added through `TraceDataComplementer::add()` land under `__add`
-    rather than at the top level, which is what puts them in the masker's reach. A
-    plain value added there belongs to the current unit of work and is dropped when
-    it ends - the next job in a `queue:work` worker, and the next request under
-    Octane, do not inherit it. A `Closure` is the other half: registered once, for
-    the process, and evaluated afresh for every trace, which is what a
-    `fn() => auth()->id()` in a service provider needs.
-- **An XML body is now recorded**, under `__xml`, where before it was dropped:
-  both watchers ran every body through `json_decode`, and an XML one gave `[]`. A
-  consumer that assumed a body is always a decoded structure will now also see a
-  single-key array holding the document as a string.
-- **The outbound parent-trace header changed value.** It used to carry the trace
-  enclosing the call; it now carries the trace of the call itself, so a service you
-  call hangs its trace under that call rather than beside it. Cross-service trees
-  gain a level. Nothing has to be reconfigured, but a receiver that reasons about
-  depth will see the difference.
-
-  Anything consuming those fields on the receiving side needs updating.
-- **Laravel 10.26** is the new floor. `src/` needs 10.12 (`JobTimedOut` landed there),
-  but the test suite runs on testbench's workbench, whose earliest release requires
-  10.26 - and an untested floor is not a supported one. 10.17 was claimed for a while
-  and was never true: the suite installs there and 152 of its tests error out, because
-  the testbench that pairs with 10.17 does not know how to discover the workbench
-  config, so the package reads itself as disabled.
-- API changes if you build formatters yourself: `RequestDataFormatter` lost its
-  `requestHeaders`, `requestParameters`, `responseHeaders` and `responseFields`
-  arguments along with the matching `add*()` methods, and
-  `MaskHelper::maskArrayByList()`/`maskArrayByPatterns()` are gone.
-  `MaskHelper::maskValue()` now masks a string whole; `maskValuePartially()` is the
-  one that keeps a couple of characters.
-- API changes if you extend the core: `Processor::stopDetached()` is gone - `stop()`
-  closes a parent trace whichever way it was started - and so are
-  `Processor::handleSeparateTracing()` and `Processor::registerWatcher()`, which the
-  service provider now does itself. `DispatcherProcessorInterface` gained
-  `getChildCommandName()`: the master saves that name and looks its children up by it,
-  so it has to be what the process table will show.
-
 ## Requirements
 
 - PHP >= 8.2
 - Laravel 10.26+ (tested on 10, 11 and 12)
-- Queue driver for `queue` dispatcher
+- Queue driver for the `queue` dispatcher, and a queue worker running on it
 
 ## Installation
 
@@ -141,10 +38,12 @@ SLOGGER_TOKEN=your-api-token
 SLOGGER_DISPATCHER=queue
 SLOGGER_DISPATCHER_QUEUE_CONNECTION=redis
 SLOGGER_DISPATCHER_QUEUE_NAME=slogger
+SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL=tcp://your-slogger-host:port
 SLOGGER_LOG_REQUESTS_ENABLED=true
 ```
 
-Then run a queue worker on that connection and queue:
+Add the middleware to the routes you want traced (see [Middleware](#middleware)), then
+run a queue worker on that connection and queue:
 
 ```bash
 php artisan queue:work redis --queue=slogger
@@ -162,7 +61,13 @@ Use its setup instructions to provision the server and configure the API client 
 
 ### Custom backend / client
 
-You can replace the backend by providing your own API client. Redefine `ApiClientFactory::create` and return a custom implementation of `SLoggerLaravel\\Dispatcher\\ApiClients\\ApiClientInterface` that sends traces to your backend.
+You can replace the backend with your own API client: bind your implementation of
+`SLoggerLaravel\Dispatcher\ApiClients\ApiClientInterface` (one method,
+`sendTraces(TracesObject $traces): void`) in a service provider of your application. Or
+extend `ApiClientFactory` - a `readonly` class, so the subclass has to be `readonly`
+too - and bind the subclass in its place. The client is used only by the `queue`
+dispatcher's `SendTracesJob`; out of the box `SLOGGER_DISPATCHER_QUEUE_API_CLIENT`
+accepts only `socket`.
 
 ## Configuration
 
@@ -199,6 +104,10 @@ SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TIMEOUT=10
 - `SLOGGER_DISPATCHER`: `queue` or `memory`.
 - `queue` dispatcher puts traces on a queue; your queue workers send them via the socket client.
 - `memory` dispatcher stores traces in memory (useful for tests/dev).
+- `SLOGGER_DISPATCHER_QUEUE_API_CLIENT`: the client the job sends with - `socket`, the
+  only one shipped.
+- `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL`: the receiver's address; there is no
+  default.
 
 `SLOGGER_DISPATCHER_QUEUE_CONNECTION` is **required** for the `queue` dispatcher — there is
 no fallback to `QUEUE_CONNECTION` on purpose: telemetry must not silently share the
@@ -215,7 +124,9 @@ retry policy below.
 
 Send retries are fixed by design: 5 attempts with backoff of 5/10/30/60 seconds between them.
 After the attempts are exhausted the batch is **dropped** with a rate-limited warning in the
-SLogger log channel — telemetry never fills the `failed_jobs` storage.
+SLogger log channel — a send that fails inside the job never reaches `failed_jobs`. Only a
+failure on the worker's side - a worker timeout, a worker killed mid-attempt - can still be
+recorded there by Laravel.
 
 A failed attempt never reaches the application's exception handler: the job releases itself
 with the pause instead of throwing - the worker reports whatever escapes `handle()`, attempt by
@@ -229,13 +140,22 @@ thrown there as before.
 SLOGGER_REQUESTS_HEADER_PARENT_TRACE_ID_KEY=x-parent-trace-id
 ```
 
-Allows linking child traces to parent requests via a custom header. The middleware
-reads it from the incoming request and sets it on the response it returns, so the
-client actually receives it. (It used to be set in `terminate()`, which under FPM runs
-after the response has already been sent - cross-service correlation only ever worked
-in tests.)
+Links traces across services through one header:
+
+- **incoming request**: its value becomes the parent of the request trace;
+- **response**: the middleware sets this request's own trace id on the response it
+  returns, so the client actually receives it (it used to be set in `terminate()`,
+  which under FPM runs after the response has already been sent);
+- **outbound HTTP-client call**: carries the trace id of the call itself, so the called
+  service hangs its trace under that call.
+
+An empty value turns all three off.
 
 ### Watchers (enable/disable)
+
+Every watcher is off by default. The parent ones - requests, jobs, commands - open a
+trace; the others record only inside an open one (an event listed in the event watcher's
+`can_be_orphan` is the exception).
 
 ```dotenv
 SLOGGER_LOG_COMMANDS_ENABLED=true
@@ -254,32 +174,67 @@ SLOGGER_LOG_NOTIFICATION_ENABLED=true
 SLOGGER_LOG_SCHEDULE_ENABLED=true
 ```
 
+### Other settings
+
+Set in `config/slogger.php` only:
+
+- `watchers.*.config.excepted` (command and job watchers): commands and job classes not
+  traced. Commands default to `queue:work`, `queue:listen`, `horizon:work` and
+  `schedule:run`; jobs to `SendTracesJob`, so sending a batch is not a trace of its own.
+- Event watcher: `only_events` (record only these; empty means all), `ignore_events`
+  (on top of the built-in `Illuminate\*`, `Laravel\*`, `eloquent*`, `SLoggerLaravel\*`
+  and a few more, which apply while `only_events` is empty), `serialize_events` (event
+  classes whose JSON goes into the trace) and `can_be_orphan` (recorded even with no
+  trace open). Names are `Str::is` masks, except `serialize_events`, which takes exact
+  class names.
+- `data_completer.excluded_file_masks`: files skipped when the call site under `__trace`
+  is looked for (`Str::is` masks), for your own wrappers around the traced calls.
+- `listeners`: event listeners the package registers; by default `WatcherErrorEvent`
+  goes to `report()`, so a watcher failure reaches your error handler instead of the
+  request.
+
 ## What SLogger Writes
 
 Each trace contains:
 - `trace_id`, `parent_trace_id`, `type`, `status`, `tags`
-- `data` (watcher-specific payload)
+- `data` (watcher-specific payload, plus `__trace` - the call site - and `__add`, the
+  values added through `TraceDataComplementer::add()`)
 - `duration`, `memory`, `cpu`, `logged_at`
+- when it is created: whether it is a parent trace - one that will get an update when
+  it closes - and the id of the process that created it
 
 `memory` is the percentage of `memory_limit` in use, and is **null when there is no
 limit** (`memory_limit = -1`, the CLI default) - there is nothing to be a percentage
 of. `cpu` is the one-minute load average as a percentage of the machine's capacity,
-normalised by core count, and can exceed 100 on an overloaded machine.
+normalised by core count, and can exceed 100 on an overloaded machine; it is null
+where the core count cannot be read (no `/proc/cpuinfo`, i.e. outside Linux).
 
 Watcher data highlights:
-- `request`: url (without the query string), method, action, query/query_string, route_parameters, headers/params, response (for JSON and XML responses)
-- `job`: connection, payload, status (`processed`, `failed`, `released_after_exception`, `timed_out`, `exception_occurred`), exception
+- `request`: `uri` (the route pattern, `/reset/{token}`; an unrouted path is cut to its
+  first segment), ip_address, method, action, middlewares, query/query_string,
+  route_parameters, boot_time, `request.headers`/`request.parameters`,
+  `response.status`/`headers`/`data` (the body when the request accepts JSON or the
+  response is XML, otherwise the redirect target or view)
+- `command`: command, arguments, options, exit_code
+- `job`: connection_name, `job` (name, class, max_tries, timeout, backoff, data, ...), status (`processed`, `failed`, `released_after_exception`, `timed_out`, `exception_occurred`), exception.
+  Only jobs dispatched while the package is enabled are traced
 - `event`: listeners, broadcast, optional serialized payload
 - `model`: action, model class, key, changes
 - `mail`: mailable/notification, queued, `message` (from/reply_to/to/cc/bcc as `email`/`full_name` pairs, subject)
-- `notification`: notifiable, channel, queued, `recipients`, response
-- `cache`: type, key, and `cache.<key>` (value, tags, expiration). A value too long for
-  the masker to read is recorded as `__skipped` instead
-- `db`: query, bindings, time. The watcher masks a binding itself, by length: a string
-  longer than five characters becomes `********`, a shorter or numeric one is kept
-- `http-client`: method, url, query/query_string, request/response, connection timings under `transfer` (concurrent requests are traced independently, so `Http::pool()` works)
-- `schedule`: command, description, cron, output (read up to the masker's limit)
-- `dump`, `log`, `gate`: dump/message/ability info
+- `notification`: notification, notifiable, channel, queued, `recipients`, response
+- `cache`: type (`hit`, `missed`, `set`, `forget`), key, and `cache.<key>` (value, tags,
+  expiration). A value too long for the masker to read is recorded as
+  `{"__skipped": "value_too_large"}` instead
+- `database`: connection, sql (up to 10,000 characters), bindings; the query time is the
+  trace's `duration`. The watcher masks a binding itself, by length: a string longer than
+  five characters becomes `********`, a shorter one, an int or a float is kept
+- `http-client`: method, uri, query/query_string, `request.headers`/`payload`,
+  `response.status_code`/`headers`/`body`, exception, connection timings under `transfer` (concurrent
+  requests are traced independently, so `Http::pool()` works). Only clients built with
+  the handler from [Guzzle / HTTP Client tracing](#guzzle--http-client-tracing) are traced
+- `schedule`: command, description, expression, timezone, user, output (read up to the
+  masker's limit)
+- `dump`: dump; `log`: level, message, context; `gate`: ability, result, user_id, arguments
 
 A queue worker fails a timed out job from its `SIGALRM` handler, i.e. in the middle of
 whatever the job was doing, and kills itself right after. Traces started by the job and
@@ -327,9 +282,11 @@ For HTTP request tracing, add the middleware to the routes you want traced:
 
                 // hide all request params for these paths
                 'hidden_paths' => [
-                    // 'auth/*',
+                    '*',
                 ],
 
+                // above this the parameters are not recorded at all (bytes)
+                'max_content_length' => 1000000,
             ],
 
             'output' => [
@@ -340,10 +297,10 @@ For HTTP request tracing, add the middleware to the routes you want traced:
 
                 // hide all response data for these paths
                 'hidden_paths' => [
-                    // 'auth/*',
+                    '*',
                 ],
 
-                // limit json response size (bytes)
+                // the same for the response body (bytes)
                 'max_content_length' => 1000000,
             ],
         ],
@@ -358,9 +315,13 @@ For HTTP request tracing, add the middleware to the routes you want traced:
 
 Patterns use Laravel `Str::is` matching.
 
-### JSON response size
+The shipped `hidden_paths` are `['*']`: request parameters and response data are recorded
+as `{"__cleaned": null}` everywhere until you narrow the list to the paths that have to
+stay hidden.
 
-A body that is not JSON but **parses as XML** - a SOAP envelope, an XML API - is
+### Request and response bodies
+
+A body that is not JSON but **is an XML document** - a SOAP envelope, an XML API - is
 carried as the document itself, under `__xml`:
 
 ```json
@@ -375,23 +336,28 @@ request body Laravel does not parse into `input()`, an outgoing one, and either
 response.
 
 **The sender has to say so.** A body is recorded as XML only when its `Content-Type`
-is one (`application/xml`, `text/xml`, `application/soap+xml`, `*+xml`) *and* it parses
-as XML. Parsing alone is not enough: an HTML fragment - what an htmx or Turbo endpoint
+is one (`application/xml`, `text/xml`, `application/soap+xml`, `*+xml`) *and* it looks
+like a document: it starts with `<` and its first 512 bytes are not an HTML page. Nothing
+is parsed at this point. The markup alone is not enough: an HTML fragment - what an htmx or Turbo endpoint
 returns - is well-formed markup carrying a CSRF token in `value="…"`, and the masker
 matches *names*, so it cannot reach it. A body that is neither JSON nor labelled XML is
 dropped, as it always was.
 
-A body is also dropped, with `{"__skipped": "body_too_large"}`, above the size the
-masker will read (1 MB), and with `{"__skipped": "non_utf8_body"}` when it is not
-valid UTF-8 - a trace's data is serialised with `json_encode`, and invalid bytes there
-would replace the whole payload of that trace with an encoding error, not just the
-body.
+An XML body that is not valid UTF-8 is recorded as `{"__skipped": "non_utf8_body"}` - a
+trace's data is serialised with `json_encode`, and invalid bytes there would replace the
+whole payload of that trace with an encoding error, not just the body.
 
-Large responses are skipped and marked with:
+Bodies above `max_content_length` (default 1,000,000 bytes) are not recorded:
 
-```json
-{"__skipped": "response_too_large"}
-```
+| Watcher | Marker |
+| --- | --- |
+| request: parameters | `{"__skipped": "request_too_large"}` |
+| request: response | `{"__skipped": "response_too_large"}` |
+| http-client | `{"__cleaned": "--cleaned:big-size-<bytes>--"}` |
+| any, above the size the masker reads (1 MB) | `{"__skipped": "body_too_large"}` |
+
+The last one shows up only when a watcher's own limit is set above 1 MB. The http-client
+watcher also records `{"__skipped": "non_seekable_body"}` for a stream it cannot rewind.
 
 ## Masking Rules
 
@@ -411,8 +377,8 @@ Watchers do not mask. What they do at runtime is hide and truncate: `only_paths`
 `excepted_paths`, `hidden_paths`, `max_content_length`, per-watcher `excepted` lists.
 The one exception is the database watcher: query bindings are positional, so no key list
 can reach them and the dispatcher job has nothing to decide by. It masks them itself, by
-length - a string of more than five characters becomes `********`, a shorter one and a
-numeric binding are recorded as they were. Nothing in a binding says whether it is a
+length - a string of more than five characters becomes `********`, a shorter one, an
+int and a float are recorded as they were. Nothing in a binding says whether it is a
 password or a page number, so a short or numeric secret - a PIN, an OTP, a card number
 held as an integer - does reach the receiver. Do not keep those in cleartext columns, or
 turn the watcher off.
@@ -504,8 +470,8 @@ turn the watcher off.
     // matched against the value and masked in place, for what no key name points
     // at - an address in a log line. an invalid pattern is ignored, not fatal.
     //
-    // order matters: first match wins, so narrow before broad. a capture group
-    // masks the group and keeps the rest.
+    // order matters: each pattern runs on what the previous ones left, so narrow
+    // before broad. a capture group masks the group and keeps the rest.
     'value_patterns' => [
         // postgres://app:secret@db. a scheme is required, so `//assets:v2@2x.png`
         // is left alone; the group runs to the last `@`
@@ -525,7 +491,8 @@ turn the watcher off.
 
 Both lists are **masks**, case-insensitive, with `*` as a wildcard. A mask is matched
 against the whole key **and against each of its word components** — a key is split on
-`_`, `-`, `.`, `:` and camelCase boundaries:
+every character that is not a letter or a digit (`_`, `-`, `.`, `:`, `/`, a space, ...)
+and at camelCase boundaries:
 
 | Mask | Matches | Does not match |
 | --- | --- | --- |
@@ -555,14 +522,15 @@ The split is the point. A secret is worthless the moment any of it leaks, so
 `masking.full_keys` replaces the value entirely: `********`, a fixed width, so the length of
 the secret does not leak either. An address, a phone number or a name is mostly there
 to tell two records apart, so `masking.partial_keys` keeps two characters at each end -
-`john.doe@example.com` becomes `jo****************om`. **Never put a secret in
+`john.doe@example.com` becomes `jo****************om`; a value shorter than six
+characters becomes as many `*` as it has. **Never put a secret in
 `partial_keys`**: what is left is enough to correlate records, and for a short value it
 is enough to guess it.
 
 A value that is a **string containing a document** is parsed, masked and serialised
 back: applications hand whole documents over as strings - an Eloquent `array` cast puts
 one straight into a model's changes, a SOAP call arrives as one - and the key carrying
-such a string says nothing about what is inside it. Two formats are looked into:
+such a string says nothing about what is inside it. Three formats are looked into:
 
 - **JSON**, for strings that open and close like a document - `{`…`}` or `[`…`]`, so a
   line of prose beginning with `{` is still prose. Re-encoding normalises escaping, and
@@ -608,16 +576,17 @@ alone, with the value patterns applied to it as ordinary text.
 
 A value under a **`query_string`** key is masked parameter by parameter rather than as
 a whole, so `page=2&api_token=secret` keeps the page and loses the token. This is where
-the request watchers put a url's query string: a url is also a tag and a title, and
-nothing masks those.
+the request watchers put a url's query string: a url is also a tag and a title, which no
+key list reaches - only the value patterns, and the title not even those.
 
 ### Value patterns
 
 Some things identify a person by their own shape, wherever they turn up, and no key
 name points at them: an address inside `Anonymous:mail,john@example.com`, or in the
 middle of a log message. `masking.value_patterns` are regular expressions matched
-against the **value**, and what they match is masked in place - partially, so the rest
-of the string stays readable:
+against the **value**, and what they match is masked in place, so the rest of the
+string stays readable: a capture group is replaced by `********`, a pattern without one
+is masked partially:
 
 ```
 'invoice sent to john.doe@example.com'  ->  'invoice sent to jo****************om'
@@ -630,15 +599,19 @@ an address loses all of it, not just the middle. An invalid pattern is dropped r
 than raising a warning for every string in every trace.
 
 The key lists and the patterns cover different things and are meant to be used
-together - `recipient` in `partial_keys` catches a phone number under
-`recipients.vonage`, which no address pattern would ever match.
+together - `*phone*` in `partial_keys` catches a phone number under `customer.phone`,
+which no address pattern would ever match.
+
+Mind where the top level ends (see below): the notification watcher's `recipients` *is*
+the top level, so only the value patterns reach it - an address there is masked, a phone
+number under `recipients.vonage` is not.
 
 **The top level of a trace's `data` is never masked.** That level belongs to the
 watcher, not to the application: `connection_name`, `request`, `changes`, `context`,
 `bindings` and so on are a fixed structure, and the traced data starts one level in.
 Matching therefore begins inside it - `context.customer_email` and
-`job.data.customer_email` are masked, while `connection_name` is left readable even
-though it contains `_name`. Watchers whose own top level used to hold application data
+`job.data.customer_email` are masked, while the notification watcher's `recipients` is
+left alone even though `*recipient*` is in `partial_keys`. Watchers whose own top level used to hold application data
 were reshaped so this rule holds for them too: a cache value sits under its cache key
 (`cache.<key>.value`, so the key itself is what the list matches against), and mail
 addresses sit under `message` as `email`/`full_name` pairs.
@@ -672,7 +645,9 @@ Masked values keep basic types, so a masked payload stays shaped like the origin
 - `bool` -> `false`
 - `int` -> `0`
 - `float` -> `0.0`
-- `string` -> `********`, or two characters at each end for a partial mask
+- `string` -> `********`, or two characters at each end for a partial mask (all `*`
+  below six characters)
+- a string longer than the masker reads (1 MB) -> `********`, whatever the key
 - an object -> whatever `json_encode` would make of it, walked as an array like any
   other (one with `__toString()` is masked as its string instead). It only becomes
   `********` when there is nothing to walk - no public state, or nothing encodable
@@ -697,7 +672,7 @@ new \GuzzleHttp\Client([
         (new \SLoggerLaravel\RequestPreparer\RequestDataFormatters())
             ->add(
                 new \SLoggerLaravel\RequestPreparer\RequestDataFormatter(
-                    urlPatterns: ['/api/auth/*', '*sensitive/some/*'],
+                    urlPatterns: ['*/api/auth/*', '*sensitive/some/*'],
                     hideAllRequestParameters: true,
                     hideAllResponseData: true
                 )
@@ -706,8 +681,13 @@ new \GuzzleHttp\Client([
 ])
 ```
 
-Formatters hide and truncate; sensitive values are masked later, by the
-dispatcher job.
+The patterns are matched against the **full url** - scheme, host and query string
+included - so a path pattern needs a leading `*`. `prepareHandler()` takes an existing
+`HandlerStack` as its second argument, and returns the stack untouched while the
+http-client watcher is off.
+
+Formatters only hide; the watcher replaces a body of 1 MB or more, and sensitive values
+are masked later, by the dispatcher job.
 
 ### Connection timings
 
@@ -780,7 +760,10 @@ SLOGGER_CONTEXT=array
   so upgrading changes nothing.
 - **`fiber`** keeps a map per running `Fiber`, and a single map when none is running.
   Set it when your runtime gives each request or each job its own **PHP fiber**.
-- **anything else** is taken for the class name of a store you brought yourself.
+- **anything else** is taken for the class name of a store you brought yourself: a
+  class implementing `TraceContextInterface`, resolved from the container. Anything else
+  fails with `Unknown trace context`. The setting is not read while `SLOGGER_ENABLED` is
+  off.
 
 **Check that `fiber` is the right answer before setting it.** It tells units apart by
 `Fiber::getCurrent()`, so under a runtime whose coroutines are not PHP fibers - Swoole,
@@ -822,9 +805,10 @@ Then `SLOGGER_CONTEXT=App\Tracing\CoroutineTraceContext`. Four things it has to 
 - **Writing must actually write.** If the underlying context has a "do not replace an
   existing key" mode, do not use it: a store that quietly keeps the first value ever
   written to a key reproduces the bug this exists to fix.
-- **Values must come back by value.** Everything kept here is an array or a scalar, so
-  handing a unit of work a copy is enough - but a store that hands two units the same
-  mutable object shares their state again.
+- **Values must come back by value.** Everything kept here is an array of scalars and
+  `Carbon` instances, and the package clones a `Carbon` before it stores or changes one,
+  so handing a unit of work a shallow copy of the array is enough - but a store that
+  hands two units the same mutable object shares their state again.
 
 There is deliberately no way to remove a key. A store whose reads fall through to an
 enclosing unit of work - a coroutine context with inheritance usually does - would
@@ -870,8 +854,9 @@ the parent id, the outbound calls, the values `add()` collected.
 What is lost is the closing update. The parent trace stays `started` in the backend, and
 the outbound calls it left in flight are never tagged `__interrupted`, because the
 processor's sweeps only ever see the current unit and no later unit can reach them. With
-`array` a later request or job in the same process swept them, which is the one thing
-this gives up.
+`array` a later request or job in the same process closed those calls once they were more
+than five minutes old - the parent trace stayed `started` there too - which is the one
+thing this gives up.
 
 It cannot be fixed from inside the package. Cleanup during a fiber's destruction is not
 allowed to do I/O - `Fiber::suspend()` throws `Cannot suspend in a force-closed fiber`
@@ -950,24 +935,6 @@ they cannot.
 of one `dump()`. A `dump()` from another unit of work inside that window is not traced.
 Harmless, but it is telemetry you will not see.
 
-### Upgrading to 2.1
-
-The default behaviour does not change, and neither does any public method. Two
-constructors did, which matters only if you build one yourself or override one in a
-subclass:
-
-| Class | Change |
-| --- | --- |
-| `TraceIdContainer` | now takes `TraceContextInterface`; it had no constructor before |
-| `HttpMiddleware` | now takes `TraceIdContainer` as a second argument |
-
-`Connection` gained `fresh()`, and `SocketClient` and `ApiClientFactory` kept their
-arguments.
-
-`Processor`, `RequestWatcher`, `CommandWatcher`, `JobWatcher`, `HttpClientWatcher` and
-`TraceDataComplementer` each take a `TraceContextInterface` as their **last** argument.
-All of these are resolved from the container, so nothing else has to change.
-
 ## Dispatchers
 
 ### Queue dispatcher
@@ -986,30 +953,167 @@ options, so the worker needs neither `--tries` nor `--backoff`. `queue:work` is 
 from the command watcher by default, and so is `horizon:work`, the worker under Horizon:
 a worker does not trace itself.
 
-- Parent traces are sent immediately.
-- Child traces are batched (default batch size: 5).
-- Orphan traces are sent immediately.
-- On shutdown, remaining traces are flushed.
+- Parent and orphan traces are queued immediately, one job each.
+- Child traces are buffered and queued in groups of 5; every trace update - a parent
+  closing - is queued at once, together with whatever is buffered.
+- What is still buffered is queued when the process ends.
+- A failure to enqueue never reaches the application: the batch is dropped, and a
+  warning (`dropped N trace dispatches`, at most one a minute) goes to the SLogger log
+  channel.
 
 ### Memory dispatcher
 
-Stores traces in memory only. Intended for tests/local development.
+Keeps every trace in the process, unmasked and unsent, until `flush()`;
+`findCreating()`, `findUpdating()` and `totalCount()` are there for test assertions.
+Intended for tests and local development, not for long-running processes.
 
 ## Testing
 
-Run tests:
+The suite runs in Docker through the makefile:
 
 ```bash
-vendor/bin/phpunit
+make setup                # once: build, start, composer install
+make test                 # phpunit
+make check                # cs-fixer + phpstan + phpunit
+make check-laravel-all    # `check` on Laravel 10, 11 and 12
 ```
 
-The testbench config uses in-memory sqlite and `memory` dispatcher.
+`vendor/bin/phpunit` works as well with the dependencies installed locally. `phpunit.xml`
+enables SLogger with the `memory` dispatcher, `BaseTestCase` sets in-memory sqlite and a
+`sync` queue connection, and testbench loads `workbench/config/slogger.php`.
 
 ## Troubleshooting
 
-- No traces: ensure watchers are enabled and middleware is applied for requests.
-- Queue dispatcher not sending: check queue workers and API client URL.
-- Socket client errors: verify socket address and backend availability.
+- No traces: check `SLOGGER_ENABLED=true`, that the watcher is enabled and the
+  middleware applied to the routes, and the SLogger log channel for
+  `dropped N trace dispatches` - `SLOGGER_DISPATCHER_QUEUE_CONNECTION` unset, for one.
+- Queue dispatcher not sending: a worker has to consume that connection *and* queue
+  (`--queue=slogger`). Send errors never reach the application's error reporting: look in
+  the SLogger log channel for `dropped N traces`, `auth failed` (the token) or socket
+  errors (`SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL`, the receiver being up).
+
+## Upgrading
+
+### From 2.1
+
+- **`slogger:dispatcher:start` and `slogger:dispatcher:stop` are gone.** The package no
+  longer runs queue workers of its own: run them the way you run any other queue -
+  Supervisor, systemd, Horizon - see [Queue dispatcher](#queue-dispatcher). Stop the old
+  dispatcher before upgrading, and drop it from your process manager.
+  `SLOGGER_DISPATCHER_QUEUE_WORKERS_COUNT` is no longer read, and `storage/slogger/`,
+  which held only the dispatcher's state, can be deleted. `horizon:work` joined the
+  command watcher's default `excepted` list; a published config does not get it - add it
+  by hand if you run Horizon.
+- **Profiling is gone**, with `SLOGGER_PROFILING_ENABLED` and the `profiling` config
+  section. A leftover in a published config is ignored.
+- `ext-pcntl`, `ext-posix` and `symfony/process` are no longer required by the package.
+- API changes if you extend the core: `TraceDispatcherInterface::getProcessor()`,
+  `DispatcherProcessorInterface`, `QueueDispatcherProcessor`,
+  `DispatcherQueueConfig::getWorkersNum()`, `WatchersConfig::profilingEnabled()` and
+  `LocalStorage` are gone, `TraceUpdateObject` lost its `profiling` argument, and
+  `QueueDispatcher` no longer takes the application.
+
+### To 2.1
+
+The default behaviour does not change, and neither does any public method. Two
+constructors did, which matters only if you build one yourself or override one in a
+subclass:
+
+| Class | Change |
+| --- | --- |
+| `TraceIdContainer` | now takes `TraceContextInterface`; it had no constructor before |
+| `HttpMiddleware` | now takes `TraceIdContainer` as a second argument |
+
+`Connection` gained `fresh()`, and `SocketClient` and `ApiClientFactory` kept their
+arguments.
+
+`Processor`, `RequestWatcher`, `CommandWatcher`, `JobWatcher`, `HttpClientWatcher` and
+`TraceDataComplementer` each take a `TraceContextInterface` as their **last** argument.
+All of these are resolved from the container, so nothing else has to change.
+
+### To 2.0
+
+Masking moved out of the traced application and into the dispatcher job.
+
+- **Per-watcher masking is gone.** `input.headers_masking`, `input.parameters_masking`,
+  `output.headers_masking`, `output.fields_masking` and the model watcher's `masks` are
+  no longer read. Leftovers in a published config are ignored, not an error - which
+  means any key you added there stops being masked. **Check your own keys against
+  `masking.full_keys`** and port over what the shipped list does not already cover -
+  it covers the shipped defaults plus `ssn`, `iban` and `card_number`, not whatever
+  else you added yourself.
+- **Keys are masks, not substrings.** A mask is matched against the whole key and
+  against each of its word components, so `auth` covers `php-auth-pw` and `x-auth-user`
+  and not `author`, and `*token*` covers `api_token` and `tokenizer`. If you ported
+  keys from the old per-watcher lists, they were `Str::is` patterns there too -
+  `*token*`, `*password*` - so they carry over unchanged.
+- **Global lists instead**, under `masking.full_keys`, `masking.partial_keys` and
+  `masking.value_patterns` - the last matching the value rather than the key. They are
+  read from your config, so **republish the config** (or add the `masking` section by
+  hand): a published config from before 2.0 has no section at all, and a list that is
+  missing is a list that masks nothing.
+- **A masked secret keeps nothing.** A value under a `masking.full_keys` key becomes
+  `********` - the previous release left the first and last third of every string
+  readable, which for a token or a password is not a mask. Values under
+  `masking.partial_keys` (addresses, phone numbers, names) keep two characters at each
+  end, which is what tells two records apart.
+- **Restart the slogger workers together with the application.** Masking happens in the
+  worker now, so a worker still running 1.x drains a 2.0 queue and ships those batches
+  unmasked. Deploy the workers first, or drain the slogger queue across the switch.
+- **The slogger queue now holds unmasked trace data.** Masking happens on the way out,
+  so whatever the watchers collected sits in the queue store until the batch is sent.
+  Give that queue the retention and access rules the data deserves - a separate Redis
+  database or queue connection, and no long-lived `failed_jobs` rows for it.
+- **Trace data changed shape** where the old shape put application data out of the
+  masker's reach, or into a tag, which nothing masks:
+  - cache values are nested under their cache key (`cache.<key>.value`);
+  - mail addresses are nested under `message` and carried as `email`/`full_name` pairs
+    instead of address-as-key;
+  - an anonymous notifiable's routes moved out of the `Anonymous:...` string into
+    `recipients` (and an address left in a string like that is now masked by a
+    value pattern anyway);
+  - a url's query string is split off into `query` and `query_string`;
+  - **route parameter values are no longer tags, and no longer the `uri`.** A request
+    is tagged and titled with the route pattern - `/reset/{token}` - and the values
+    live in `route_parameters`, where the key list reaches them by parameter name.
+  - the outbound `uri` loses its userinfo, so credentials written into a url do not
+    reach a tag;
+  - values added through `TraceDataComplementer::add()` land under `__add`
+    rather than at the top level, which is what puts them in the masker's reach. A
+    plain value added there belongs to the current unit of work and is dropped when
+    it ends - the next job in a `queue:work` worker, and the next request under
+    Octane, do not inherit it. A `Closure` is the other half: registered once, for
+    the process, and evaluated afresh for every trace, which is what a
+    `fn() => auth()->id()` in a service provider needs.
+- **An XML body is now recorded**, under `__xml`, where before it was dropped:
+  both watchers ran every body through `json_decode`, and an XML one gave `[]`. A
+  consumer that assumed a body is always a decoded structure will now also see a
+  single-key array holding the document as a string.
+- **The outbound parent-trace header changed value.** It used to carry the trace
+  enclosing the call; it now carries the trace of the call itself, so a service you
+  call hangs its trace under that call rather than beside it. Cross-service trees
+  gain a level. Nothing has to be reconfigured, but a receiver that reasons about
+  depth will see the difference.
+
+  Anything consuming those fields on the receiving side needs updating.
+- **Laravel 10.26** is the new floor. `src/` needs 10.12 (`JobTimedOut` landed there),
+  but the test suite runs on testbench's workbench, whose earliest release requires
+  10.26 - and an untested floor is not a supported one. 10.17 was claimed for a while
+  and was never true: the suite installs there and 152 of its tests error out, because
+  the testbench that pairs with 10.17 does not know how to discover the workbench
+  config, so the package reads itself as disabled.
+- API changes if you build formatters yourself: `RequestDataFormatter` lost its
+  `requestHeaders`, `requestParameters`, `responseHeaders` and `responseFields`
+  arguments along with the matching `add*()` methods, and
+  `MaskHelper::maskArrayByList()`/`maskArrayByPatterns()` are gone.
+  `MaskHelper::maskValue()` now masks a string whole; `maskValuePartially()` is the
+  one that keeps a couple of characters.
+- API changes if you extend the core: `Processor::stopDetached()` is gone - `stop()`
+  closes a parent trace whichever way it was started - and so are
+  `Processor::handleSeparateTracing()` and `Processor::registerWatcher()`, which the
+  service provider now does itself. `DispatcherProcessorInterface` gained
+  `getChildCommandName()`: the master saves that name and looks its children up by it,
+  so it has to be what the process table will show.
 
 ## License
 

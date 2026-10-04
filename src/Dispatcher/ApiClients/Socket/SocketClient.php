@@ -20,9 +20,9 @@ class SocketClient implements ApiClientInterface
      * each other's frames and read each other's answers, so each holds one for the
      * whole exchange.
      *
-     * Where batches are sent one at a time - php-fpm, `queue:work`, the dispatcher's
-     * own workers - the connection this was built with is handed out every time, and
-     * nothing else is ever opened.
+     * Where batches are sent one at a time - php-fpm, a `queue:work` worker - the
+     * connection this was built with is handed out every time, and nothing else is
+     * ever opened.
      */
     private readonly ConnectionPool $connections;
 

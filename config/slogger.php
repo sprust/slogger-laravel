@@ -156,8 +156,8 @@ return [
         // matched against the value and masked in place, for what no key name points
         // at - an address in a log line. an invalid pattern is ignored, not fatal.
         //
-        // order matters: first match wins, so narrow before broad. a capture group
-        // masks the group and keeps the rest.
+        // order matters: each pattern runs on what the previous ones left, so narrow
+        // before broad. a capture group masks the group and keeps the rest.
         'value_patterns' => [
             // postgres://app:secret@db. a scheme is required, so `//assets:v2@2x.png`
             // is left alone; the group runs to the last `@`

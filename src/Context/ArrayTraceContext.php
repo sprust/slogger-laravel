@@ -6,7 +6,7 @@ namespace SLoggerLaravel\Context;
  * One array for the whole process: what "the current unit of work" means where units
  * are run one at a time - php-fpm, `artisan`, a `queue:work` worker.
  *
- * @see FiberTraceContext the default, which is this plus a map per running fiber
+ * @see FiberTraceContext this plus a map per running fiber
  */
 class ArrayTraceContext implements TraceContextInterface
 {

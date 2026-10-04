@@ -12,7 +12,7 @@ class MetricsHelper
 
     /**
      * Null rather than a made-up number: `memory_limit = -1` is the CLI default, where
-     * this package's own dispatcher runs.
+     * the queue workers that send traces run.
      */
     public static function getMemoryUsagePercent(): ?float
     {
