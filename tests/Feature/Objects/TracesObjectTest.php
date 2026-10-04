@@ -48,7 +48,9 @@ class TracesObjectTest extends BaseTestCase
 
         $traces->toJson();
 
-        self::assertSame(2, $traces->count());
+        // serialising walks the batch too
+        self::assertSame([$createTrace], iterator_to_array($traces->iterateCreating()));
+        self::assertSame([$updateTrace], iterator_to_array($traces->iterateUpdating()));
     }
 
     /**
