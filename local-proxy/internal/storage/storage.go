@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/sprust/slogger-laravel/local-proxy/internal/protocol"
@@ -21,6 +22,7 @@ const (
 var traceFileNamePattern = regexp.MustCompile(`^\d{4}_\d{2}_\d{2}_\d{2}$`)
 
 type Store struct {
+	mu     sync.Mutex
 	dir    string
 	now    func() time.Time
 	file   *os.File
@@ -41,6 +43,9 @@ func NewStore(dir string, now func() time.Time) (*Store, error) {
 }
 
 func (s *Store) Append(payload []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if len(payload) == 0 || len(payload) > protocol.MaxFrameSize {
 		return fmt.Errorf("invalid payload size %d", len(payload))
 	}
@@ -80,12 +85,33 @@ func (s *Store) Notify() <-chan struct{} {
 	return s.notify
 }
 
+func (s *Store) IsSealed(name string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.file != nil && s.hour == name {
+		return false
+	}
+
+	return name < CurrentFileName(s.now())
+}
+
 func (s *Store) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	return s.closeFile()
 }
 
 func (s *Store) openFile(hour string) error {
 	filePath := filepath.Join(s.dir, hour)
+	_, statErr := os.Stat(filePath)
+	created := os.IsNotExist(statErr)
+
+	if statErr != nil && !created {
+		return fmt.Errorf("stat trace file %q: %w", filePath, statErr)
+	}
+
 	if err := RecoverFile(filePath); err != nil {
 		return fmt.Errorf("recover active trace file: %w", err)
 	}
@@ -93,6 +119,14 @@ func (s *Store) openFile(hour string) error {
 	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("open trace file %q: %w", filePath, err)
+	}
+
+	if created {
+		if err := syncDirectory(s.dir); err != nil {
+			file.Close()
+
+			return fmt.Errorf("sync traces directory: %w", err)
+		}
 	}
 
 	s.file = file
@@ -197,6 +231,16 @@ func truncate(file *os.File, size int64) error {
 	}
 
 	return file.Sync()
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+
+	return directory.Sync()
 }
 
 type Record struct {

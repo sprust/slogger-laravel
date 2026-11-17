@@ -34,6 +34,35 @@ func TestStoreAppendRotateAndRead(t *testing.T) {
 	assertRecord(t, filepath.Join(store.dir, "2026_11_17_14"), 0, "second", 10)
 }
 
+func TestStoreSealsHourlyFileOnlyAfterWriterRotatesIt(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 11, 17, 13, 0, 0, 0, time.Local)
+	store, err := NewStore(t.TempDir(), func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer store.Close()
+
+	if err := store.Append([]byte("first")); err != nil {
+		t.Fatal(err)
+	}
+
+	now = now.Add(time.Hour)
+	if store.IsSealed("2026_11_17_13") {
+		t.Fatal("file was sealed while writer still had it open")
+	}
+
+	if err := store.Append([]byte("second")); err != nil {
+		t.Fatal(err)
+	}
+
+	if !store.IsSealed("2026_11_17_13") {
+		t.Fatal("file was not sealed after writer rotated it")
+	}
+}
+
 func TestRecoverFileTruncatesOnlyIncompleteTail(t *testing.T) {
 	t.Parallel()
 

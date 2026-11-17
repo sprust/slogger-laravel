@@ -22,12 +22,20 @@ type traceUpstream interface {
 	close()
 }
 
+type Writer interface {
+	Notify() <-chan struct{}
+	IsSealed(name string) bool
+}
+
+var errRetryFileExpired = errors.New("retrying trace file expired")
+
 type Sender struct {
 	dir             string
 	retentionHours  int
 	now             func() time.Time
 	logger          Logger
 	states          *storage.StateStore
+	writer          Writer
 	notify          <-chan struct{}
 	upstream        traceUpstream
 	batchDelay      time.Duration
@@ -39,6 +47,7 @@ type Sender struct {
 	readerOffset  int64
 	durableOffset int64
 	currentBatch  *batch
+	recoveredFile string
 }
 
 func New(
@@ -48,7 +57,7 @@ func New(
 	retentionHours int,
 	now func() time.Time,
 	logger Logger,
-	notify <-chan struct{},
+	writer Writer,
 ) (*Sender, error) {
 	upstreamClient, err := newUpstream(upstreamURL, token)
 	if err != nil {
@@ -65,7 +74,8 @@ func New(
 		now:             now,
 		logger:          logger,
 		states:          storage.NewStateStore(dir),
-		notify:          notify,
+		writer:          writer,
+		notify:          writer.Notify(),
 		upstream:        upstreamClient,
 		batchDelay:      time.Second,
 		retryDelay:      RetryDelay,
@@ -87,6 +97,7 @@ func (s *Sender) Run(ctx context.Context) error {
 	}
 
 	cleanupTicker := time.NewTicker(s.cleanupInterval)
+	cleanup := cleanupTicker.C
 	defer cleanupTicker.Stop()
 	defer s.closeFile()
 	defer s.upstream.close()
@@ -110,7 +121,11 @@ func (s *Sender) Run(ctx context.Context) error {
 		}
 
 		if opened {
-			if err := s.readAvailable(ctx); err != nil {
+			if err := s.readAvailable(ctx, cleanup); err != nil {
+				if errors.Is(err, errRetryFileExpired) {
+					continue
+				}
+
 				return err
 			}
 
@@ -134,7 +149,11 @@ func (s *Sender) Run(ctx context.Context) error {
 		if s.currentBatch != nil {
 			elapsed := time.Since(s.currentBatch.startedAt)
 			if elapsed >= s.batchDelay {
-				if err := s.flush(ctx); err != nil {
+				if err := s.flush(ctx, cleanup); err != nil {
+					if errors.Is(err, errRetryFileExpired) {
+						continue
+					}
+
 					return err
 				}
 
@@ -153,7 +172,7 @@ func (s *Sender) Run(ctx context.Context) error {
 		case <-cleanupTicker.C:
 			timer.Stop()
 
-			if err := s.cleanup(); err != nil {
+			if err := s.cleanup(); err != nil && !errors.Is(err, errRetryFileExpired) {
 				s.logger.Error("local proxy cleanup failed", "error", err)
 			}
 		case <-timer.C:
@@ -161,7 +180,11 @@ func (s *Sender) Run(ctx context.Context) error {
 	}
 }
 
-func (s *Sender) readAvailable(ctx context.Context) error {
+func (s *Sender) readAvailable(ctx context.Context, cleanup <-chan time.Time) error {
+	if err := s.recoverOnSeal(); err != nil {
+		return err
+	}
+
 	for {
 		if s.file == nil {
 			return nil
@@ -190,21 +213,22 @@ func (s *Sender) readAvailable(ctx context.Context) error {
 				if s.currentBatch.operations == 0 {
 					return fmt.Errorf("single trace operation exceeds 4 MiB at offset %d", s.readerOffset)
 				}
-				if err := s.flush(ctx); err != nil {
+
+				if err := s.flush(ctx, cleanup); err != nil {
 					return err
 				}
 
 				s.currentBatch = newBatch(s.durableOffset, time.Now())
-			}
 
-			if !s.currentBatch.canAdd(operation) {
-				return fmt.Errorf("single trace operation exceeds 4 MiB at offset %d", s.readerOffset)
+				if !s.currentBatch.canAdd(operation) {
+					return fmt.Errorf("single trace operation exceeds 4 MiB at offset %d", s.readerOffset)
+				}
 			}
 
 			s.currentBatch.add(operation)
 
 			if s.currentBatch.operations == MaxBatchOperations {
-				if err := s.flush(ctx); err != nil {
+				if err := s.flush(ctx, cleanup); err != nil {
 					return err
 				}
 			}
@@ -224,7 +248,7 @@ func (s *Sender) readAvailable(ctx context.Context) error {
 	}
 }
 
-func (s *Sender) flush(ctx context.Context) error {
+func (s *Sender) flush(ctx context.Context, cleanup <-chan time.Time) error {
 	if s.currentBatch == nil {
 		return nil
 	}
@@ -254,12 +278,8 @@ func (s *Sender) flush(ctx context.Context) error {
 			"retry_in", s.retryDelay.String(),
 		)
 
-		timer := time.NewTimer(s.retryDelay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
+		if err := s.waitRetry(ctx, cleanup); err != nil {
+			return err
 		}
 	}
 
@@ -276,6 +296,76 @@ func (s *Sender) flush(ctx context.Context) error {
 	)
 
 	s.currentBatch = nil
+
+	return nil
+}
+
+func (s *Sender) waitRetry(ctx context.Context, cleanup <-chan time.Time) error {
+	timer := time.NewTimer(s.retryDelay)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-cleanup:
+			if err := s.cleanup(); err != nil {
+				if errors.Is(err, errRetryFileExpired) {
+					if err != errRetryFileExpired {
+						s.logger.Error("local proxy cleanup failed", "error", err)
+					}
+
+					return err
+				}
+
+				s.logger.Error("local proxy cleanup failed", "error", err)
+			}
+		case <-timer.C:
+			return nil
+		}
+	}
+}
+
+func (s *Sender) recoverOnSeal() error {
+	if !s.writer.IsSealed(s.state.File) {
+		s.recoveredFile = ""
+
+		return nil
+	}
+
+	if s.file == nil || s.recoveredFile == s.state.File {
+		return nil
+	}
+
+	if err := s.closeFile(); err != nil {
+		return err
+	}
+
+	filePath := filepath.Join(s.dir, s.state.File)
+	if err := storage.RecoverFile(filePath); err != nil {
+		return fmt.Errorf("recover newly sealed trace file %q: %w", s.state.File, err)
+	}
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("reopen sealed trace file %q: %w", s.state.File, err)
+	}
+
+	stat, err := file.Stat()
+	if err != nil {
+		file.Close()
+
+		return err
+	}
+
+	if s.readerOffset > stat.Size() {
+		file.Close()
+
+		return fmt.Errorf("sender offset %d exceeds recovered size of %q (%d)", s.readerOffset, s.state.File, stat.Size())
+	}
+
+	s.file = file
+	s.recoveredFile = s.state.File
 
 	return nil
 }
@@ -309,10 +399,14 @@ func (s *Sender) ensureFile() (bool, error) {
 		s.durableOffset = s.state.Offset
 	}
 
-	if name < storage.CurrentFileName(s.now()) {
+	if s.writer.IsSealed(name) {
 		if err := storage.RecoverFile(filepath.Join(s.dir, name)); err != nil {
 			return false, fmt.Errorf("recover sealed trace file %q: %w", name, err)
 		}
+
+		s.recoveredFile = name
+	} else {
+		s.recoveredFile = ""
 	}
 
 	file, err := os.Open(filepath.Join(s.dir, name))
@@ -339,7 +433,7 @@ func (s *Sender) ensureFile() (bool, error) {
 }
 
 func (s *Sender) finishIfSealed() (bool, error) {
-	if s.state.File >= storage.CurrentFileName(s.now()) {
+	if !s.writer.IsSealed(s.state.File) {
 		return false, nil
 	}
 
@@ -375,6 +469,7 @@ func (s *Sender) finishCompletedFile() error {
 	s.readerOffset = 0
 	s.durableOffset = 0
 	s.currentBatch = nil
+	s.recoveredFile = ""
 
 	return s.states.Save(s.state)
 }
@@ -402,6 +497,7 @@ func (s *Sender) cleanup() error {
 
 	currentName := storage.CurrentFileName(s.now())
 	var cleanupErrors []error
+	retryFileExpired := false
 
 	for _, name := range names {
 		if name == currentName {
@@ -417,10 +513,6 @@ func (s *Sender) cleanup() error {
 			continue
 		}
 
-		if s.currentBatch != nil && name == s.state.File {
-			continue
-		}
-
 		if err := os.Remove(filepath.Join(s.dir, name)); err != nil && !os.IsNotExist(err) {
 			cleanupErrors = append(cleanupErrors, fmt.Errorf("delete expired trace file %q: %w", name, err))
 			continue
@@ -429,6 +521,8 @@ func (s *Sender) cleanup() error {
 		s.logger.Info("deleted expired trace file", "file", name)
 
 		if name == s.state.File {
+			retryFileExpired = s.currentBatch != nil
+
 			if err := s.closeFile(); err != nil {
 				cleanupErrors = append(cleanupErrors, err)
 			}
@@ -436,11 +530,21 @@ func (s *Sender) cleanup() error {
 			s.state = storage.State{Version: storage.StateVersion}
 			s.readerOffset = 0
 			s.durableOffset = 0
+			s.currentBatch = nil
+			s.recoveredFile = ""
 
 			if err := s.states.Save(s.state); err != nil {
 				cleanupErrors = append(cleanupErrors, err)
 			}
 		}
+	}
+
+	if retryFileExpired {
+		if len(cleanupErrors) > 0 {
+			return errors.Join(append([]error{errRetryFileExpired}, cleanupErrors...)...)
+		}
+
+		return errRetryFileExpired
 	}
 
 	return errors.Join(cleanupErrors...)

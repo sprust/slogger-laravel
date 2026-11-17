@@ -107,12 +107,5 @@ func (s *StateStore) Save(state State) error {
 		return fmt.Errorf("replace sender state: %w", err)
 	}
 
-	directory, err := os.Open(s.dir)
-	if err != nil {
-		return err
-	}
-
-	defer directory.Close()
-
-	return directory.Sync()
+	return syncDirectory(s.dir)
 }

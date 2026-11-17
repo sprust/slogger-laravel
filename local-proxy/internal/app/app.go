@@ -48,7 +48,7 @@ func Run(parent context.Context, configuration config.Config) error {
 		configuration.RetentionHours,
 		nil,
 		logger,
-		store.Notify(),
+		store,
 	)
 	if err != nil {
 		return err

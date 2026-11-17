@@ -122,7 +122,7 @@ jobs:
           php-version: "8.2"
           tools: composer:v2
       - run: composer install --prefer-dist --no-interaction
-      - run: mkdir -p build && go build -trimpath -o "$PWD/build/slogger-local-proxy" ./local-proxy/cmd/slogger-local-proxy
+      - run: mkdir -p build && go -C local-proxy build -trimpath -o "$PWD/build/slogger-local-proxy" ./cmd/slogger-local-proxy
       - name: Run PHP to Go integration test
         env:
           SLOGGER_LOCAL_PROXY_TEST_BINARY: ${{ github.workspace }}/build/slogger-local-proxy
@@ -173,10 +173,10 @@ jobs:
         run: |
           mkdir -p assets
           tag="${{ steps.version.outputs.tag }}"
-          go build -trimpath \
+          go -C local-proxy build -trimpath \
             -ldflags="-s -w -X main.version=$tag" \
-            -o assets/slogger-local-proxy_linux_amd64 \
-            ./local-proxy/cmd/slogger-local-proxy
+            -o "$PWD/assets/slogger-local-proxy_linux_amd64" \
+            ./cmd/slogger-local-proxy
           cd assets
           sha256sum slogger-local-proxy_linux_amd64 > slogger-local-proxy_checksums.txt
 
