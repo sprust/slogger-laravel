@@ -33,7 +33,7 @@ readonly class ApiClientFactory
         return new SocketClient(
             apiToken: $this->apiToken,
             connection: new Connection(
-                socketAddress: $this->queueConfig->getSocketClientUrl(),
+                socketAddress: $this->queueConfig->getSocketClientAddress(),
                 logger: Log::channel(
                     $this->config->getLogChannel()
                 ),

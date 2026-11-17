@@ -97,8 +97,11 @@ SLOGGER_DISPATCHER=queue
 SLOGGER_DISPATCHER_QUEUE_CONNECTION=slogger-rabbitmq
 SLOGGER_DISPATCHER_QUEUE_NAME=slogger
 SLOGGER_DISPATCHER_QUEUE_API_CLIENT=socket
+SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TYPE=direct
 SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL=tcp://0.0.0.0:0002
 SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TIMEOUT=10
+SLOGGER_LOCAL_PROXY_TRACES_PATH=storage/slogger/traces
+SLOGGER_LOCAL_PROXY_RETENTION_HOURS=24
 ```
 
 - `SLOGGER_DISPATCHER`: `queue` или `memory`.
@@ -106,8 +109,10 @@ SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TIMEOUT=10
 - Диспатчер `memory` хранит трейсы в памяти (удобно для тестов/разработки).
 - `SLOGGER_DISPATCHER_QUEUE_API_CLIENT`: клиент, через который отправляет джоба, —
   `socket`, единственный поставляемый.
-- `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL`: адрес приёмника; значения по умолчанию
-  нет.
+- `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TYPE`: `direct` (по умолчанию) отправляет напрямую,
+  `proxy` использует локальный Unix socket. См. [Локальный прокси](#локальный-прокси).
+- `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL`: адрес приёмника в direct-режиме и upstream Go-прокси;
+  значения по умолчанию нет.
 
 `SLOGGER_DISPATCHER_QUEUE_CONNECTION` **обязателен** для диспатчера `queue` — фолбэка на
 `QUEUE_CONNECTION` нет намеренно: телеметрия не должна молча делить queue-коннекшен с
@@ -968,6 +973,84 @@ php artisan queue:work slogger-rabbitmq --queue=slogger
   предупреждение (`dropped N trace dispatches`, не чаще раза в минуту) уходит в
   лог-канал SLogger.
 
+### Локальный прокси
+
+Необязательный Go-прокси создаёт durable-буфер между воркерами очереди и SLogger. PHP получает
+подтверждение только после append на диск и `fsync`; дальше пачку доставляет сам прокси. Семантика —
+**at least once**: падение после отправки, но до сохранения offset может дать дубликат, а не пропуск.
+
+В релизе сейчас есть бинарь только для **Linux amd64**. Установите asset той же версии, что и пакет:
+
+```bash
+php artisan slogger:local-proxy:download
+vendor/bin/slogger-local-proxy -version
+```
+
+По умолчанию файл попадает в `vendor/bin/slogger-local-proxy`. `--release=2.3.0` выбирает другой
+релиз явно, `--path=/custom/destination` меняет путь назначения бинаря, а `--force` после обновления
+пакета заменяет существующий файл. Команда проверяет SHA-256 из релиза до атомарной замены старого
+бинаря.
+
+Настройка и включение:
+
+```dotenv
+SLOGGER_TOKEN=your-api-token
+SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TYPE=proxy
+SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL=tcp://your-slogger-host:port
+SLOGGER_LOCAL_PROXY_TRACES_PATH=storage/slogger/traces
+SLOGGER_LOCAL_PROXY_RETENTION_HOURS=24
+```
+
+- `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TYPE` по умолчанию `direct`: PHP напрямую соединяется с
+  `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL`, как раньше. В `proxy` PHP идёт на локальный Unix
+  socket, а Go читает тот же URL как upstream. При переключении URL менять не нужно.
+- `SLOGGER_LOCAL_PROXY_TRACES_PATH` задаётся относительно корня приложения. Ведущие и завершающие
+  слеши игнорируются: `/storage/slogger/traces/` и `storage/slogger/traces` эквивалентны и означают
+  `<project-root>/storage/slogger/traces`. Пустой путь и `..` запрещены.
+- Имя socket всегда `local-proxy.sock` внутри этого каталога; локальный URL и имя файла не
+  настраиваются. Запускайте PHP-воркеры и прокси под одним пользователем (или выдайте эквивалентные
+  права): каталог, socket и файлы данных доступны только владельцу.
+- `SLOGGER_LOCAL_PROXY_RETENTION_HOURS` по умолчанию 24. Просроченные файлы удаляются даже с
+  неотправленными трейсами, поэтому перед длительным outage увеличьте retention.
+
+Пример Supervisor:
+
+```ini
+[program:slogger-local-proxy]
+directory=/path/to/application
+command=/path/to/application/vendor/bin/slogger-local-proxy -env /path/to/application/.env
+autostart=true
+autorestart=true
+stopsignal=TERM
+stopwaitsecs=10
+user=application
+redirect_stderr=true
+stdout_logfile=/var/log/supervisor/slogger-local-proxy.log
+```
+
+Примените через `supervisorctl reread && supervisorctl update`. Environment variables процесса имеют
+приоритет над `.env`. Процесс берёт эксклюзивный `flock`; повторный запуск завершается ошибкой, не
+заменяя активный socket. SIGINT/SIGTERM прекращают приём и дают graceful shutdown до пяти секунд.
+
+В каталоге лежат hourly-файлы `YYYY_MM_DD_HH`, `local-proxy-state.json`, lock/socket и error-логи.
+Offset сохраняется атомарно. Закрытый часовой файл удаляется после полной отправки; активный не
+удаляется только из-за того, что sender догнал его текущий конец. Cleanup работает при старте и
+каждые десять минут.
+
+Исходящая пачка содержит максимум 200 create/update-операций и 4 MiB JSON. Полная отправляется
+сразу, неполная — не чаще раза в секунду. Большие входные записи делятся по границам операций без
+потери неизвестных полей трейсов.
+
+Ошибки пишутся в `local-proxy-errors-YYYY_MM_DD.logs` в том же каталоге и в stderr. Суточные
+error-логи хранятся три дня, token и payload трейсов в них не попадают. Connect timeout upstream —
+10 секунд, write/read — по 20 секунд. После ошибки connect/auth/send/read та же пачка повторяется с
+новым handshake через три секунды, ошибка логируется, а сохранённый offset не двигается.
+
+Для обновления выполните `php artisan slogger:local-proxy:download --force` и перезапустите
+Supervisor-программу. Для отката установите `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TYPE=direct` и
+остановите прокси; upstream URL не меняется. Неотправленные файлы прокси при этом автоматически не
+переносятся и не доставляются.
+
 ### Диспатчер memory
 
 Держит каждый трейс в процессе, незамаскированным и неотправленным, до `flush()`;
@@ -982,6 +1065,8 @@ php artisan queue:work slogger-rabbitmq --queue=slogger
 make setup                # once: build, start, composer install
 make test                 # phpunit
 make check                # cs-fixer + phpstan + phpunit
+make proxy-check          # gofmt + go vet + race tests + Go build, в PHP-контейнере
+make proxy-integration    # реальный PHP client -> Go proxy -> fake SLogger
 make check-laravel-all    # `check` on Laravel 10.26.* (the floor), 10, 11 and 12
 ```
 
@@ -998,8 +1083,19 @@ make check-laravel-all    # `check` on Laravel 10.26.* (the floor), 10, 11 and 1
   (`--queue=slogger`). Ошибки отправки никогда не доходят до репортинга ошибок
   приложения: ищите в лог-канале SLogger `dropped N traces`, `auth failed` (токен) или
   ошибки сокета (`SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL`, запущен ли приёмник).
+- Локальный прокси не отправляет: смотрите `local-proxy-errors-YYYY_MM_DD.logs` в настроенном
+  каталоге трейсов. Типичные причины — auth/connect upstream, занятый lock, повреждённый state/file
+  или нехватка места. Socket должен быть доступен и пользователю прокси, и пользователю queue-воркера.
 
 ## Обновление
+
+### С 2.2
+
+- Добавлен необязательный локальный Go-прокси. Существующие приложения продолжают прямую доставку:
+  `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TYPE` по умолчанию `direct`, поэтому без включения прокси
+  ничего менять не нужно. Установка и Supervisor описаны в [Локальный прокси](#локальный-прокси).
+- Опубликованный `config/slogger.php` сам не получает `dispatchers.queue.api_clients.socket.type` и
+  `local_proxy`. Перед включением `proxy` опубликуйте конфиг заново или добавьте эти ключи вручную.
 
 ### С 2.1
 

@@ -48,6 +48,17 @@ test:
 		--display-warnings \
 		tests ${c}
 
+proxy-check:
+	mkdir -p build
+	"$(PHP_CLI)" sh -c 'cd /app/local-proxy && test -z "$$(gofmt -l .)" && go vet ./... && go test -race ./... && go build -o /app/build/slogger-local-proxy-check ./cmd/slogger-local-proxy'
+
+proxy-build:
+	mkdir -p build
+	"$(PHP_CLI)" sh -c 'cd /app/local-proxy && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -X main.version=dev" -o /app/build/slogger-local-proxy ./cmd/slogger-local-proxy'
+
+proxy-integration: proxy-build
+	"$(PHP_CLI)" sh -c 'cd /app && SLOGGER_LOCAL_PROXY_TEST_BINARY=/app/build/slogger-local-proxy vendor/bin/phpunit tests/Feature/LocalProxy/LocalProxyIntegrationTest.php'
+
 stan:
 	"$(PHP_CLI)" ./vendor/bin/phpstan analyse \
 		--memory-limit=1G

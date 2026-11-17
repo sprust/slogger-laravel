@@ -51,6 +51,8 @@ return [
                 'default' => env('SLOGGER_DISPATCHER_QUEUE_API_CLIENT', 'socket'),
 
                 'socket' => [
+                    // direct uses the SLogger URL; proxy uses the fixed local Unix socket.
+                    'type' => env('SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TYPE', 'direct'),
                     // socket address for socket backend (e.g. tcp://host:port).
                     'url' => env('SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL'),
                     // read/write timeout in seconds (connect timeout is separate).
@@ -58,6 +60,13 @@ return [
                 ],
             ],
         ],
+    ],
+
+    'local_proxy' => [
+        // Relative to the project root. Leading/trailing slashes are ignored:
+        // "/storage/slogger/traces/" and "storage/slogger/traces" are equivalent.
+        'traces_path' => env('SLOGGER_LOCAL_PROXY_TRACES_PATH', 'storage/slogger/traces'),
+        'retention_hours' => env('SLOGGER_LOCAL_PROXY_RETENTION_HOURS', 24),
     ],
 
     // channel for internal errors/logs.

@@ -72,4 +72,47 @@ class DispatcherQueueConfigTest extends BaseTestCase
             $this->config->getSocketClientTimeoutSeconds()
         );
     }
+
+    public function testDirectSocketClientUsesConfiguredUrl(): void
+    {
+        config()->set('slogger.dispatchers.queue.api_clients.socket.type', 'direct');
+        config()->set('slogger.dispatchers.queue.api_clients.socket.url', 'tcp://slogger:9002');
+
+        self::assertSame('tcp://slogger:9002', $this->config->getSocketClientAddress());
+    }
+
+    public function testProxySocketClientUsesNormalizedFixedUnixSocket(): void
+    {
+        config()->set('slogger.dispatchers.queue.api_clients.socket.type', 'proxy');
+        config()->set('slogger.dispatchers.queue.api_clients.socket.url', null);
+
+        $expected = 'unix://' . base_path('storage/slogger/traces/local-proxy.sock');
+
+        foreach (['/storage/slogger/traces/', 'storage/slogger/traces'] as $path) {
+            config()->set('slogger.local_proxy.traces_path', $path);
+
+            self::assertSame($expected, $this->config->getSocketClientAddress());
+        }
+    }
+
+    public function testUnknownSocketClientTypeFails(): void
+    {
+        config()->set('slogger.dispatchers.queue.api_clients.socket.type', 'unknown');
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('direct or proxy');
+
+        $this->config->getSocketClientAddress();
+    }
+
+    public function testLocalProxyPathRejectsParentTraversal(): void
+    {
+        config()->set('slogger.dispatchers.queue.api_clients.socket.type', 'proxy');
+        config()->set('slogger.local_proxy.traces_path', 'storage/../traces');
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage("must not contain '..'");
+
+        $this->config->getSocketClientAddress();
+    }
 }

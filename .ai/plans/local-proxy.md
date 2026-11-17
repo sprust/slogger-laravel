@@ -463,7 +463,7 @@ Fatal internal error тоже отменяет общий context: процес�
 
 ```bash
 php artisan slogger:local-proxy:download \
-    [--version=] [--path=] [--force]
+    [--release=] [--path=] [--force]
 ```
 
 Поведение:
@@ -519,8 +519,8 @@ slogger-local-proxy_checksums.txt
 
 Checksums содержит SHA-256 единственного бинаря. Других OS и архитектур в релизе пока нет.
 
-Собранные binary и checksums передаются в release job через `actions/upload-artifact` /
-`actions/download-artifact`. Существующий `gh release create` получает оба assets в том же вызове.
+Собранные binary и checksums создаются непосредственно в release job после разрешения версии.
+Существующий `gh release create` получает оба assets в том же вызове.
 Если тег уже существует, сохраняется текущий guard: релиз и assets повторно не перезаписываются.
 Таймаут release job увеличить с запасом на build/upload.
 

@@ -6,6 +6,7 @@ use Illuminate\Config\Repository;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Events\Dispatcher;
+use SLoggerLaravel\Commands\DownloadLocalProxyCommand;
 use SLoggerLaravel\Configs\DispatcherConfig;
 use SLoggerLaravel\Configs\DispatcherQueueConfig;
 use SLoggerLaravel\Configs\GeneralConfig;
@@ -162,6 +163,10 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         if (!$this->app->runningInConsole()) {
             return;
         }
+
+        $this->commands([
+            DownloadLocalProxyCommand::class,
+        ]);
 
         $this->publishes(
             paths: [
