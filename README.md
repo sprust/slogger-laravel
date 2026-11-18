@@ -1057,6 +1057,15 @@ connection timeout is 10 seconds, write and read timeouts are 20 seconds each. A
 connect/auth/send/read, the same batch is retried with a new handshake after three seconds and the
 error is logged; the saved offset does not move.
 
+Once per second the proxy atomically writes `local-proxy-metrics.json` in the traces directory. This
+JSON snapshot includes process heap/RSS/goroutines, connections and slots, writer queue length and
+capacity, input-frame budget, appended records/bytes, sent batches/operations/bytes, failed send
+attempts, sender state, hourly file count/bytes and error-log count. It contains operational metadata
+only, never tokens or trace payloads. The file uses owner-only permissions and is not treated as a
+trace file by retention cleanup. Counters are process-lifetime values and reset when the proxy
+restarts. Use `collected_at` to judge snapshot freshness. A continuous series of metrics publication
+errors is logged at most once per minute, regardless of changing temporary paths in the error text.
+
 For an upgrade, run `php artisan slogger:local-proxy:download --force` and restart the Supervisor
 program. To roll back, set `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TYPE=direct` and stop the proxy;
 the upstream URL stays unchanged. Unsent proxy files are not migrated or drained automatically by

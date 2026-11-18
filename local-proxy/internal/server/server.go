@@ -52,6 +52,17 @@ type Server struct {
 	handlers   sync.WaitGroup
 }
 
+type Metrics struct {
+	Connections      int
+	IdleConnections  int
+	ConnectionSlots  int
+	ConnectionLimit  int
+	QueuedRecords    int
+	QueueCapacity    int
+	InputBudgetUsed  int64
+	InputBudgetTotal int64
+}
+
 func New(socketPath string, store Store, logger Logger) *Server {
 	return &Server{
 		socketPath: socketPath,
@@ -63,6 +74,31 @@ func New(socketPath string, store Store, logger Logger) *Server {
 		slots:      make(chan struct{}, maxLocalConnections),
 		conns:      make(map[net.Conn]struct{}),
 		idle:       make(map[net.Conn]bool),
+	}
+}
+
+func (s *Server) Metrics() Metrics {
+	s.mu.Lock()
+	idleConnections := 0
+	for _, idle := range s.idle {
+		if idle {
+			idleConnections++
+		}
+	}
+	connections := len(s.conns)
+	s.mu.Unlock()
+
+	available := s.budget.Available()
+
+	return Metrics{
+		Connections:      connections,
+		IdleConnections:  idleConnections,
+		ConnectionSlots:  len(s.slots),
+		ConnectionLimit:  cap(s.slots),
+		QueuedRecords:    len(s.requests),
+		QueueCapacity:    cap(s.requests),
+		InputBudgetUsed:  s.budget.capacity - available,
+		InputBudgetTotal: s.budget.capacity,
 	}
 }
 

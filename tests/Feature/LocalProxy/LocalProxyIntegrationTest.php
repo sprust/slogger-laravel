@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace SLoggerLaravel\Tests\Feature\LocalProxy;
 
 use Illuminate\Support\Carbon;
+use DateTimeImmutable;
 use JsonException;
 use RuntimeException;
 use SLoggerLaravel\Configs\DispatcherQueueConfig;
@@ -91,6 +92,12 @@ class LocalProxyIntegrationTest extends BaseTestCase
             $state = json_decode((string) file_get_contents($statePath), true);
             self::assertGreaterThan(0, $state['offset']);
 
+            $metrics = $this->waitForMetrics(
+                fn(array $metrics): bool => ($metrics['storage']['appended_records_total'] ?? 0) === 2
+                    && ($metrics['sender']['sent_operations_total'] ?? 0) === 2
+            );
+            self::assertSame(0, $metrics['sender']['failed_send_attempts_total']);
+
             $this->stopProxy($proxy);
             $proxy = $this->startProxy();
 
@@ -120,14 +127,37 @@ class LocalProxyIntegrationTest extends BaseTestCase
                     && str_contains((string) file_get_contents($path), 'failed to send traces to SLogger');
             });
 
+            $metrics = $this->waitForMetrics(
+                fn(array $metrics): bool => ($metrics['storage']['appended_records_total'] ?? 0) === 1
+                    && ($metrics['sender']['sent_operations_total'] ?? 0) === 0
+                    && ($metrics['sender']['failed_send_attempts_total'] ?? 0) >= 1
+            );
+
             proc_terminate($proxy['process'], 9);
             $this->waitForExit($proxy['process'], $proxy['pipes']);
-            $proxy = $this->startProxy();
-
             $upstream = $this->startUpstream($address)[0];
+            $proxy    = $this->startProxy();
+
             $this->waitForTraces(['trace-1', 'trace-2', 'trace-3'], 20);
 
+            $metrics = $this->waitForMetrics(
+                fn(array $metrics): bool => ($metrics['storage']['appended_records_total'] ?? 0) === 0
+                    && ($metrics['sender']['sent_operations_total'] ?? 0) === 1
+            );
+            self::assertSame(0, $metrics['sender']['failed_send_attempts_total']);
+            $lastLiveCollectedAt = new DateTimeImmutable($metrics['collected_at']);
+
             $this->stopProxy($proxy);
+            $finalMetrics = $this->readMetrics();
+            self::assertSame(0, $finalMetrics['storage']['appended_records_total']);
+            self::assertSame(1, $finalMetrics['sender']['sent_operations_total']);
+            self::assertSame(0, $finalMetrics['sender']['failed_send_attempts_total']);
+            self::assertSame(0, $finalMetrics['server']['connections']);
+            self::assertSame(0, $finalMetrics['server']['connection_slots_used']);
+            self::assertGreaterThan(
+                $lastLiveCollectedAt,
+                new DateTimeImmutable($finalMetrics['collected_at'])
+            );
         } finally {
             $status = proc_get_status($proxy['process']);
 
@@ -279,6 +309,38 @@ class LocalProxyIntegrationTest extends BaseTestCase
         proc_terminate($process, 9);
 
         throw new RuntimeException('Process did not exit before timeout.');
+    }
+
+    /**
+     * @param callable(array<string, mixed>): bool $condition
+     *
+     * @return array<string, mixed>
+     */
+    private function waitForMetrics(callable $condition): array
+    {
+        $metrics = [];
+
+        $this->waitFor(function () use (&$metrics, $condition): bool {
+            $path = $this->root . '/storage/slogger/traces/local-proxy-metrics.json';
+
+            if (!is_file($path)) {
+                return false;
+            }
+
+            $metrics = json_decode((string) file_get_contents($path), true);
+
+            return $condition($metrics);
+        });
+
+        return $metrics;
+    }
+
+    /** @return array<string, mixed> */
+    private function readMetrics(): array
+    {
+        $path = $this->root . '/storage/slogger/traces/local-proxy-metrics.json';
+
+        return json_decode((string) file_get_contents($path), true);
     }
 
     /** @param list<string> $traceIds */

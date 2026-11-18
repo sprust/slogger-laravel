@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/sprust/slogger-laravel/local-proxy/internal/storage"
@@ -29,6 +30,13 @@ type Writer interface {
 
 var errRetryFileExpired = errors.New("retrying trace file expired")
 
+type Metrics struct {
+	SentBatches        uint64
+	SentOperations     uint64
+	SentBytes          uint64
+	FailedSendAttempts uint64
+}
+
 type Sender struct {
 	dir             string
 	retentionHours  int
@@ -48,6 +56,11 @@ type Sender struct {
 	durableOffset int64
 	currentBatch  *batch
 	recoveredFile string
+
+	sentBatches        atomic.Uint64
+	sentOperations     atomic.Uint64
+	sentBytes          atomic.Uint64
+	failedSendAttempts atomic.Uint64
 }
 
 func New(
@@ -81,6 +94,15 @@ func New(
 		retryDelay:      RetryDelay,
 		cleanupInterval: 10 * time.Minute,
 	}, nil
+}
+
+func (s *Sender) Metrics() Metrics {
+	return Metrics{
+		SentBatches:        s.sentBatches.Load(),
+		SentOperations:     s.sentOperations.Load(),
+		SentBytes:          s.sentBytes.Load(),
+		FailedSendAttempts: s.failedSendAttempts.Load(),
+	}
 }
 
 func (s *Sender) Run(ctx context.Context) error {
@@ -276,6 +298,8 @@ func (s *Sender) flush(ctx context.Context, cleanup <-chan time.Time) error {
 			break
 		}
 
+		s.failedSendAttempts.Add(1)
+
 		s.logger.Error(
 			"failed to send traces to SLogger",
 			"error", err,
@@ -290,6 +314,10 @@ func (s *Sender) flush(ctx context.Context, cleanup <-chan time.Time) error {
 			return err
 		}
 	}
+
+	s.sentBatches.Add(1)
+	s.sentOperations.Add(uint64(s.currentBatch.operations))
+	s.sentBytes.Add(uint64(len(payload)))
 
 	if err := s.saveOffset(s.currentBatch.offset); err != nil {
 		return err

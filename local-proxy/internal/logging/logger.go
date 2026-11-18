@@ -13,6 +13,10 @@ import (
 
 var errorFileNamePattern = regexp.MustCompile(`^local-proxy-errors-(\d{4}_\d{2}_\d{2})\.logs$`)
 
+func IsErrorLogFileName(name string) bool {
+	return errorFileNamePattern.MatchString(name)
+}
+
 type Logger struct {
 	dir   string
 	now   func() time.Time

@@ -51,6 +51,13 @@ func (b *memoryBudget) Acquire(ctx context.Context, size uint32) (func(), error)
 	}
 }
 
+func (b *memoryBudget) Available() int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.available
+}
+
 func (b *memoryBudget) release(amount int64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

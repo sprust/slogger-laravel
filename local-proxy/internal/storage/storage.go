@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sprust/slogger-laravel/local-proxy/internal/protocol"
@@ -28,6 +29,14 @@ type Store struct {
 	file   *os.File
 	hour   string
 	notify chan struct{}
+
+	appendedRecords atomic.Uint64
+	appendedBytes   atomic.Uint64
+}
+
+type Metrics struct {
+	AppendedRecords uint64
+	AppendedBytes   uint64
 }
 
 func NewStore(dir string, now func() time.Time) (*Store, error) {
@@ -73,6 +82,9 @@ func (s *Store) Append(payload []byte) error {
 		return fmt.Errorf("sync trace file: %w", err)
 	}
 
+	s.appendedRecords.Add(1)
+	s.appendedBytes.Add(uint64(len(payload)))
+
 	select {
 	case s.notify <- struct{}{}:
 	default:
@@ -94,6 +106,13 @@ func (s *Store) IsSealed(name string) bool {
 	}
 
 	return name < CurrentFileName(s.now())
+}
+
+func (s *Store) Metrics() Metrics {
+	return Metrics{
+		AppendedRecords: s.appendedRecords.Load(),
+		AppendedBytes:   s.appendedBytes.Load(),
+	}
 }
 
 func (s *Store) Close() error {

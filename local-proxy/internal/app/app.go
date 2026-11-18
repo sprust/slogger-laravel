@@ -10,6 +10,7 @@ import (
 
 	"github.com/sprust/slogger-laravel/local-proxy/internal/config"
 	"github.com/sprust/slogger-laravel/local-proxy/internal/logging"
+	"github.com/sprust/slogger-laravel/local-proxy/internal/metrics"
 	"github.com/sprust/slogger-laravel/local-proxy/internal/sender"
 	"github.com/sprust/slogger-laravel/local-proxy/internal/server"
 	"github.com/sprust/slogger-laravel/local-proxy/internal/storage"
@@ -55,11 +56,12 @@ func Run(parent context.Context, configuration config.Config) error {
 	}
 
 	localServer := server.New(server.SocketPath(configuration.TracesDir), store, logger)
+	metricsCollector := metrics.New(configuration.TracesDir, localServer, store, traceSender, logger)
 
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
-	errorsChannel := make(chan error, 2)
+	errorsChannel := make(chan error, 3)
 	go func() {
 		errorsChannel <- localServer.Run(ctx)
 	}()
@@ -68,12 +70,25 @@ func Run(parent context.Context, configuration config.Config) error {
 		errorsChannel <- traceSender.Run(ctx)
 	}()
 
+	go func() {
+		errorsChannel <- metricsCollector.Run(ctx)
+	}()
+
 	firstError := <-errorsChannel
 	cancel()
 
 	secondError := <-errorsChannel
+	thirdError := <-errorsChannel
 
-	runError := errors.Join(nonCancellationError(firstError), nonCancellationError(secondError))
+	if err := metricsCollector.Write(); err != nil {
+		logger.Error("failed to write final local proxy metrics", "error", err)
+	}
+
+	runError := errors.Join(
+		nonCancellationError(firstError),
+		nonCancellationError(secondError),
+		nonCancellationError(thirdError),
+	)
 
 	if runError != nil {
 		logger.Error("local proxy stopped after an internal error", "error", runError)
