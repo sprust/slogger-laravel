@@ -16,6 +16,7 @@ import (
 const (
 	DefaultTracesPath     = "storage/slogger/traces"
 	DefaultRetentionHours = 24
+	MaxRetentionHours     = 2562047
 )
 
 type Config struct {
@@ -48,9 +49,9 @@ func Load(envPath, rootDir string) (Config, error) {
 		return Config{}, err
 	}
 
-	tracesPath := value(values, "SLOGGER_LOCAL_PROXY_TRACES_PATH")
-	if tracesPath == "" {
-		tracesPath = DefaultTracesPath
+	tracesPath := DefaultTracesPath
+	if configuredPath, exists := valueIfExists(values, "SLOGGER_LOCAL_PROXY_TRACES_PATH"); exists {
+		tracesPath = configuredPath
 	}
 
 	tracesPath, err = NormalizeTracesPath(tracesPath)
@@ -61,8 +62,8 @@ func Load(envPath, rootDir string) (Config, error) {
 	retentionHours := DefaultRetentionHours
 	if raw := value(values, "SLOGGER_LOCAL_PROXY_RETENTION_HOURS"); raw != "" {
 		retentionHours, err = strconv.Atoi(raw)
-		if err != nil || retentionHours < 1 {
-			return Config{}, fmt.Errorf("SLOGGER_LOCAL_PROXY_RETENTION_HOURS must be a positive integer")
+		if err != nil || retentionHours < 1 || retentionHours > MaxRetentionHours {
+			return Config{}, fmt.Errorf("SLOGGER_LOCAL_PROXY_RETENTION_HOURS must be between 1 and %d hours", MaxRetentionHours)
 		}
 	}
 
@@ -101,6 +102,16 @@ func NormalizeTracesPath(value string) (string, error) {
 	}
 
 	return value, nil
+}
+
+func valueIfExists(values map[string]string, key string) (string, bool) {
+	if value, ok := os.LookupEnv(key); ok {
+		return strings.TrimSpace(value), true
+	}
+
+	value, ok := values[key]
+
+	return strings.TrimSpace(value), ok
 }
 
 func value(values map[string]string, key string) string {

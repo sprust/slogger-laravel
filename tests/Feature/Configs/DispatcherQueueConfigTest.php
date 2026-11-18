@@ -115,4 +115,21 @@ class DispatcherQueueConfigTest extends BaseTestCase
 
         $this->config->getSocketClientAddress();
     }
+
+    public function testLocalProxyPathRejectsOnlyDotSegments(): void
+    {
+        config()->set('slogger.local_proxy.traces_path', '././');
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('real directory component');
+
+        $this->config->getLocalProxyTracesPath();
+    }
+
+    public function testLocalProxyPathUsesDefaultWhenConfigKeyIsMissing(): void
+    {
+        config()->set('slogger.local_proxy', []);
+
+        self::assertSame('storage/slogger/traces', $this->config->getLocalProxyTracesPath());
+    }
 }

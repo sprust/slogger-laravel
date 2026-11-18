@@ -4,24 +4,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/sprust/slogger-laravel/local-proxy/internal/tracepayload"
 )
 
 const (
 	MaxBatchOperations = 200
-	MaxBatchSize       = 4 << 20
+	MaxBatchSize       = tracepayload.MaxBatchSize
 )
 
-type operation struct {
-	creating bool
-	raw      json.RawMessage
-}
+type operation = tracepayload.Operation
 
 type batch struct {
-	creating   []json.RawMessage
-	updating   []json.RawMessage
-	operations int
-	offset     int64
-	startedAt  time.Time
+	creating      []json.RawMessage
+	updating      []json.RawMessage
+	operations    int
+	creatingBytes int
+	updatingBytes int
+	offset        int64
+	startedAt     time.Time
 }
 
 func newBatch(offset int64, now time.Time) *batch {
@@ -33,27 +34,33 @@ func (b *batch) canAdd(operation operation) bool {
 		return false
 	}
 
-	if operation.creating && len(b.updating) > 0 {
+	if operation.Creating && len(b.updating) > 0 {
 		return false
 	}
 
-	candidate := *b
-	if operation.creating {
-		candidate.creating = appendCopy(b.creating, operation.raw)
-	} else {
-		candidate.updating = appendCopy(b.updating, operation.raw)
+	size, err := operation.EncodedSize()
+	if err != nil {
+		return false
 	}
 
-	_, err := candidate.encode()
-
-	return err == nil
+	return b.sizeWith(operation.Creating, size) <= MaxBatchSize
 }
 
 func (b *batch) add(operation operation) {
-	if operation.creating {
-		b.creating = append(b.creating, operation.raw)
+	size, _ := operation.EncodedSize()
+
+	if operation.Creating {
+		if len(b.creating) > 0 {
+			b.creatingBytes++
+		}
+		b.creatingBytes += size
+		b.creating = append(b.creating, operation.Raw)
 	} else {
-		b.updating = append(b.updating, operation.raw)
+		if len(b.updating) > 0 {
+			b.updatingBytes++
+		}
+		b.updatingBytes += size
+		b.updating = append(b.updating, operation.Raw)
 	}
 
 	b.operations++
@@ -89,14 +96,51 @@ func (b *batch) encode() ([]byte, error) {
 		return nil, fmt.Errorf("encoded batch exceeds 4 MiB")
 	}
 
+	if len(encoded) != b.encodedSize() {
+		return nil, fmt.Errorf("batch size accounting mismatch: got %d, expected %d", len(encoded), b.encodedSize())
+	}
+
 	return encoded, nil
 }
 
-func appendCopy(messages []json.RawMessage, message json.RawMessage) []json.RawMessage {
-	result := make([]json.RawMessage, len(messages), len(messages)+1)
-	copy(result, messages)
+func (b *batch) encodedSize() int {
+	size := 2
 
-	return append(result, message)
+	if len(b.creating) > 0 {
+		size += 8 + b.creatingBytes
+	}
+	if len(b.updating) > 0 {
+		size += 8 + b.updatingBytes
+	}
+	if len(b.creating) > 0 && len(b.updating) > 0 {
+		size++
+	}
+
+	return size
+}
+
+func (b *batch) sizeWith(creating bool, operationSize int) int {
+	size := b.encodedSize()
+
+	if creating && len(b.creating) == 0 {
+		size += 8
+
+		if len(b.updating) > 0 {
+			size++
+		}
+	}
+	if !creating && len(b.updating) == 0 {
+		size += 8
+
+		if len(b.creating) > 0 {
+			size++
+		}
+	}
+	if (creating && len(b.creating) > 0) || (!creating && len(b.updating) > 0) {
+		size++
+	}
+
+	return size + operationSize
 }
 
 type wirePayload struct {
@@ -105,36 +149,5 @@ type wirePayload struct {
 }
 
 func parseRecord(payload []byte) ([]operation, error) {
-	var envelope map[string]json.RawMessage
-	if err := json.Unmarshal(payload, &envelope); err != nil {
-		return nil, fmt.Errorf("decode trace envelope: %w", err)
-	}
-
-	operations := make([]operation, 0)
-
-	for _, part := range []struct {
-		key      string
-		creating bool
-	}{{key: "c", creating: true}, {key: "u", creating: false}} {
-		encoded, exists := envelope[part.key]
-		if !exists {
-			continue
-		}
-
-		var encodedMessages string
-		if err := json.Unmarshal(encoded, &encodedMessages); err != nil {
-			return nil, fmt.Errorf("decode %q payload: %w", part.key, err)
-		}
-
-		var messages []json.RawMessage
-		if err := json.Unmarshal([]byte(encodedMessages), &messages); err != nil {
-			return nil, fmt.Errorf("decode %q operations: %w", part.key, err)
-		}
-
-		for _, message := range messages {
-			operations = append(operations, operation{creating: part.creating, raw: message})
-		}
-	}
-
-	return operations, nil
+	return tracepayload.ParseRecord(payload)
 }

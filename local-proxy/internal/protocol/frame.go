@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -15,26 +16,48 @@ var (
 )
 
 func ReadFrame(reader io.Reader, maxSize uint32) ([]byte, error) {
+	payload, _, err := ReadFrameBudgeted(context.Background(), reader, maxSize, nil)
+
+	return payload, err
+}
+
+type FrameBudget interface {
+	Acquire(ctx context.Context, size uint32) (release func(), err error)
+}
+
+func ReadFrameBudgeted(ctx context.Context, reader io.Reader, maxSize uint32, budget FrameBudget) ([]byte, func(), error) {
 	var header [4]byte
 	if _, err := io.ReadFull(reader, header[:]); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	length := binary.BigEndian.Uint32(header[:])
 	if length == 0 {
-		return nil, ErrEmptyFrame
+		return nil, nil, ErrEmptyFrame
 	}
 
 	if length > maxSize {
-		return nil, fmt.Errorf("%w: %d bytes", ErrFrameTooLarge, length)
+		return nil, nil, fmt.Errorf("%w: %d bytes", ErrFrameTooLarge, length)
+	}
+
+	release := func() {}
+	if budget != nil {
+		var err error
+		release, err = budget.Acquire(ctx, length)
+
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	payload := make([]byte, int(length))
 	if _, err := io.ReadFull(reader, payload); err != nil {
-		return nil, err
+		release()
+
+		return nil, nil, err
 	}
 
-	return payload, nil
+	return payload, release, nil
 }
 
 func WriteFrame(writer io.Writer, payload []byte) error {

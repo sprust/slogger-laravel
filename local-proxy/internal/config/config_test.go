@@ -30,7 +30,7 @@ func TestNormalizeTracesPath(t *testing.T) {
 func TestNormalizeTracesPathRejectsEscapes(t *testing.T) {
 	t.Parallel()
 
-	for _, value := range []string{"", "/", ".", "../traces", "storage/../traces"} {
+	for _, value := range []string{"", "/", ".", "././", "../traces", "storage/../traces"} {
 		if _, err := NormalizeTracesPath(value); err == nil {
 			t.Fatalf("NormalizeTracesPath(%q) unexpectedly succeeded", value)
 		}
@@ -88,6 +88,62 @@ func TestLoadRequiresUpstreamURL(t *testing.T) {
 
 	if _, err := Load(envPath, t.TempDir()); err == nil {
 		t.Fatal("Load unexpectedly succeeded without upstream URL")
+	}
+}
+
+func TestLoadRetentionDurationBounds(t *testing.T) {
+	clearEnvironment(t, "SLOGGER_LOCAL_PROXY_RETENTION_HOURS")
+	clearEnvironment(t, "SLOGGER_LOCAL_PROXY_TRACES_PATH")
+	t.Setenv("SLOGGER_TOKEN", "token")
+	t.Setenv("SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL", "tcp://slogger:9002")
+
+	root := t.TempDir()
+	envPath := filepath.Join(root, ".env")
+
+	for _, test := range []struct {
+		value string
+		valid bool
+	}{
+		{value: "2562047", valid: true},
+		{value: "2562048", valid: false},
+	} {
+		contents := "SLOGGER_LOCAL_PROXY_RETENTION_HOURS=" + test.value + "\n"
+		if err := os.WriteFile(envPath, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		configuration, err := Load(envPath, root)
+		if test.valid && err != nil {
+			t.Fatal(err)
+		}
+		if !test.valid && err == nil {
+			t.Fatalf("retention %s unexpectedly accepted", test.value)
+		}
+		if test.valid && configuration.RetentionHours != MaxRetentionHours {
+			t.Fatalf("retention = %d", configuration.RetentionHours)
+		}
+	}
+}
+
+func TestLoadRejectsExplicitlyEmptyTracesPath(t *testing.T) {
+	clearEnvironment(t, "SLOGGER_LOCAL_PROXY_TRACES_PATH")
+	t.Setenv("SLOGGER_TOKEN", "token")
+	t.Setenv("SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL", "tcp://slogger:9002")
+
+	root := t.TempDir()
+	envPath := filepath.Join(root, ".env")
+	if err := os.WriteFile(envPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	configuration, err := Load(envPath, root)
+	if err != nil || configuration.TracesPath != DefaultTracesPath {
+		t.Fatalf("configuration = %+v, error = %v", configuration, err)
+	}
+
+	t.Setenv("SLOGGER_LOCAL_PROXY_TRACES_PATH", "")
+	if _, err := Load(envPath, root); err == nil {
+		t.Fatal("explicitly empty traces path was accepted")
 	}
 }
 

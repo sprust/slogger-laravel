@@ -181,11 +181,19 @@ func (s *Sender) Run(ctx context.Context) error {
 }
 
 func (s *Sender) readAvailable(ctx context.Context, cleanup <-chan time.Time) error {
+	if err := s.cleanupCheckpoint(cleanup); err != nil {
+		return err
+	}
+
 	if err := s.recoverOnSeal(); err != nil {
 		return err
 	}
 
 	for {
+		if err := s.cleanupCheckpoint(cleanup); err != nil {
+			return err
+		}
+
 		if s.file == nil {
 			return nil
 		}
@@ -296,6 +304,22 @@ func (s *Sender) flush(ctx context.Context, cleanup <-chan time.Time) error {
 	)
 
 	s.currentBatch = nil
+
+	return s.cleanupCheckpoint(cleanup)
+}
+
+func (s *Sender) cleanupCheckpoint(cleanup <-chan time.Time) error {
+	select {
+	case <-cleanup:
+		if err := s.cleanup(); err != nil {
+			if errors.Is(err, errRetryFileExpired) {
+				return err
+			}
+
+			s.logger.Error("local proxy cleanup failed", "error", err)
+		}
+	default:
+	}
 
 	return nil
 }
@@ -521,7 +545,7 @@ func (s *Sender) cleanup() error {
 		s.logger.Info("deleted expired trace file", "file", name)
 
 		if name == s.state.File {
-			retryFileExpired = s.currentBatch != nil
+			retryFileExpired = true
 
 			if err := s.closeFile(); err != nil {
 				cleanupErrors = append(cleanupErrors, err)

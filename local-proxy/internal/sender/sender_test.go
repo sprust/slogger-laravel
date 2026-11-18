@@ -162,8 +162,8 @@ func TestCleanupDeletesExpiredStateFileAndKeepsActive(t *testing.T) {
 		state:          storage.State{Version: storage.StateVersion, File: "2026_11_17_13"},
 	}
 
-	if err := sender.cleanup(); err != nil {
-		t.Fatal(err)
+	if err := sender.cleanup(); !errors.Is(err, errRetryFileExpired) {
+		t.Fatalf("expected current file invalidation, got %v", err)
 	}
 
 	if _, err := os.Stat(filepath.Join(dir, "2026_11_17_13")); !os.IsNotExist(err) {
@@ -291,6 +291,72 @@ func TestCleanupContinuesDuringUpstreamRetry(t *testing.T) {
 	}
 }
 
+func TestCleanupDuringSuccessfulBacklogStopsAtCheckpoint(t *testing.T) {
+	now := time.Date(2026, 11, 18, 13, 0, 0, 0, time.Local)
+	dir := t.TempDir()
+	store, err := storage.NewStore(dir, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	payload := []byte(`{"c":"[{}]"}`)
+	for index := 0; index < 401; index++ {
+		if err := store.Append(payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	initial := storage.CurrentFileName(now)
+	logger := &recordingLogger{}
+	sender, err := New(dir, "tcp://127.0.0.1:9002", "token", 1, func() time.Time { return now }, logger, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sender.closeFile()
+	if _, err := sender.ensureFile(); err != nil {
+		t.Fatal(err)
+	}
+
+	cleanup := make(chan time.Time, 1)
+	upstream := &successfulBacklogUpstream{}
+	upstream.onFirst = func() {
+		now = now.Add(2 * time.Hour)
+		cleanup <- now
+	}
+	sender.upstream = upstream
+
+	err = sender.readAvailable(context.Background(), cleanup)
+	if !errors.Is(err, errRetryFileExpired) {
+		t.Fatalf("expected expiry at checkpoint, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, initial)); !os.IsNotExist(err) {
+		t.Fatalf("expired file still exists: %v", err)
+	}
+	if upstream.count != 1 {
+		t.Fatalf("unexpected send count: %d", upstream.count)
+	}
+}
+
+type successfulBacklogUpstream struct {
+	count   int
+	onFirst func()
+}
+
+func (u *successfulBacklogUpstream) send(context.Context, []byte) error {
+	u.count++
+	if u.count == 1 {
+		u.onFirst()
+	}
+
+	return nil
+}
+
+func (*successfulBacklogUpstream) close() {}
+
 func TestRetentionExpiresRetryingFileDuringSplitRecord(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, 11, 17, 13, 0, 0, 0, time.Local)}
 	dir := t.TempDir()
@@ -401,7 +467,7 @@ func TestExpiryWithStateSaveFailureStopsRetry(t *testing.T) {
 	defer sender.closeFile()
 
 	sender.currentBatch = newBatch(0, time.Now())
-	sender.currentBatch.add(operation{creating: true, raw: []byte(`{}`)})
+	sender.currentBatch.add(operation{Creating: true, Raw: []byte(`{}`)})
 	sender.upstream = upstream
 	sender.retryDelay = 5 * time.Millisecond
 

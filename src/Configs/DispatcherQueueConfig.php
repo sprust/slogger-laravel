@@ -83,6 +83,10 @@ class DispatcherQueueConfig
             array_filter($segments, static fn(string $segment): bool => $segment !== '' && $segment !== '.')
         );
 
+        if ($segments === []) {
+            throw new RuntimeException('SLogger: local proxy traces path must contain a real directory component.');
+        }
+
         return implode('/', $segments);
     }
 

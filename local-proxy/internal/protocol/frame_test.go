@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"testing"
@@ -55,6 +56,50 @@ func TestReadFrameReturnsUnexpectedEOF(t *testing.T) {
 	if !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("error = %v", err)
 	}
+}
+
+func TestReadFrameBudgetedReleasesAllocationAfterTruncatedPayload(t *testing.T) {
+	t.Parallel()
+
+	budget := &recordingBudget{}
+	_, _, err := ReadFrameBudgeted(context.Background(), bytes.NewReader([]byte{0, 0, 0, 4, 'a'}), 10, budget)
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("error = %v", err)
+	}
+
+	if budget.size != 4 || !budget.released {
+		t.Fatalf("budget = %+v", budget)
+	}
+}
+
+func TestReadFrameBudgetedLeavesReleaseToCaller(t *testing.T) {
+	t.Parallel()
+
+	budget := &recordingBudget{}
+	payload, release, err := ReadFrameBudgeted(context.Background(), bytes.NewReader([]byte{0, 0, 0, 1, 'a'}), 10, budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(payload) != "a" || budget.released {
+		t.Fatalf("payload = %q, budget = %+v", payload, budget)
+	}
+
+	release()
+	if !budget.released {
+		t.Fatal("budget was not released")
+	}
+}
+
+type recordingBudget struct {
+	size     uint32
+	released bool
+}
+
+func (b *recordingBudget) Acquire(_ context.Context, size uint32) (func(), error) {
+	b.size = size
+
+	return func() { b.released = true }, nil
 }
 
 type oneByteReader struct {

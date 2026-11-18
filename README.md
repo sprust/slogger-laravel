@@ -999,11 +999,13 @@ SLOGGER_LOCAL_PROXY_RETENTION_HOURS=24
   upstream. Switching modes does not require changing the URL.
 - `SLOGGER_LOCAL_PROXY_TRACES_PATH` is relative to the application root. Leading and trailing
   slashes are ignored: `/storage/slogger/traces/` and `storage/slogger/traces` are equivalent and
-  both mean `<project-root>/storage/slogger/traces`. Empty paths and `..` are rejected.
+  both mean `<project-root>/storage/slogger/traces`. A missing setting uses the default; explicitly
+  empty values, paths containing only dot components and `..` are rejected.
 - The socket filename is always `local-proxy.sock` inside that directory; neither the local socket
   URL nor its filename is configurable. Run PHP workers and the proxy as the same user (or grant
   equivalent access): the directory, socket and data files use owner-only permissions.
-- `SLOGGER_LOCAL_PROXY_RETENTION_HOURS` defaults to 24. Expired files are removed even when their
+- `SLOGGER_LOCAL_PROXY_RETENTION_HOURS` defaults to 24 and accepts values from 1 through 2,562,047
+  hours (the safe `time.Duration` range in hours). Expired files are removed even when their
   traces have not been sent yet, so increase the retention when planning for a longer outage.
 
 A Supervisor example:
@@ -1033,7 +1035,21 @@ end. Cleanup runs at startup and every ten minutes.
 
 Outgoing batches contain at most 200 create/update operations and 4 MiB of JSON. A full batch is sent
 immediately; an incomplete batch is sent at most once per second. Larger input records are split at
-operation boundaries without discarding unknown trace fields.
+operation boundaries without discarding unknown trace fields. Batch size accounting includes the
+protocol's second JSON encoding and its escaping, rather than counting only raw trace bytes. Each
+individual operation must also fit within 4 MiB on the wire. Ingestion validates the payload format
+and this limit before append/ACK; an invalid connection is closed without writing the record. An
+unsendable operation already present on disk remains fail-stop instead of being silently discarded.
+During shutdown, records accepted into the writer queue are allowed to finish their append and ACK
+within the process-wide five-second hard timeout.
+
+The local listener accepts up to 32 concurrent connections and holds at most 256 MiB of **input frame
+buffers**, covering active and queued reads. A single frame remains limited to 64 MiB. The budget is
+acquired before the payload buffer is allocated and released after the exchange. `Store.Append` makes
+a separate record copy (up to 64 MiB plus its header), and sender allocations are outside this input
+budget. When all connection slots are occupied, a new connection is closed immediately before the
+handshake instead of waiting silently; the PHP job observes the failure and follows its existing
+retry policy. A later connection can authenticate normally once a slot is released.
 
 Errors go to `local-proxy-errors-YYYY_MM_DD.logs` in the same directory and to stderr. Daily error
 logs are kept for three days. Tokens and trace payloads are never written to them. Upstream

@@ -13,11 +13,14 @@ import (
 
 	"github.com/sprust/slogger-laravel/local-proxy/internal/protocol"
 	"github.com/sprust/slogger-laravel/local-proxy/internal/storage"
+	"github.com/sprust/slogger-laravel/local-proxy/internal/tracepayload"
 )
 
 const (
-	localReadTimeout  = 5 * time.Minute
-	localWriteTimeout = 20 * time.Second
+	localReadTimeout     = 5 * time.Minute
+	localWriteTimeout    = 20 * time.Second
+	maxLocalConnections  = 32
+	maxPayloadMemorySize = 256 << 20
 )
 
 type Logger interface {
@@ -41,8 +44,11 @@ type Server struct {
 	requests   chan appendRequest
 	done       chan struct{}
 	listener   net.Listener
+	budget     *memoryBudget
+	slots      chan struct{}
 	mu         sync.Mutex
 	conns      map[net.Conn]struct{}
+	idle       map[net.Conn]bool
 	handlers   sync.WaitGroup
 }
 
@@ -53,7 +59,10 @@ func New(socketPath string, store Store, logger Logger) *Server {
 		logger:     logger,
 		requests:   make(chan appendRequest, 128),
 		done:       make(chan struct{}),
+		budget:     newMemoryBudget(maxPayloadMemorySize),
+		slots:      make(chan struct{}, maxLocalConnections),
 		conns:      make(map[net.Conn]struct{}),
+		idle:       make(map[net.Conn]bool),
 	}
 }
 
@@ -77,10 +86,13 @@ func (s *Server) Run(ctx context.Context) error {
 
 	s.logger.Info("local proxy listening", "socket", s.socketPath)
 
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	listenerWatchDone := make(chan struct{})
 	go func() {
 		select {
-		case <-ctx.Done():
+		case <-runCtx.Done():
 			_ = listener.Close()
 		case <-listenerWatchDone:
 		}
@@ -93,7 +105,8 @@ func (s *Server) Run(ctx context.Context) error {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			s.closeConnections()
+			cancel()
+			s.closeIdleConnections()
 			s.handlers.Wait()
 			close(s.requests)
 
@@ -109,14 +122,28 @@ func (s *Server) Run(ctx context.Context) error {
 			return fmt.Errorf("accept Unix connection: %w", err)
 		}
 
+		select {
+		case s.slots <- struct{}{}:
+		case <-ctx.Done():
+			_ = conn.Close()
+			_ = listener.Close()
+
+			continue
+		default:
+			_ = conn.Close()
+
+			continue
+		}
+
 		s.trackConnection(conn, true)
 		s.handlers.Add(1)
 		go func() {
 			defer s.handlers.Done()
 			defer s.trackConnection(conn, false)
 			defer conn.Close()
+			defer func() { <-s.slots }()
 
-			s.handle(ctx, conn)
+			s.handle(runCtx, conn)
 		}()
 	}
 }
@@ -153,9 +180,15 @@ func (s *Server) handle(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	if _, err := protocol.ReadFrame(conn, protocol.MaxFrameSize); err != nil {
+	readContext, cancel := context.WithTimeout(ctx, localReadTimeout)
+	_, release, err := protocol.ReadFrameBudgeted(readContext, conn, protocol.MaxFrameSize, s.budget)
+	cancel()
+
+	if err != nil {
 		return
 	}
+
+	release()
 
 	if err := conn.SetWriteDeadline(time.Now().Add(localWriteTimeout)); err != nil {
 		return
@@ -166,46 +199,66 @@ func (s *Server) handle(ctx context.Context, conn net.Conn) {
 	}
 
 	for {
-		if err := conn.SetReadDeadline(time.Now().Add(localReadTimeout)); err != nil {
+		if ctx.Err() != nil {
 			return
 		}
 
-		payload, err := protocol.ReadFrame(conn, protocol.MaxFrameSize)
-		if err != nil {
+		if err := s.handleFrame(ctx, conn); err != nil {
 			if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) && ctx.Err() == nil {
 				s.logger.Error("local proxy client read failed", "error", err)
 			}
-			return
-		}
 
-		request := appendRequest{payload: payload, result: make(chan error, 1)}
-		select {
-		case s.requests <- request:
-		case <-ctx.Done():
-			return
-		case <-s.done:
-			return
-		}
-
-		select {
-		case err = <-request.result:
-			if err != nil {
-				return
-			}
-		case <-ctx.Done():
-			return
-		case <-s.done:
-			return
-		}
-
-		if err := conn.SetWriteDeadline(time.Now().Add(localWriteTimeout)); err != nil {
-			return
-		}
-
-		if err := protocol.WriteFrame(conn, []byte("received")); err != nil {
 			return
 		}
 	}
+}
+
+func (s *Server) handleFrame(ctx context.Context, conn net.Conn) error {
+	s.setIdle(conn, true)
+	defer s.setIdle(conn, true)
+
+	if err := conn.SetReadDeadline(time.Now().Add(localReadTimeout)); err != nil {
+		return err
+	}
+
+	readContext, cancel := context.WithTimeout(ctx, localReadTimeout)
+	defer cancel()
+
+	payload, release, err := protocol.ReadFrameBudgeted(readContext, conn, protocol.MaxFrameSize, s.budget)
+	if err != nil {
+		return err
+	}
+
+	s.setIdle(conn, false)
+	defer release()
+
+	if err := tracepayload.ValidateRecord(payload); err != nil {
+		return err
+	}
+
+	request := appendRequest{payload: payload, result: make(chan error, 1)}
+	select {
+	case s.requests <- request:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.done:
+		return net.ErrClosed
+	}
+
+	select {
+	case err = <-request.result:
+		if err != nil {
+			return err
+		}
+	case <-s.done:
+		return net.ErrClosed
+	}
+
+	if err := conn.SetWriteDeadline(time.Now().Add(localWriteTimeout)); err != nil {
+		return err
+	}
+
+	return protocol.WriteFrame(conn, []byte("received"))
 }
 
 func (s *Server) trackConnection(conn net.Conn, add bool) {
@@ -214,12 +267,23 @@ func (s *Server) trackConnection(conn net.Conn, add bool) {
 
 	if add {
 		s.conns[conn] = struct{}{}
+		s.idle[conn] = true
 	} else {
 		delete(s.conns, conn)
+		delete(s.idle, conn)
 	}
 }
 
-func (s *Server) closeConnections() {
+func (s *Server) setIdle(conn net.Conn, idle bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.conns[conn]; exists {
+		s.idle[conn] = idle
+	}
+}
+
+func (s *Server) closeIdleConnections() {
 	if s.listener != nil {
 		_ = s.listener.Close()
 	}
@@ -228,7 +292,9 @@ func (s *Server) closeConnections() {
 	defer s.mu.Unlock()
 
 	for conn := range s.conns {
-		_ = conn.Close()
+		if s.idle[conn] {
+			_ = conn.Close()
+		}
 	}
 }
 
