@@ -1066,6 +1066,88 @@ trace file by retention cleanup. Counters are process-lifetime values and reset 
 restarts. Use `collected_at` to judge snapshot freshness. A continuous series of metrics publication
 errors is logged at most once per minute, regardless of changing temporary paths in the error text.
 
+#### Metrics command and alerting
+
+The same `local-proxy-metrics.json` snapshot can be watched from the console:
+
+```bash
+php artisan slogger:local-proxy:metrics          # line format, one snapshot per second
+php artisan slogger:local-proxy:metrics json     # pretty JSON, screen cleared each poll
+php artisan slogger:local-proxy:metrics line --interval=5
+php artisan slogger:local-proxy:metrics --once   # single snapshot; exit code 1 when unavailable
+```
+
+- The first argument is the format: `line` (the default) prints
+  `collected_at=...;process.goroutines=21;sender.sent_operations_total=98;pending_bytes=512`,
+  one snapshot per line — a stream to `tail` and `grep`. `json` clears the terminal and
+  prints the beautified snapshot each poll.
+- `--interval` is the poll frequency in seconds (default `1`, fractional values from `0.1`
+  to `3600` accepted). Stop the loop with Ctrl+C.
+- `--once` prints a single snapshot and exits non-zero when the file is missing, unreadable
+  or stale, which makes it usable from monitoring checks.
+- A snapshot older than `SLOGGER_LOCAL_PROXY_METRICS_MAX_SNAPSHOT_AGE` (default 10 seconds)
+  is reported as stale rather than shown: the proxy is dead or has stopped writing. A
+  timestamp materially in the future counts as stale too.
+
+`pending_bytes` is not part of the proxy's file — the reader computes it from durable
+state: the sender position in `local-proxy-state.json` against the hourly trace files
+still on disk (only regular files count; a symlink or a directory with an hourly name is
+skipped, as on the Go side). Unlike the process-lifetime counters it survives a proxy
+restart. The state file is compared by identity (inode) before and after the scan, with
+the first descriptor held open until then — the proxy saves state atomically, and the
+pinned inode cannot be recycled by two saves in between, so a stable identity means a
+stable offset for the whole read; a moving state is retried once and then reported as
+unknown. Appends landing mid-read can only under-report; a file deleted mid-read without
+a state change (an expired file removed by retention) can inflate a single reading, and
+the next poll self-corrects. These guarantees hold while only the proxy writes the traces
+directory. `pending_bytes` is `null` when the backlog cannot be known (the directory does
+not scan, or the state file is unreadable).
+
+The command reads the file through `SLoggerLaravel\LocalProxy\LocalProxyMetricsReader`,
+which is reusable on its own: `read()` returns a `LocalProxyMetricsObject` or `null`.
+
+**Alerting.** While the command runs, each fresh snapshot is checked against two thresholds,
+and a crossing fires an event:
+
+```dotenv
+SLOGGER_LOCAL_PROXY_ALERTING_ENABLED=true
+SLOGGER_LOCAL_PROXY_ALERT_MAX_PENDING_BYTES=104857600
+SLOGGER_LOCAL_PROXY_ALERT_MAX_MINUTES_WITHOUT_SEND=5
+```
+
+- `SLOGGER_LOCAL_PROXY_ALERT_MAX_PENDING_BYTES` (default 100 MiB) — unsent trace data still
+  on disk, the `pending_bytes` described above. Crossing fires
+  `LocalProxyBacklogExceededEvent`.
+- `SLOGGER_LOCAL_PROXY_ALERT_MAX_MINUTES_WITHOUT_SEND` (default 5) — `sent_operations_total`
+  not growing for this many minutes fires `LocalProxySendStalledEvent`. The stall is measured
+  in the proxy's own `uptime_seconds`, so a wall-clock jump on the host does not read as
+  minutes without a send. A proxy restart — detected by the counter dropping or the uptime
+  rolling back — restarts the clock instead of firing.
+
+Each event fires once per crossing and re-arms when the value returns to normal — a running
+command does not repeat the alert every second. The events ship with no listeners; attach
+yours through the existing `listeners` section:
+
+```php
+'listeners' => [
+    \SLoggerLaravel\Events\LocalProxyBacklogExceededEvent::class => [
+        \App\Listeners\NotifyOpsAboutSLoggerBacklog::class,
+    ],
+    \SLoggerLaravel\Events\LocalProxySendStalledEvent::class => [
+        \App\Listeners\NotifyOpsAboutSLoggerStall::class,
+    ],
+],
+```
+
+Delivery is **at least once, so keep listeners idempotent**. A listener that throws is
+reported to the application's error handler, the alert is not marked as delivered, and the
+next poll retries the whole dispatch — including any earlier listener that already ran
+successfully for that crossing.
+
+Listeners from this section are registered only while `SLOGGER_ENABLED=true`, so alerting
+delivery requires the package to be enabled even though the metrics command itself runs
+regardless.
+
 For an upgrade, run `php artisan slogger:local-proxy:download --force` and restart the Supervisor
 program. To roll back, set `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TYPE=direct` and stop the proxy;
 the upstream URL stays unchanged. Unsent proxy files are not migrated or drained automatically by

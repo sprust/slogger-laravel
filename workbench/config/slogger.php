@@ -65,6 +65,24 @@ return [
         // "/storage/slogger/traces/" and "storage/slogger/traces" are equivalent.
         'traces_path'     => env('SLOGGER_LOCAL_PROXY_TRACES_PATH', 'storage/slogger/traces'),
         'retention_hours' => env('SLOGGER_LOCAL_PROXY_RETENTION_HOURS', 24),
+
+        'metrics' => [
+            // a snapshot older than this is stale: the proxy is dead or has
+            // stopped writing local-proxy-metrics.json
+            'max_snapshot_age_seconds' => env('SLOGGER_LOCAL_PROXY_METRICS_MAX_SNAPSHOT_AGE', 10),
+
+            // thresholds for the events fired by slogger:local-proxy:metrics.
+            // attach listeners through the 'listeners' section below
+            'alerting' => [
+                'enabled' => env('SLOGGER_LOCAL_PROXY_ALERTING_ENABLED', false),
+                // unsent trace bytes on disk (the saved send offset vs the
+                // hourly files) above this. computed from durable state,
+                // so it survives a proxy restart
+                'max_pending_bytes' => env('SLOGGER_LOCAL_PROXY_ALERT_MAX_PENDING_BYTES', 104857600), // 100 MiB
+                // no successful send for this many minutes
+                'max_minutes_without_send' => env('SLOGGER_LOCAL_PROXY_ALERT_MAX_MINUTES_WITHOUT_SEND', 5),
+            ],
+        ],
     ],
 
     // channel for internal errors/logs.
@@ -75,6 +93,15 @@ return [
         WatcherErrorEvent::class => [
             WatcherErrorListener::class,
         ],
+
+        // local proxy alerting (see local_proxy.metrics.alerting) has no
+        // listeners out of the box - attach your own:
+        // \SLoggerLaravel\Events\LocalProxyBacklogExceededEvent::class => [
+        //     \App\Listeners\YourBacklogListener::class,
+        // ],
+        // \SLoggerLaravel\Events\LocalProxySendStalledEvent::class => [
+        //     \App\Listeners\YourStalledListener::class,
+        // ],
     ],
 
     // applied by the dispatcher job, never in the traced application. off only when
