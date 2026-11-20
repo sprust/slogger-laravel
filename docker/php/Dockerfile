@@ -1,4 +1,9 @@
+FROM golang:1.24.6-bookworm AS golang
+
 FROM php:8.2-cli
+
+COPY --from=golang /usr/local/go /usr/local/go
+ENV PATH="/usr/local/go/bin:${PATH}"
 
 RUN apt update && apt install -y \
     git \

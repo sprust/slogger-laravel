@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Bus;
 use JsonException;
 use ReflectionClass;
 use RuntimeException;
+use SLoggerLaravel\Configs\DispatcherQueueConfig;
 use SLoggerLaravel\Dispatcher\Items\Queue\Jobs\SendTracesJob;
 use SLoggerLaravel\Dispatcher\Items\Queue\QueueDispatcher;
 use SLoggerLaravel\Objects\TraceCreateObject;
@@ -23,7 +24,7 @@ class QueueDispatcherTest extends BaseTestCase
     {
         Bus::fake();
 
-        $dispatcher = new QueueDispatcher();
+        $dispatcher = new QueueDispatcher(new DispatcherQueueConfig());
 
         $dispatcher->create(
             $this->makeCreateTrace(isParent: true, parentTraceId: null)
@@ -39,11 +40,47 @@ class QueueDispatcherTest extends BaseTestCase
         );
     }
 
+    public function testDirectProfileIsUsedByDefault(): void
+    {
+        Bus::fake();
+
+        $dispatcher = new QueueDispatcher(new DispatcherQueueConfig());
+
+        $dispatcher->create(
+            $this->makeCreateTrace(isParent: true, parentTraceId: null)
+        );
+
+        Bus::assertDispatched(
+            SendTracesJob::class,
+            static fn(SendTracesJob $job): bool => $job->tries === 5
+                && $job->backoff === [5, 10, 30, 60]
+        );
+    }
+
+    public function testProxyProfileIsUsedInProxyMode(): void
+    {
+        config()->set('slogger.dispatchers.queue.api_clients.socket.type', 'proxy');
+
+        Bus::fake();
+
+        $dispatcher = new QueueDispatcher(new DispatcherQueueConfig());
+
+        $dispatcher->create(
+            $this->makeCreateTrace(isParent: true, parentTraceId: null)
+        );
+
+        Bus::assertDispatched(
+            SendTracesJob::class,
+            static fn(SendTracesJob $job): bool => $job->tries === 3
+                && $job->backoff === [2, 5]
+        );
+    }
+
     public function testCreateNonParentWithoutParentDispatchesImmediately(): void
     {
         Bus::fake();
 
-        $dispatcher = new QueueDispatcher();
+        $dispatcher = new QueueDispatcher(new DispatcherQueueConfig());
 
         $dispatcher->create(
             $this->makeCreateTrace(isParent: false, parentTraceId: null)
@@ -56,7 +93,7 @@ class QueueDispatcherTest extends BaseTestCase
     {
         Bus::fake();
 
-        $dispatcher = new QueueDispatcher();
+        $dispatcher = new QueueDispatcher(new DispatcherQueueConfig());
         $this->setMaxBatchSize($dispatcher, 2);
 
         $dispatcher->create(
@@ -84,7 +121,7 @@ class QueueDispatcherTest extends BaseTestCase
      */
     public function testABufferWrittenToDuringADispatchLosesNothing(): void
     {
-        $dispatcher = new QueueDispatcher();
+        $dispatcher = new QueueDispatcher(new DispatcherQueueConfig());
         $this->setMaxBatchSize($dispatcher, 2);
 
         $batches = [];
@@ -143,7 +180,7 @@ class QueueDispatcherTest extends BaseTestCase
     {
         Bus::fake();
 
-        $dispatcher = new QueueDispatcher();
+        $dispatcher = new QueueDispatcher(new DispatcherQueueConfig());
 
         $dispatcher->update(
             $this->makeUpdateTrace()
@@ -158,7 +195,7 @@ class QueueDispatcherTest extends BaseTestCase
         // dropped, never thrown into the caller
         config()->set('slogger.dispatchers.queue.connection', '');
 
-        $dispatcher = new QueueDispatcher();
+        $dispatcher = new QueueDispatcher(new DispatcherQueueConfig());
 
         $dispatcher->create(
             $this->makeCreateTrace(isParent: true, parentTraceId: null)
@@ -172,7 +209,7 @@ class QueueDispatcherTest extends BaseTestCase
     {
         config()->set('slogger.dispatchers.queue.connection', '');
 
-        $dispatcher = new QueueDispatcher();
+        $dispatcher = new QueueDispatcher(new DispatcherQueueConfig());
 
         $dispatcher->update(
             $this->makeUpdateTrace()

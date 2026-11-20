@@ -7,6 +7,9 @@ use RuntimeException;
 class DispatcherQueueConfig
 {
     public const DEFAULT_SOCKET_CLIENT_TIMEOUT_SECONDS = 10;
+    public const SOCKET_CLIENT_DIRECT                  = 'direct';
+    public const SOCKET_CLIENT_PROXY                   = 'proxy';
+    public const LOCAL_PROXY_SOCKET_FILENAME           = 'local-proxy.sock';
 
     public function getConnection(): string
     {
@@ -36,6 +39,55 @@ class DispatcherQueueConfig
     public function getSocketClientUrl(): string
     {
         return (string) config('slogger.dispatchers.queue.api_clients.socket.url');
+    }
+
+    public function getSocketClientType(): string
+    {
+        $type = config('slogger.dispatchers.queue.api_clients.socket.type', self::SOCKET_CLIENT_DIRECT);
+
+        if (!in_array($type, [self::SOCKET_CLIENT_DIRECT, self::SOCKET_CLIENT_PROXY], true)) {
+            throw new RuntimeException('SLogger: socket client type must be direct or proxy.');
+        }
+
+        return $type;
+    }
+
+    public function getSocketClientAddress(): string
+    {
+        if ($this->getSocketClientType() === self::SOCKET_CLIENT_DIRECT) {
+            return $this->getSocketClientUrl();
+        }
+
+        return 'unix://' . base_path(
+            $this->getLocalProxyTracesPath() . '/' . self::LOCAL_PROXY_SOCKET_FILENAME
+        );
+    }
+
+    public function getLocalProxyTracesPath(): string
+    {
+        $path = config('slogger.local_proxy.traces_path', 'storage/slogger/traces');
+        $path = is_string($path) ? trim($path) : '';
+        $path = trim($path, '/');
+
+        if ($path === '' || $path === '.') {
+            throw new RuntimeException('SLogger: local proxy traces path must not be empty.');
+        }
+
+        $segments = preg_split('~/+~', $path);
+
+        if ($segments === false || in_array('..', $segments, true)) {
+            throw new RuntimeException("SLogger: local proxy traces path must not contain '..'.");
+        }
+
+        $segments = array_values(
+            array_filter($segments, static fn(string $segment): bool => $segment !== '' && $segment !== '.')
+        );
+
+        if ($segments === []) {
+            throw new RuntimeException('SLogger: local proxy traces path must contain a real directory component.');
+        }
+
+        return implode('/', $segments);
     }
 
     public function getSocketClientTimeoutSeconds(): int

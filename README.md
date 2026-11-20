@@ -97,8 +97,11 @@ SLOGGER_DISPATCHER=queue
 SLOGGER_DISPATCHER_QUEUE_CONNECTION=slogger-rabbitmq
 SLOGGER_DISPATCHER_QUEUE_NAME=slogger
 SLOGGER_DISPATCHER_QUEUE_API_CLIENT=socket
+SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TYPE=direct
 SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL=tcp://0.0.0.0:0002
 SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TIMEOUT=10
+SLOGGER_LOCAL_PROXY_TRACES_PATH=storage/slogger/traces
+SLOGGER_LOCAL_PROXY_RETENTION_HOURS=24
 ```
 
 - `SLOGGER_DISPATCHER`: `queue` or `memory`.
@@ -106,8 +109,10 @@ SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TIMEOUT=10
 - `memory` dispatcher stores traces in memory (useful for tests/dev).
 - `SLOGGER_DISPATCHER_QUEUE_API_CLIENT`: the client the job sends with - `socket`, the
   only one shipped.
-- `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL`: the receiver's address; there is no
-  default.
+- `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TYPE`: `direct` (the default) sends straight to the
+  receiver; `proxy` uses the local Unix socket. See [Local proxy](#local-proxy).
+- `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL`: the receiver address for direct mode and the Go
+  proxy's upstream; there is no default.
 
 `SLOGGER_DISPATCHER_QUEUE_CONNECTION` is **required** for the `queue` dispatcher — there is
 no fallback to `QUEUE_CONNECTION` on purpose: telemetry must not silently share the
@@ -122,7 +127,12 @@ and reconnects transparently — exactly one retry per batch. Timeouts are **not
 way: that would turn a saturated receiver into a reconnect storm; they are handled by the job
 retry policy below.
 
-Send retries are fixed by design: 5 attempts with backoff of 5/10/30/60 seconds between them.
+Send retries are fixed by design, and depend on where the batch goes. Direct mode - a
+remote receiver over TCP - gets 5 attempts with backoff of 5/10/30/60 seconds between
+them. Proxy mode talks to a local Unix socket whose failures are instant and either
+permanent (a record the proxy rejected) or gone in seconds (a restart, busy slots), so it
+gets 3 attempts with backoff of 2/5 seconds; durability there is the proxy's on-disk
+buffer, not the retry window.
 After the attempts are exhausted the batch is **dropped** with a rate-limited warning in the
 SLogger log channel — a send that fails inside the job never reaches `failed_jobs`. Only a
 failure on the worker's side - a worker timeout, a worker killed mid-attempt - can still be
@@ -958,6 +968,196 @@ a worker does not trace itself.
   warning (`dropped N trace dispatches`, at most one a minute) goes to the SLogger log
   channel.
 
+### Local proxy
+
+The optional Go proxy keeps a durable local buffer between the queue workers and SLogger. PHP
+acknowledges a batch only after the proxy has appended it to disk and synced the file; the proxy
+then delivers it to SLogger itself. Delivery is **at least once**: a crash after a send but before
+the offset is saved can produce a duplicate, not a gap.
+
+The release currently provides a **Linux amd64** binary. Install the asset matching the installed
+package version:
+
+```bash
+php artisan slogger:local-proxy:download
+vendor/bin/slogger-local-proxy -version
+```
+
+The default destination is `vendor/bin/slogger-local-proxy`. Use `--release=2.3.0` to select another
+release explicitly, `--path=/custom/destination` for a different binary destination, and
+`--force` to replace an existing binary after a package upgrade. The command verifies the release
+SHA-256 before atomically replacing the previous binary.
+
+Configure and enable it:
+
+```dotenv
+SLOGGER_TOKEN=your-api-token
+SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TYPE=proxy
+SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL=tcp://your-slogger-host:port
+SLOGGER_LOCAL_PROXY_TRACES_PATH=storage/slogger/traces
+SLOGGER_LOCAL_PROXY_RETENTION_HOURS=24
+```
+
+- `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TYPE` is `direct` by default. `direct` keeps the old
+  behaviour: PHP connects straight to `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL`. In `proxy` mode
+  PHP connects to the local Unix socket instead, while the Go process reads the same URL as its
+  upstream. Switching modes does not require changing the URL.
+- `SLOGGER_LOCAL_PROXY_TRACES_PATH` is relative to the application root. Leading and trailing
+  slashes are ignored: `/storage/slogger/traces/` and `storage/slogger/traces` are equivalent and
+  both mean `<project-root>/storage/slogger/traces`. A missing setting uses the default; explicitly
+  empty values, paths containing only dot components and `..` are rejected.
+- The socket filename is always `local-proxy.sock` inside that directory; neither the local socket
+  URL nor its filename is configurable. Run PHP workers and the proxy as the same user (or grant
+  equivalent access): the directory, socket and data files use owner-only permissions.
+- `SLOGGER_LOCAL_PROXY_RETENTION_HOURS` defaults to 24 and accepts values from 1 through 2,562,047
+  hours (the safe `time.Duration` range in hours). Expired files are removed even when their
+  traces have not been sent yet, so increase the retention when planning for a longer outage.
+
+A Supervisor example:
+
+```ini
+[program:slogger-local-proxy]
+directory=/path/to/application
+command=/path/to/application/vendor/bin/slogger-local-proxy -env /path/to/application/.env
+autostart=true
+autorestart=true
+stopsignal=TERM
+stopwaitsecs=10
+user=application
+redirect_stderr=true
+stdout_logfile=/var/log/supervisor/slogger-local-proxy.log
+```
+
+Apply it with `supervisorctl reread && supervisorctl update`. Real process environment variables
+override values from `.env`. The process takes an exclusive `flock`; a second launch fails instead
+of replacing the active socket. SIGINT/SIGTERM stop acceptance and allow up to five seconds for
+graceful shutdown.
+
+The traces directory contains hourly files named `YYYY_MM_DD_HH`, `local-proxy-state.json`, the
+lock/socket and error logs. Sent offsets are saved atomically. A sealed hourly file is deleted once
+fully sent; an active file is not deleted merely because the sender has caught up with its current
+end. Cleanup runs at startup and every ten minutes.
+
+Outgoing batches contain at most 200 create/update operations and 4 MiB of JSON. A full batch is sent
+immediately; an incomplete batch is sent at most once per second. Larger input records are split at
+operation boundaries without discarding unknown trace fields. Batch size accounting includes the
+protocol's second JSON encoding and its escaping, rather than counting only raw trace bytes. Each
+individual operation must also fit within 4 MiB on the wire. Ingestion validates the payload format
+and this limit before append/ACK; an invalid connection is closed without writing the record. An
+unsendable operation already present on disk remains fail-stop instead of being silently discarded.
+During shutdown, records accepted into the writer queue are allowed to finish their append and ACK
+within the process-wide five-second hard timeout.
+
+The local listener accepts up to 32 concurrent connections and holds at most 256 MiB of **input frame
+buffers**, covering active and queued reads. A single frame remains limited to 64 MiB. The budget is
+acquired before the payload buffer is allocated and released after the exchange. `Store.Append` makes
+a separate record copy (up to 64 MiB plus its header), and sender allocations are outside this input
+budget. When all connection slots are occupied, a new connection is closed immediately before the
+handshake instead of waiting silently; the PHP job observes the failure and follows its existing
+retry policy. A later connection can authenticate normally once a slot is released.
+
+Errors go to `local-proxy-errors-YYYY_MM_DD.logs` in the same directory and to stderr. Daily error
+logs are kept for three days. Tokens and trace payloads are never written to them. Upstream
+connection timeout is 10 seconds, write and read timeouts are 20 seconds each. After a failed
+connect/auth/send/read, the same batch is retried with a new handshake after three seconds and the
+error is logged; the saved offset does not move.
+
+Once per second the proxy atomically writes `local-proxy-metrics.json` in the traces directory. This
+JSON snapshot includes process heap/RSS/goroutines, connections and slots, writer queue length and
+capacity, input-frame budget, appended records/bytes, sent batches/operations/bytes, failed send
+attempts, sender state, hourly file count/bytes and error-log count. It contains operational metadata
+only, never tokens or trace payloads. The file uses owner-only permissions and is not treated as a
+trace file by retention cleanup. Counters are process-lifetime values and reset when the proxy
+restarts. Use `collected_at` to judge snapshot freshness. A continuous series of metrics publication
+errors is logged at most once per minute, regardless of changing temporary paths in the error text.
+
+#### Metrics command and alerting
+
+The same `local-proxy-metrics.json` snapshot can be watched from the console:
+
+```bash
+php artisan slogger:local-proxy:metrics          # line format, one snapshot per second
+php artisan slogger:local-proxy:metrics json     # pretty JSON, screen cleared each poll
+php artisan slogger:local-proxy:metrics line --interval=5
+php artisan slogger:local-proxy:metrics --once   # single snapshot; exit code 1 when unavailable
+```
+
+- The first argument is the format: `line` (the default) prints
+  `collected_at=...;process.goroutines=21;sender.sent_operations_total=98;pending_bytes=512`,
+  one snapshot per line — a stream to `tail` and `grep`. `json` clears the terminal and
+  prints the beautified snapshot each poll.
+- `--interval` is the poll frequency in seconds (default `1`, fractional values from `0.1`
+  to `3600` accepted). Stop the loop with Ctrl+C.
+- `--once` prints a single snapshot and exits non-zero when the file is missing, unreadable
+  or stale, which makes it usable from monitoring checks.
+- A snapshot older than `SLOGGER_LOCAL_PROXY_METRICS_MAX_SNAPSHOT_AGE` (default 10 seconds)
+  is reported as stale rather than shown: the proxy is dead or has stopped writing. A
+  timestamp materially in the future counts as stale too.
+
+`pending_bytes` is not part of the proxy's file — the reader computes it from durable
+state: the sender position in `local-proxy-state.json` against the hourly trace files
+still on disk (only regular files count; a symlink or a directory with an hourly name is
+skipped, as on the Go side). Unlike the process-lifetime counters it survives a proxy
+restart. The state file is compared by identity (inode) before and after the scan, with
+the first descriptor held open until then — the proxy saves state atomically, and the
+pinned inode cannot be recycled by two saves in between, so a stable identity means a
+stable offset for the whole read; a moving state is retried once and then reported as
+unknown. Appends landing mid-read can only under-report; a file deleted mid-read without
+a state change (an expired file removed by retention) can inflate a single reading, and
+the next poll self-corrects. These guarantees hold while only the proxy writes the traces
+directory. `pending_bytes` is `null` when the backlog cannot be known (the directory does
+not scan, or the state file is unreadable).
+
+The command reads the file through `SLoggerLaravel\LocalProxy\LocalProxyMetricsReader`,
+which is reusable on its own: `read()` returns a `LocalProxyMetricsObject` or `null`.
+
+**Alerting.** While the command runs, each fresh snapshot is checked against two thresholds,
+and a crossing fires an event:
+
+```dotenv
+SLOGGER_LOCAL_PROXY_ALERTING_ENABLED=true
+SLOGGER_LOCAL_PROXY_ALERT_MAX_PENDING_BYTES=104857600
+SLOGGER_LOCAL_PROXY_ALERT_MAX_MINUTES_WITHOUT_SEND=5
+```
+
+- `SLOGGER_LOCAL_PROXY_ALERT_MAX_PENDING_BYTES` (default 100 MiB) — unsent trace data still
+  on disk, the `pending_bytes` described above. Crossing fires
+  `LocalProxyBacklogExceededEvent`.
+- `SLOGGER_LOCAL_PROXY_ALERT_MAX_MINUTES_WITHOUT_SEND` (default 5) — `sent_operations_total`
+  not growing for this many minutes fires `LocalProxySendStalledEvent`. The stall is measured
+  in the proxy's own `uptime_seconds`, so a wall-clock jump on the host does not read as
+  minutes without a send. A proxy restart — detected by the counter dropping or the uptime
+  rolling back — restarts the clock instead of firing.
+
+Each event fires once per crossing and re-arms when the value returns to normal — a running
+command does not repeat the alert every second. The events ship with no listeners; attach
+yours through the existing `listeners` section:
+
+```php
+'listeners' => [
+    \SLoggerLaravel\Events\LocalProxyBacklogExceededEvent::class => [
+        \App\Listeners\NotifyOpsAboutSLoggerBacklog::class,
+    ],
+    \SLoggerLaravel\Events\LocalProxySendStalledEvent::class => [
+        \App\Listeners\NotifyOpsAboutSLoggerStall::class,
+    ],
+],
+```
+
+Delivery is **at least once, so keep listeners idempotent**. A listener that throws is
+reported to the application's error handler, the alert is not marked as delivered, and the
+next poll retries the whole dispatch — including any earlier listener that already ran
+successfully for that crossing.
+
+Listeners from this section are registered only while `SLOGGER_ENABLED=true`, so alerting
+delivery requires the package to be enabled even though the metrics command itself runs
+regardless.
+
+For an upgrade, run `php artisan slogger:local-proxy:download --force` and restart the Supervisor
+program. To roll back, set `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TYPE=direct` and stop the proxy;
+the upstream URL stays unchanged. Unsent proxy files are not migrated or drained automatically by
+that switch.
+
 ### Memory dispatcher
 
 Keeps every trace in the process, unmasked and unsent, until `flush()`;
@@ -972,6 +1172,8 @@ The suite runs in Docker through the makefile:
 make setup                # once: build, start, composer install
 make test                 # phpunit
 make check                # cs-fixer + phpstan + phpunit
+make proxy-check          # gofmt + go vet + race tests + Go build, in the PHP container
+make proxy-integration    # real PHP client -> Go proxy -> fake SLogger
 make check-laravel-all    # `check` on Laravel 10.26.* (the floor), 10, 11 and 12
 ```
 
@@ -988,8 +1190,20 @@ enables SLogger with the `memory` dispatcher, `BaseTestCase` sets in-memory sqli
   (`--queue=slogger`). Send errors never reach the application's error reporting: look in
   the SLogger log channel for `dropped N traces`, `auth failed` (the token) or socket
   errors (`SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL`, the receiver being up).
+- Local proxy not sending: inspect `local-proxy-errors-YYYY_MM_DD.logs` in the configured traces
+  directory. Common causes are upstream auth/connect failures, an already-held lock, an invalid
+  state/file or insufficient disk space. The socket must be accessible to both the proxy and queue
+  worker user.
 
 ## Upgrading
+
+### From 2.2
+
+- The optional local Go proxy is added. Existing applications keep direct socket delivery:
+  `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TYPE` defaults to `direct`, so no action is required unless
+  you enable the proxy. See [Local proxy](#local-proxy) for installation and Supervisor setup.
+- A published `config/slogger.php` does not gain `dispatchers.queue.api_clients.socket.type` or
+  `local_proxy` automatically. Republish it or add those keys before enabling `proxy` mode.
 
 ### From 2.1
 

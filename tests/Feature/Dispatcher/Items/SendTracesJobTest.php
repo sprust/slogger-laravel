@@ -37,21 +37,39 @@ class SendTracesJobTest extends BaseTestCase
         SendTracesJob::resetDropStats();
     }
 
-    public function testTriesAndBackoffAreHardcoded(): void
+    public function testTriesAndBackoffComeFromTheConstructor(): void
     {
-        $job = new SendTracesJob($this->makeTraces());
+        $job = new SendTracesJob(traces: $this->makeTraces(), tries: 3, backoff: [2, 5]);
 
         // tries = count(backoff) + 1: every backoff pause is used before the drop
-        self::assertSame(5, $job->tries);
-        self::assertSame([5, 10, 30, 60], $job->backoff);
+        self::assertSame(3, $job->tries);
+        self::assertSame([2, 5], $job->backoff);
         self::assertSame(count($job->backoff) + 1, $job->tries);
+    }
+
+    /**
+     * @throws Throwable
+     */
+    public function testProxyProfileReleasesWithShorterBackoff(): void
+    {
+        $job = new SendTracesJob(traces: $this->makeTraces(), tries: 3, backoff: [2, 5]);
+
+        $queueJob = $this->makeQueueJob(attempts: 2);
+
+        $this->setQueueJob($job, $queueJob);
+
+        $job->handle($this->makeProcessor(), $this->makeFailingApiClient(), new GeneralConfig(), $this->makeMasker());
+
+        self::assertSame(1, $queueJob->releaseCount);
+        self::assertSame(5, $queueJob->releaseDelay);
+        self::assertSame(0, $queueJob->deleteCount);
     }
 
     public function testBackoffAcceptsIntAssignedByQueueDriver(): void
     {
         // some drivers assign a computed int back when releasing a job, and a typed
         // array property would make that a TypeError
-        $job = new SendTracesJob($this->makeTraces());
+        $job = $this->makeJob();
 
         $job->backoff = 10;
 
@@ -63,7 +81,7 @@ class SendTracesJobTest extends BaseTestCase
      */
     public function testHandleCallsApiClient(): void
     {
-        $job = new SendTracesJob($this->makeTraces());
+        $job = $this->makeJob();
 
         $processor = $this->makeProcessor();
 
@@ -79,7 +97,7 @@ class SendTracesJobTest extends BaseTestCase
      */
     public function testHandleThrowsWhenNoJobAndApiClientFails(): void
     {
-        $job = new SendTracesJob($this->makeTraces());
+        $job = $this->makeJob();
 
         $processor = $this->makeProcessor();
 
@@ -98,7 +116,7 @@ class SendTracesJobTest extends BaseTestCase
     {
         // not rethrown: the worker would report every attempt to the host's handler
         foreach ([1 => 5, 2 => 10, 3 => 30, 4 => 60] as $attempts => $expectedDelay) {
-            $job = new SendTracesJob($this->makeTraces());
+            $job = $this->makeJob();
 
             $queueJob = $this->makeQueueJob(attempts: $attempts);
 
@@ -118,7 +136,7 @@ class SendTracesJobTest extends BaseTestCase
     public function testHandleThrowsOnSyncQueue(): void
     {
         // releasing a sync job is a no-op: the batch would vanish without a word
-        $job = new SendTracesJob($this->makeTraces());
+        $job = $this->makeJob();
 
         $this->setQueueJob($job, new SyncJob($this->getApp(), '{}', 'sync', 'default'));
 
@@ -133,7 +151,7 @@ class SendTracesJobTest extends BaseTestCase
      */
     public function testHandleReleasesWithIntBackoffAssignedByQueueDriver(): void
     {
-        $job = new SendTracesJob($this->makeTraces());
+        $job = $this->makeJob();
 
         $job->backoff = 7;
 
@@ -157,7 +175,7 @@ class SendTracesJobTest extends BaseTestCase
     {
         $this->useDatabaseQueue();
 
-        dispatch(new SendTracesJob($this->makeTraces()));
+        dispatch($this->makeJob());
 
         $this->getApp()->instance(ApiClientInterface::class, $this->makeFailingApiClient());
 
@@ -186,7 +204,7 @@ class SendTracesJobTest extends BaseTestCase
      */
     public function testHandleDropsBatchWhenAttemptsExhausted(): void
     {
-        $job = new SendTracesJob($this->makeTraces());
+        $job = $this->makeJob();
 
         $queueJob = $this->makeQueueJob(attempts: $job->tries);
 
@@ -213,7 +231,7 @@ class SendTracesJobTest extends BaseTestCase
             ->andReturn(new NullLogger());
 
         foreach (range(1, 3) as $ignored) {
-            $job = new SendTracesJob($this->makeTraces());
+            $job = $this->makeJob();
 
             $this->setQueueJob($job, $this->makeQueueJob(attempts: $job->tries));
 
@@ -223,7 +241,7 @@ class SendTracesJobTest extends BaseTestCase
 
     public function testFailedLogsDrop(): void
     {
-        $job = new SendTracesJob($this->makeTraces());
+        $job = $this->makeJob();
 
         Log::shouldReceive('channel')
             ->once()
@@ -283,6 +301,14 @@ class SendTracesJobTest extends BaseTestCase
     private function makeQueueJob(int $attempts): FakeQueueJob
     {
         return new FakeQueueJob($attempts);
+    }
+
+    /**
+     * @param list<int> $backoff
+     */
+    private function makeJob(int $tries = 5, array $backoff = [5, 10, 30, 60]): SendTracesJob
+    {
+        return new SendTracesJob(traces: $this->makeTraces(), tries: $tries, backoff: $backoff);
     }
 
     private function makeTraces(): TracesObject

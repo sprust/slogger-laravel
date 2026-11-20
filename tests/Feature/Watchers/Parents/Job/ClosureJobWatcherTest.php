@@ -35,7 +35,9 @@ class ClosureJobWatcherTest extends BaseJobWatcherTestCase
         self::assertCount(1, $updating);
 
         $job = new SendTracesJob(
-            (new TracesObject())->addUpdating($updating[0])
+            traces: (new TracesObject())->addUpdating($updating[0]),
+            tries: 5,
+            backoff: [5, 10, 30, 60],
         );
 
         $exception = null;

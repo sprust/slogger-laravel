@@ -4,6 +4,7 @@ namespace SLoggerLaravel\Dispatcher\Items\Queue;
 
 use Closure;
 use Illuminate\Support\Facades\Log;
+use SLoggerLaravel\Configs\DispatcherQueueConfig;
 use SLoggerLaravel\Configs\GeneralConfig;
 use SLoggerLaravel\Dispatcher\Items\Queue\Jobs\SendTracesJob;
 use SLoggerLaravel\Dispatcher\Items\TraceDispatcherInterface;
@@ -14,6 +15,18 @@ use Throwable;
 
 class QueueDispatcher implements TraceDispatcherInterface
 {
+    // the direct mode talks to a remote receiver over TCP: network faults and
+    // receiver restarts justify a long ladder
+    private const DIRECT_TRIES   = 5;
+    private const DIRECT_BACKOFF = [5, 10, 30, 60];
+
+    // the proxy is a local Unix socket with a durable buffer: its failures are
+    // instant and either permanent (a record the proxy rejected) or gone in
+    // seconds (a restart, busy slots) - a long ladder buys nothing there, and
+    // shorter retries free the worker sooner
+    private const PROXY_TRIES   = 3;
+    private const PROXY_BACKOFF = [2, 5];
+
     private const DISPATCH_FAIL_LOG_INTERVAL_SECONDS = 60;
 
     private TracesObject $traces;
@@ -23,8 +36,9 @@ class QueueDispatcher implements TraceDispatcherInterface
     private int $lastDispatchFailLogAt = 0;
     private int $droppedDispatches     = 0;
 
-    public function __construct()
-    {
+    public function __construct(
+        private readonly DispatcherQueueConfig $config,
+    ) {
         $this->traces = new TracesObject();
     }
 
@@ -34,7 +48,7 @@ class QueueDispatcher implements TraceDispatcherInterface
         if ($parameters->isParent || $parameters->parentTraceId === null) {
             $this->safeDispatch(
                 fn() => dispatch(
-                    new SendTracesJob(
+                    $this->makeJob(
                         (new TracesObject())->addCreating($parameters)
                     )
                 )
@@ -70,8 +84,25 @@ class QueueDispatcher implements TraceDispatcherInterface
         $this->traces = new TracesObject();
 
         if ($tracesCount > 0) {
-            $this->safeDispatch(fn() => dispatch(new SendTracesJob($traces)));
+            $this->safeDispatch(fn() => dispatch($this->makeJob($traces)));
         }
+    }
+
+    private function makeJob(TracesObject $traces): SendTracesJob
+    {
+        if ($this->config->getSocketClientType() === DispatcherQueueConfig::SOCKET_CLIENT_PROXY) {
+            return new SendTracesJob(
+                traces: $traces,
+                tries: self::PROXY_TRIES,
+                backoff: self::PROXY_BACKOFF,
+            );
+        }
+
+        return new SendTracesJob(
+            traces: $traces,
+            tries: self::DIRECT_TRIES,
+            backoff: self::DIRECT_BACKOFF,
+        );
     }
 
     /**

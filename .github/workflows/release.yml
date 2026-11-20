@@ -27,6 +27,7 @@ on:
       - 'docker/**'
       - 'docker-compose.yml'
       - '.env.example'
+      - 'local-proxy/**'
       - '.github/workflows/release.yml'
 
 concurrency:
@@ -80,10 +81,57 @@ jobs:
       - run: vendor/bin/phpstan analyse
       - run: vendor/bin/phpunit
 
-  release:
-    needs: tests
+  proxy-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: local-proxy/go.mod
+          cache-dependency-path: local-proxy/go.sum
+      - name: Check formatting
+        working-directory: local-proxy
+        shell: bash
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "$unformatted"
+            exit 1
+          fi
+      - run: go vet ./...
+        working-directory: local-proxy
+      - run: go test -race ./...
+        working-directory: local-proxy
+      - run: go build -o /tmp/slogger-local-proxy ./cmd/slogger-local-proxy
+        working-directory: local-proxy
+
+  proxy-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: local-proxy/go.mod
+          cache-dependency-path: local-proxy/go.sum
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+          tools: composer:v2
+      - run: composer install --prefer-dist --no-interaction
+      - run: mkdir -p build && go -C local-proxy build -trimpath -o "$PWD/build/slogger-local-proxy" ./cmd/slogger-local-proxy
+      - name: Run PHP to Go integration test
+        env:
+          SLOGGER_LOCAL_PROXY_TEST_BINARY: ${{ github.workspace }}/build/slogger-local-proxy
+        run: vendor/bin/phpunit tests/Feature/LocalProxy/LocalProxyIntegrationTest.php
+
+  release:
+    needs: [tests, proxy-tests, proxy-integration]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     # Releases happen on master only — a PR run stops after the matrix.
     if: github.event_name == 'push'
@@ -110,6 +158,27 @@ jobs:
 
           echo "composer.json version: $version"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: local-proxy/go.mod
+          cache-dependency-path: local-proxy/go.sum
+
+      - name: Build local proxy release assets
+        env:
+          CGO_ENABLED: 0
+          GOOS: linux
+          GOARCH: amd64
+        shell: bash
+        run: |
+          mkdir -p assets
+          tag="${{ steps.version.outputs.tag }}"
+          go -C local-proxy build -trimpath \
+            -ldflags="-s -w -X main.version=$tag" \
+            -o "$PWD/assets/slogger-local-proxy_linux_amd64" \
+            ./cmd/slogger-local-proxy
+          cd assets
+          sha256sum slogger-local-proxy_linux_amd64 > slogger-local-proxy_checksums.txt
 
       - name: Create versioned release
         env:
@@ -154,4 +223,6 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "$tag" \
             "${notes_args[@]}" \
-            --latest
+            --latest \
+            assets/slogger-local-proxy_linux_amd64 \
+            assets/slogger-local-proxy_checksums.txt
