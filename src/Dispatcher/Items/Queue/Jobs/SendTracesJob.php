@@ -37,7 +37,7 @@ class SendTracesJob implements ShouldQueue
     private static int $droppedBatches = 0;
 
     // tries = count(backoff) + 1: every backoff pause is used before the batch is dropped
-    public int $tries = 5;
+    public int $tries;
 
     /**
      * The int arm is required: some drivers assign a computed int back when releasing
@@ -45,13 +45,19 @@ class SendTracesJob implements ShouldQueue
      *
      * @var int|list<int>
      */
-    public int|array $backoff = [5, 10, 30, 60];
+    public int|array $backoff;
 
     protected readonly string $tracesJson;
     protected readonly int $tracesCount;
 
-    public function __construct(TracesObject $traces)
+    /**
+     * @param list<int> $backoff
+     */
+    public function __construct(TracesObject $traces, int $tries, array $backoff)
     {
+        $this->tries   = $tries;
+        $this->backoff = $backoff;
+
         $this->tracesCount = $traces->count();
 
         try {

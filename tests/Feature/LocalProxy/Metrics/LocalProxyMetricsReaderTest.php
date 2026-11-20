@@ -401,8 +401,8 @@ class LocalProxyMetricsReaderTest extends MetricsTestCase
         $this->getApp()->instance(
             LocalProxySenderStateReader::class,
             new InterleavingSenderStateReader(
-                new LocalProxySenderStateReader(),
-                function (string $directory): void {
+                inner: new LocalProxySenderStateReader(),
+                beforeRead: function (string $directory): void {
                     $this->writeStateFile('2026_11_19_09', 6000, true);
                     unlink($directory . '/2026_11_19_09');
                     $this->writeStateFile(null, 0, false);

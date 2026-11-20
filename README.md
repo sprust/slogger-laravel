@@ -127,7 +127,12 @@ and reconnects transparently — exactly one retry per batch. Timeouts are **not
 way: that would turn a saturated receiver into a reconnect storm; they are handled by the job
 retry policy below.
 
-Send retries are fixed by design: 5 attempts with backoff of 5/10/30/60 seconds between them.
+Send retries are fixed by design, and depend on where the batch goes. Direct mode - a
+remote receiver over TCP - gets 5 attempts with backoff of 5/10/30/60 seconds between
+them. Proxy mode talks to a local Unix socket whose failures are instant and either
+permanent (a record the proxy rejected) or gone in seconds (a restart, busy slots), so it
+gets 3 attempts with backoff of 2/5 seconds; durability there is the proxy's on-disk
+buffer, not the retry window.
 After the attempts are exhausted the batch is **dropped** with a rate-limited warning in the
 SLogger log channel — a send that fails inside the job never reaches `failed_jobs`. Only a
 failure on the worker's side - a worker timeout, a worker killed mid-attempt - can still be

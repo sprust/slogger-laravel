@@ -35,7 +35,7 @@ class SendTracesJobNotTracedTest extends BaseWatcherTestCase
             }
         );
 
-        dispatch(new SendTracesJob(new TracesObject()));
+        dispatch(new SendTracesJob(traces: new TracesObject(), tries: 5, backoff: [5, 10, 30, 60]));
 
         self::assertCount(
             0,

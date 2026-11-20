@@ -70,7 +70,7 @@ class LocalProxyMetricsCommand extends Command
 
         do {
             try {
-                $available = $this->printSnapshotOrError($format, clearScreen: !$once);
+                $available = $this->printSnapshotOrError(format: $format, clearScreen: !$once);
             } catch (Throwable $exception) {
                 // e.g. an invalid local_proxy.traces_path fails the path
                 // resolution: report it like any other unavailable metrics

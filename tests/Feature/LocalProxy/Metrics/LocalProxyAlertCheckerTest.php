@@ -32,7 +32,7 @@ class LocalProxyAlertCheckerTest extends MetricsTestCase
         Carbon::setTestNow('2026-11-19 10:00:00');
 
         $this->checker()->check(
-            $this->metrics(['collected_at' => '2026-11-19T09:00:00+00:00'], pendingBytes: 999999)
+            $this->metrics(overrides: ['collected_at' => '2026-11-19T09:00:00+00:00'], pendingBytes: 999999)
         );
 
         Event::assertNothingDispatched();
