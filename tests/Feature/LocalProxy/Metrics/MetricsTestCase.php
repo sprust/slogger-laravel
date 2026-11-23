@@ -37,13 +37,10 @@ abstract class MetricsTestCase extends BaseTestCase
     /**
      * @param array<string, mixed> $overrides
      */
-    protected function metrics(array $overrides = [], ?int $pendingBytes = null): LocalProxyMetricsObject
+    protected function metrics(array $overrides = [], ?int $pendingBytes = 1): LocalProxyMetricsObject
     {
-        $metrics = LocalProxyMetricsObject::fromArray($this->makeSnapshot($overrides));
-
-        return $pendingBytes === null
-            ? $metrics
-            : $metrics->withPendingBytes($pendingBytes);
+        return LocalProxyMetricsObject::fromArray($this->makeSnapshot($overrides))
+            ->withPendingBytes($pendingBytes);
     }
 
     /**
@@ -104,6 +101,7 @@ abstract class MetricsTestCase extends BaseTestCase
         return array_replace_recursive(
             [
                 'collected_at'   => Carbon::now()->toIso8601String(),
+                'started_at'     => '2026-11-19T09:00:00+00:00',
                 'uptime_seconds' => 3600.5,
                 'process'        => [
                     'goroutines'        => 21,
@@ -125,6 +123,7 @@ abstract class MetricsTestCase extends BaseTestCase
                 'storage'        => [
                     'hourly_files'           => 2,
                     'hourly_bytes'           => 12345,
+                    'spool_limit_bytes'      => 1073741824,
                     'error_log_files'        => 1,
                     'appended_records_total' => 100,
                     'appended_bytes_total'   => 9999,

@@ -61,8 +61,8 @@ class LocalProxyMetricsReader
     }
 
     /**
-     * Unsent bytes still on disk: every hourly file newer than the one the
-     * sender is positioned in, plus the unsent tail of that file. The sender
+     * Unsent bytes still on disk: all other hourly files, plus the unsent
+     * tail of the file at the saved sender position. The sender
      * position is read from the state file itself, not from the snapshot -
      * the snapshot can be a second old by the time the offset matters.
      *
@@ -119,11 +119,19 @@ class LocalProxyMetricsReader
                 $pendingBytes = 0;
 
                 foreach ($sizes as $name => $size) {
-                    if ($state->file === null || strcmp($name, $state->file) > 0) {
-                        $pendingBytes += $size;
-                    } elseif ($name === $state->file && !$state->completed) {
-                        $pendingBytes += max(0, $size - $state->offset);
+                    if ($state->file !== null && $name === $state->file) {
+                        // the file the sender is positioned in: only its tail
+                        // past the durable offset is pending
+                        if (!$state->completed) {
+                            $pendingBytes += max(0, $size - $state->offset);
+                        }
+
+                        continue;
                     }
+
+                    // Older proxy versions can leave an earlier file after a
+                    // clock rollback. Only the named file has a saved offset.
+                    $pendingBytes += $size;
                 }
 
                 return $pendingBytes;
@@ -152,7 +160,7 @@ class LocalProxyMetricsReader
         foreach ($names as $name) {
             // hourly trace files only - the metrics file, state, lock and logs
             // in the same directory do not match
-            if (!preg_match(LocalProxyConfig::HOURLY_FILE_NAME_PATTERN, $name)) {
+            if (!LocalProxyConfig::isValidHourlyFileName($name)) {
                 continue;
             }
 

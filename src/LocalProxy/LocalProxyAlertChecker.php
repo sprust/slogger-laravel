@@ -5,6 +5,7 @@ namespace SLoggerLaravel\LocalProxy;
 use Illuminate\Contracts\Events\Dispatcher;
 use SLoggerLaravel\Configs\LocalProxyConfig;
 use SLoggerLaravel\Events\LocalProxyBacklogExceededEvent;
+use SLoggerLaravel\Events\LocalProxyMetricsUnavailableEvent;
 use SLoggerLaravel\Events\LocalProxySendStalledEvent;
 use SLoggerLaravel\LocalProxy\Objects\LocalProxyMetricsObject;
 use Throwable;
@@ -12,10 +13,12 @@ use Throwable;
 class LocalProxyAlertChecker
 {
     private ?int $lastSentOperations          = null;
+    private ?string $lastStartedAt            = null;
     private ?float $lastUptimeSeconds         = null;
     private ?float $lastProgressUptimeSeconds = null;
     private bool $backlogAlertActive          = false;
     private bool $stalledAlertActive          = false;
+    private bool $unavailableAlertActive      = false;
 
     public function __construct(
         private readonly LocalProxyConfig $config,
@@ -32,11 +35,31 @@ class LocalProxyAlertChecker
         // a stale snapshot says nothing about the proxy now; whoever displays
         // metrics reports the staleness, thresholds wait for a fresh one
         if ($metrics->isStale($this->config->getMetricsMaxSnapshotAgeSeconds())) {
+            $this->unavailable('stale', $metrics);
+
             return;
         }
 
+        $this->unavailableAlertActive = false;
         $this->checkBacklog($metrics);
         $this->checkSendProgress($metrics);
+    }
+
+    public function unavailable(string $reason = 'unavailable', ?LocalProxyMetricsObject $metrics = null): void
+    {
+        if (!$this->config->isAlertingEnabled() || $this->unavailableAlertActive) {
+            return;
+        }
+
+        try {
+            $this->events->dispatch(new LocalProxyMetricsUnavailableEvent($reason, $metrics));
+        } catch (Throwable $exception) {
+            report($exception);
+
+            return;
+        }
+
+        $this->unavailableAlertActive = true;
     }
 
     private function checkBacklog(LocalProxyMetricsObject $metrics): void
@@ -79,22 +102,31 @@ class LocalProxyAlertChecker
 
     private function checkSendProgress(LocalProxyMetricsObject $metrics): void
     {
+        // Unknown is not proof of work to do, and an idle proxy is healthy.
+        if ($metrics->pendingBytes === null) {
+            return;
+        }
+
         $sentOperations = $metrics->sender->sentOperationsTotal;
+        $startedAt      = $metrics->startedAt->toIso8601String();
+        $restarted      = ($this->lastStartedAt !== null && $startedAt !== $this->lastStartedAt)
+            || ($this->lastUptimeSeconds !== null && $metrics->uptimeSeconds < $this->lastUptimeSeconds);
 
-        // the counters are process-lifetime; a rolled-back uptime means a new
-        // proxy process even when the send counter happens to read the same
-        // (a restart before the first send), which a counter comparison alone
-        // cannot tell from a stuck sender
-        $restarted = $this->lastUptimeSeconds !== null
-            && $metrics->uptimeSeconds < $this->lastUptimeSeconds;
-
+        $this->lastStartedAt     = $startedAt;
         $this->lastUptimeSeconds = $metrics->uptimeSeconds;
+
+        if ($metrics->pendingBytes === 0) {
+            $this->lastSentOperations        = $sentOperations;
+            $this->lastProgressUptimeSeconds = $metrics->uptimeSeconds;
+            $this->stalledAlertActive        = false;
+
+            return;
+        }
 
         if ($this->lastSentOperations === null
             || $restarted
             || $sentOperations !== $this->lastSentOperations
         ) {
-            // the first sight, a restart, and progress all (re)start the clock
             $this->lastSentOperations        = $sentOperations;
             $this->lastProgressUptimeSeconds = $metrics->uptimeSeconds;
             $this->stalledAlertActive        = false;

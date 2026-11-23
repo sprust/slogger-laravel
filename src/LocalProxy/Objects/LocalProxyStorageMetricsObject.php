@@ -7,6 +7,7 @@ class LocalProxyStorageMetricsObject
     public function __construct(
         public readonly int $hourlyFiles,
         public readonly int $hourlyBytes,
+        public readonly int $spoolLimitBytes,
         public readonly int $errorLogFiles,
         public readonly int $appendedRecordsTotal,
         public readonly int $appendedBytesTotal,
@@ -24,6 +25,7 @@ class LocalProxyStorageMetricsObject
         return new self(
             hourlyFiles: LocalProxyMetricsSchema::int($data, 'hourly_files', 'storage.'),
             hourlyBytes: LocalProxyMetricsSchema::int($data, 'hourly_bytes', 'storage.'),
+            spoolLimitBytes: LocalProxyMetricsSchema::nonNegativeInt($data, 'spool_limit_bytes', 'storage.'),
             errorLogFiles: LocalProxyMetricsSchema::int($data, 'error_log_files', 'storage.'),
             appendedRecordsTotal: LocalProxyMetricsSchema::int($data, 'appended_records_total', 'storage.'),
             appendedBytesTotal: LocalProxyMetricsSchema::int($data, 'appended_bytes_total', 'storage.'),
@@ -44,6 +46,7 @@ class LocalProxyStorageMetricsObject
         return [
             'hourly_files'           => $this->hourlyFiles,
             'hourly_bytes'           => $this->hourlyBytes,
+            'spool_limit_bytes'      => $this->spoolLimitBytes,
             'error_log_files'        => $this->errorLogFiles,
             'appended_records_total' => $this->appendedRecordsTotal,
             'appended_bytes_total'   => $this->appendedBytesTotal,

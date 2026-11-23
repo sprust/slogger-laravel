@@ -17,6 +17,7 @@ const (
 	DefaultTracesPath     = "storage/slogger/traces"
 	DefaultRetentionHours = 24
 	MaxRetentionHours     = 2562047
+	DefaultMaxSpoolBytes  = int64(1 << 30)
 )
 
 type Config struct {
@@ -26,6 +27,7 @@ type Config struct {
 	TracesPath     string
 	TracesDir      string
 	RetentionHours int
+	MaxSpoolBytes  int64
 }
 
 func Load(envPath, rootDir string) (Config, error) {
@@ -67,6 +69,14 @@ func Load(envPath, rootDir string) (Config, error) {
 		}
 	}
 
+	maxSpoolBytes := DefaultMaxSpoolBytes
+	if raw := value(values, "SLOGGER_LOCAL_PROXY_MAX_SPOOL_BYTES"); raw != "" {
+		maxSpoolBytes, err = strconv.ParseInt(raw, 10, 64)
+		if err != nil || maxSpoolBytes <= 0 {
+			return Config{}, fmt.Errorf("SLOGGER_LOCAL_PROXY_MAX_SPOOL_BYTES must be a positive integer")
+		}
+	}
+
 	tracesDir := filepath.Join(rootDir, filepath.FromSlash(tracesPath))
 	rel, err := filepath.Rel(rootDir, tracesDir)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
@@ -80,6 +90,7 @@ func Load(envPath, rootDir string) (Config, error) {
 		TracesPath:     tracesPath,
 		TracesDir:      tracesDir,
 		RetentionHours: retentionHours,
+		MaxSpoolBytes:  maxSpoolBytes,
 	}, nil
 }
 

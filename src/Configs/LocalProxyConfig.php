@@ -18,6 +18,19 @@ class LocalProxyConfig
     ) {
     }
 
+    public static function isValidHourlyFileName(string $name): bool
+    {
+        if (!preg_match(self::HOURLY_FILE_NAME_PATTERN, $name)) {
+            return false;
+        }
+
+        return checkdate(
+            (int) substr($name, 5, 2),
+            (int) substr($name, 8, 2),
+            (int) substr($name, 0, 4)
+        ) && (int) substr($name, 11, 2) <= 23;
+    }
+
     public function getTracesPath(): string
     {
         return $this->dispatcherQueueConfig->getLocalProxyTracesPath();

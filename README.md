@@ -102,6 +102,7 @@ SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL=tcp://0.0.0.0:0002
 SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TIMEOUT=10
 SLOGGER_LOCAL_PROXY_TRACES_PATH=storage/slogger/traces
 SLOGGER_LOCAL_PROXY_RETENTION_HOURS=24
+SLOGGER_LOCAL_PROXY_MAX_SPOOL_BYTES=1073741824
 ```
 
 - `SLOGGER_DISPATCHER`: `queue` or `memory`.
@@ -996,6 +997,7 @@ SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TYPE=proxy
 SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL=tcp://your-slogger-host:port
 SLOGGER_LOCAL_PROXY_TRACES_PATH=storage/slogger/traces
 SLOGGER_LOCAL_PROXY_RETENTION_HOURS=24
+SLOGGER_LOCAL_PROXY_MAX_SPOOL_BYTES=1073741824
 ```
 
 - `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TYPE` is `direct` by default. `direct` keeps the old
@@ -1012,6 +1014,11 @@ SLOGGER_LOCAL_PROXY_RETENTION_HOURS=24
 - `SLOGGER_LOCAL_PROXY_RETENTION_HOURS` defaults to 24 and accepts values from 1 through 2,562,047
   hours (the safe `time.Duration` range in hours). Expired files are removed even when their
   traces have not been sent yet, so increase the retention when planning for a longer outage.
+- `SLOGGER_LOCAL_PROXY_MAX_SPOOL_BYTES` defaults to 1 GiB (`1073741824`) and must be a positive
+  integer. The limit includes record headers and existing spool files. When it is full, a new frame
+  is rejected without an ACK while the sender keeps draining existing files; the client follows its
+  retry policy and can succeed after space is freed. The current usage and limit are exported as
+  `storage.hourly_bytes` and `storage.spool_limit_bytes`.
 
 A Supervisor example:
 
@@ -1036,11 +1043,14 @@ graceful shutdown.
 The traces directory contains hourly files named `YYYY_MM_DD_HH`, `local-proxy-state.json`, the
 lock/socket and error logs. Sent offsets are saved atomically. A sealed hourly file is deleted once
 fully sent; an active file is not deleted merely because the sender has caught up with its current
-end. Cleanup runs at startup and every ten minutes.
+end. On a backward clock change the writer keeps using the latest spool hour. After
+restart it also skips a file marked complete and awaiting deletion. Cleanup runs at
+startup and every ten minutes.
 
 Outgoing batches contain at most 200 create/update operations and 4 MiB of JSON. A full batch is sent
 immediately; an incomplete batch is sent at most once per second. Larger input records are split at
-operation boundaries without discarding unknown trace fields. Batch size accounting includes the
+operation boundaries without discarding unknown trace fields. Records are walked operation by
+operation instead of being materialized in full before batching. Batch size accounting includes the
 protocol's second JSON encoding and its escaping, rather than counting only raw trace bytes. Each
 individual operation must also fit within 4 MiB on the wire. Ingestion validates the payload format
 and this limit before append/ACK; an invalid connection is closed without writing the record. An
@@ -1050,9 +1060,10 @@ within the process-wide five-second hard timeout.
 
 The local listener accepts up to 32 concurrent connections and holds at most 256 MiB of **input frame
 buffers**, covering active and queued reads. A single frame remains limited to 64 MiB. The budget is
-acquired before the payload buffer is allocated and released after the exchange. `Store.Append` makes
-a separate record copy (up to 64 MiB plus its header), and sender allocations are outside this input
-budget. When all connection slots are occupied, a new connection is closed immediately before the
+acquired before the payload buffer is allocated and released after the exchange. `Store.Append` writes
+the header and payload without another full-record copy. Sender allocations are outside this input
+budget, but operations are streamed into bounded batches rather than accumulated as a whole record.
+When all connection slots are occupied, a new connection is closed immediately before the
 handshake instead of waiting silently; the PHP job observes the failure and follows its existing
 retry policy. A later connection can authenticate normally once a slot is released.
 
@@ -1063,9 +1074,11 @@ connect/auth/send/read, the same batch is retried with a new handshake after thr
 error is logged; the saved offset does not move.
 
 Once per second the proxy atomically writes `local-proxy-metrics.json` in the traces directory. This
-JSON snapshot includes process heap/RSS/goroutines, connections and slots, writer queue length and
-capacity, input-frame budget, appended records/bytes, sent batches/operations/bytes, failed send
-attempts, sender state, hourly file count/bytes and error-log count. It contains operational metadata
+JSON snapshot includes process heap/RSS/goroutines (sampled every five seconds), connections and
+slots, writer queue length and capacity, input-frame budget, appended records/bytes, sent
+batches/operations/bytes, failed send attempts, sender state, hourly file count/bytes, the spool
+limit and error-log count. `started_at` identifies the process lifetime; `collected_at` and `uptime_seconds`
+describe the individual snapshot. It contains operational metadata
 only, never tokens or trace payloads. The file uses owner-only permissions and is not treated as a
 trace file by retention cleanup. Counters are process-lifetime values and reset when the proxy
 restarts. Use `collected_at` to judge snapshot freshness. A continuous series of metrics publication
@@ -1096,8 +1109,10 @@ php artisan slogger:local-proxy:metrics --once   # single snapshot; exit code 1 
 
 `pending_bytes` is not part of the proxy's file — the reader computes it from durable
 state: the sender position in `local-proxy-state.json` against the hourly trace files
-still on disk (only regular files count; a symlink or a directory with an hourly name is
-skipped, as on the Go side). Unlike the process-lifetime counters it survives a proxy
+still on disk. Every hourly file except the one the sender is positioned in counts in
+full, including earlier files left by older proxy versions after a clock change. The
+file at the saved position contributes its unsent tail. Only regular files count; a symlink or a directory with an
+hourly name is skipped, as on the Go side. Unlike the process-lifetime counters it survives a proxy
 restart. The state file is compared by identity (inode) before and after the scan, with
 the first descriptor held open until then — the proxy saves state atomically, and the
 pinned inode cannot be recycled by two saves in between, so a stable identity means a
@@ -1124,10 +1139,14 @@ SLOGGER_LOCAL_PROXY_ALERT_MAX_MINUTES_WITHOUT_SEND=5
   on disk, the `pending_bytes` described above. Crossing fires
   `LocalProxyBacklogExceededEvent`.
 - `SLOGGER_LOCAL_PROXY_ALERT_MAX_MINUTES_WITHOUT_SEND` (default 5) — `sent_operations_total`
-  not growing for this many minutes fires `LocalProxySendStalledEvent`. The stall is measured
-  in the proxy's own `uptime_seconds`, so a wall-clock jump on the host does not read as
-  minutes without a send. A proxy restart — detected by the counter dropping or the uptime
-  rolling back — restarts the clock instead of firing.
+  not growing for this many minutes **while `pending_bytes` is positive** fires
+  `LocalProxySendStalledEvent`. An idle proxy with an empty backlog does not alert. The stall is
+  measured in the proxy's own `uptime_seconds`, so a wall-clock jump on the host does not read as
+  minutes without a send. A new `started_at` (or an uptime rollback) restarts the clock, including
+  a restart while snapshots were unavailable.
+- A missing, unreadable or stale snapshot fires `LocalProxyMetricsUnavailableEvent` with a reason
+  and, for a stale snapshot, the metrics object. Thus a dead proxy is not silent while threshold
+  checks correctly remain idle.
 
 Each event fires once per crossing and re-arms when the value returns to normal — a running
 command does not repeat the alert every second. The events ship with no listeners; attach
@@ -1140,6 +1159,9 @@ yours through the existing `listeners` section:
     ],
     \SLoggerLaravel\Events\LocalProxySendStalledEvent::class => [
         \App\Listeners\NotifyOpsAboutSLoggerStall::class,
+    ],
+    \SLoggerLaravel\Events\LocalProxyMetricsUnavailableEvent::class => [
+        \App\Listeners\NotifyOpsAboutSLoggerUnavailable::class,
     ],
 ],
 ```

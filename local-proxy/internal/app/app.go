@@ -36,7 +36,7 @@ func Run(parent context.Context, configuration config.Config) error {
 	}
 	defer logger.Close()
 
-	store, err := storage.NewStore(configuration.TracesDir, nil)
+	store, err := storage.NewStore(configuration.TracesDir, nil, configuration.MaxSpoolBytes)
 	if err != nil {
 		return err
 	}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sprust/slogger-laravel/local-proxy/internal/storage"
+	"github.com/sprust/slogger-laravel/local-proxy/internal/tracepayload"
 )
 
 type Logger interface {
@@ -26,6 +27,9 @@ type traceUpstream interface {
 type Writer interface {
 	Notify() <-chan struct{}
 	IsSealed(name string) bool
+	RefreshFileSize(name string) error
+	RemoveSent(name string) error
+	RemoveExpired(name, observedHour string) error
 }
 
 var errRetryFileExpired = errors.New("retrying trace file expired")
@@ -114,9 +118,7 @@ func (s *Sender) Run(ctx context.Context) error {
 	s.state = state
 	s.durableOffset = state.Offset
 
-	if err := s.cleanup(); err != nil {
-		s.logger.Error("local proxy cleanup failed", "error", err)
-	}
+	s.cleanupAndLog()
 
 	cleanupTicker := time.NewTicker(s.cleanupInterval)
 	cleanup := cleanupTicker.C
@@ -194,9 +196,7 @@ func (s *Sender) Run(ctx context.Context) error {
 		case <-cleanupTicker.C:
 			timer.Stop()
 
-			if err := s.cleanup(); err != nil && !errors.Is(err, errRetryFileExpired) {
-				s.logger.Error("local proxy cleanup failed", "error", err)
-			}
+			s.cleanupAndLog()
 		case <-timer.C:
 		}
 	}
@@ -229,12 +229,7 @@ func (s *Sender) readAvailable(ctx context.Context, cleanup <-chan time.Time) er
 			return nil
 		}
 
-		operations, err := parseRecord(record.Payload)
-		if err != nil {
-			return fmt.Errorf("parse trace record %q at offset %d: %w", s.state.File, s.readerOffset, err)
-		}
-
-		for _, operation := range operations {
+		err = tracepayload.WalkOperations(record.Payload, func(operation operation) error {
 			if s.currentBatch == nil {
 				s.currentBatch = newBatch(s.durableOffset, time.Now())
 			}
@@ -258,10 +253,13 @@ func (s *Sender) readAvailable(ctx context.Context, cleanup <-chan time.Time) er
 			s.currentBatch.add(operation)
 
 			if s.currentBatch.operations == MaxBatchOperations {
-				if err := s.flush(ctx, cleanup); err != nil {
-					return err
-				}
+				return s.flush(ctx, cleanup)
 			}
+
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("process trace record %q at offset %d: %w", s.state.File, s.readerOffset, err)
 		}
 
 		s.readerOffset = record.NextOffset
@@ -339,13 +337,7 @@ func (s *Sender) flush(ctx context.Context, cleanup <-chan time.Time) error {
 func (s *Sender) cleanupCheckpoint(cleanup <-chan time.Time) error {
 	select {
 	case <-cleanup:
-		if err := s.cleanup(); err != nil {
-			if errors.Is(err, errRetryFileExpired) {
-				return err
-			}
-
-			s.logger.Error("local proxy cleanup failed", "error", err)
-		}
+		return s.cleanupAndLog()
 	default:
 	}
 
@@ -361,16 +353,8 @@ func (s *Sender) waitRetry(ctx context.Context, cleanup <-chan time.Time) error 
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-cleanup:
-			if err := s.cleanup(); err != nil {
-				if errors.Is(err, errRetryFileExpired) {
-					if err != errRetryFileExpired {
-						s.logger.Error("local proxy cleanup failed", "error", err)
-					}
-
-					return err
-				}
-
-				s.logger.Error("local proxy cleanup failed", "error", err)
+			if err := s.cleanupAndLog(); err != nil {
+				return err
 			}
 		case <-timer.C:
 			return nil
@@ -396,6 +380,9 @@ func (s *Sender) recoverOnSeal() error {
 	filePath := filepath.Join(s.dir, s.state.File)
 	if err := storage.RecoverFile(filePath); err != nil {
 		return fmt.Errorf("recover newly sealed trace file %q: %w", s.state.File, err)
+	}
+	if err := s.writer.RefreshFileSize(s.state.File); err != nil {
+		return fmt.Errorf("refresh recovered trace file size %q: %w", s.state.File, err)
 	}
 
 	file, err := os.Open(filePath)
@@ -455,6 +442,9 @@ func (s *Sender) ensureFile() (bool, error) {
 		if err := storage.RecoverFile(filepath.Join(s.dir, name)); err != nil {
 			return false, fmt.Errorf("recover sealed trace file %q: %w", name, err)
 		}
+		if err := s.writer.RefreshFileSize(name); err != nil {
+			return false, fmt.Errorf("refresh recovered trace file size %q: %w", name, err)
+		}
 
 		s.recoveredFile = name
 	} else {
@@ -513,7 +503,7 @@ func (s *Sender) finishCompletedFile() error {
 		return err
 	}
 
-	if err := os.Remove(filepath.Join(s.dir, s.state.File)); err != nil && !os.IsNotExist(err) {
+	if err := s.writer.RemoveSent(s.state.File); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("delete sent trace file %q: %w", s.state.File, err)
 	}
 
@@ -537,35 +527,52 @@ func (s *Sender) saveOffset(offset int64) error {
 	return nil
 }
 
+// Only invalidation interrupts the current send. Other cleanup errors are
+// reported even when joined with invalidation.
+func (s *Sender) cleanupAndLog() error {
+	err := s.cleanup()
+	if err != nil && err != errRetryFileExpired {
+		s.logger.Error("local proxy cleanup failed", "error", err)
+	}
+	if errors.Is(err, errRetryFileExpired) {
+		return errRetryFileExpired
+	}
+	return nil
+}
+
 func (s *Sender) cleanup() error {
+	// the error-log cleanup and the trace retention are independent: one
+	// undeletable old log must not block the trace backlog cleanup forever
+	var cleanupErrors []error
+
 	if err := s.logger.Cleanup(); err != nil {
-		return err
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup error logs: %w", err))
 	}
 
 	names, err := storage.ListTraceFiles(s.dir)
 	if err != nil {
-		return err
+		return errors.Join(append(cleanupErrors, err)...)
 	}
 
-	currentName := storage.CurrentFileName(s.now())
-	var cleanupErrors []error
+	now := s.now()
+	currentName := storage.CurrentFileName(now)
 	retryFileExpired := false
 
 	for _, name := range names {
-		if name == currentName {
+		if name >= currentName {
 			continue
 		}
 
-		hour, err := time.ParseInLocation("2006_01_02_15", name, s.now().Location())
+		hour, err := time.ParseInLocation("2006_01_02_15", name, now.Location())
 		if err != nil {
 			continue
 		}
 
-		if s.now().Before(hour.Add(time.Duration(s.retentionHours) * time.Hour)) {
+		if now.Before(hour.Add(time.Duration(s.retentionHours) * time.Hour)) {
 			continue
 		}
 
-		if err := os.Remove(filepath.Join(s.dir, name)); err != nil && !os.IsNotExist(err) {
+		if err := s.writer.RemoveExpired(name, currentName); err != nil && !os.IsNotExist(err) {
 			cleanupErrors = append(cleanupErrors, fmt.Errorf("delete expired trace file %q: %w", name, err))
 			continue
 		}

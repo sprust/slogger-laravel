@@ -5,13 +5,20 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sprust/slogger-laravel/local-proxy/internal/tracepayload"
 )
 
 func TestBatchPreservesTraceFieldsAndOperationOrder(t *testing.T) {
 	t.Parallel()
 
 	payload := []byte(`{"c":"[{\"tid\":\"create\",\"custom\":1}]","u":"[{\"tid\":\"update\"}]"}`)
-	operations, err := parseRecord(payload)
+	operations := make([]operation, 0)
+	err := tracepayload.WalkOperations(payload, func(operation operation) error {
+		operations = append(operations, operation)
+
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

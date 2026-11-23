@@ -42,13 +42,15 @@ func TestLoad(t *testing.T) {
 	clearEnvironment(t, "SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL")
 	clearEnvironment(t, "SLOGGER_LOCAL_PROXY_TRACES_PATH")
 	clearEnvironment(t, "SLOGGER_LOCAL_PROXY_RETENTION_HOURS")
+	clearEnvironment(t, "SLOGGER_LOCAL_PROXY_MAX_SPOOL_BYTES")
 
 	root := t.TempDir()
 	envPath := filepath.Join(root, ".env")
 	contents := "SLOGGER_TOKEN=file-token\n" +
 		"SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL=tcp://slogger:9002\n" +
 		"SLOGGER_LOCAL_PROXY_TRACES_PATH=/storage/slogger/traces/\n" +
-		"SLOGGER_LOCAL_PROXY_RETENTION_HOURS=36\n"
+		"SLOGGER_LOCAL_PROXY_RETENTION_HOURS=36\n" +
+		"SLOGGER_LOCAL_PROXY_MAX_SPOOL_BYTES=2048\n"
 	if err := os.WriteFile(envPath, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -74,6 +76,10 @@ func TestLoad(t *testing.T) {
 
 	if configuration.RetentionHours != 36 {
 		t.Fatalf("retention = %d", configuration.RetentionHours)
+	}
+
+	if configuration.MaxSpoolBytes != 2048 {
+		t.Fatalf("max spool bytes = %d", configuration.MaxSpoolBytes)
 	}
 }
 
@@ -121,6 +127,33 @@ func TestLoadRetentionDurationBounds(t *testing.T) {
 		}
 		if test.valid && configuration.RetentionHours != MaxRetentionHours {
 			t.Fatalf("retention = %d", configuration.RetentionHours)
+		}
+	}
+}
+
+func TestLoadMaxSpoolBytes(t *testing.T) {
+	clearEnvironment(t, "SLOGGER_LOCAL_PROXY_MAX_SPOOL_BYTES")
+	clearEnvironment(t, "SLOGGER_LOCAL_PROXY_TRACES_PATH")
+	t.Setenv("SLOGGER_TOKEN", "token")
+	t.Setenv("SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL", "tcp://slogger:9002")
+
+	root := t.TempDir()
+	envPath := filepath.Join(root, ".env")
+	if err := os.WriteFile(envPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	configuration, err := Load(envPath, root)
+	if err != nil || configuration.MaxSpoolBytes != DefaultMaxSpoolBytes {
+		t.Fatalf("default max spool bytes = %d, error = %v", configuration.MaxSpoolBytes, err)
+	}
+
+	for _, value := range []string{"0", "-1", "invalid", "9223372036854775808"} {
+		if err := os.WriteFile(envPath, []byte("SLOGGER_LOCAL_PROXY_MAX_SPOOL_BYTES="+value+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(envPath, root); err == nil {
+			t.Fatalf("max spool bytes %q unexpectedly accepted", value)
 		}
 	}
 }

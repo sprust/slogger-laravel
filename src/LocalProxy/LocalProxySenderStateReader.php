@@ -99,7 +99,7 @@ class LocalProxySenderStateReader
 
         if ($version !== self::SUPPORTED_VERSION
             || !is_string($file)
-            || ($file !== '' && !preg_match(LocalProxyConfig::HOURLY_FILE_NAME_PATTERN, $file))
+            || ($file !== '' && !LocalProxyConfig::isValidHourlyFileName($file))
             || !is_int($offset)
             || $offset < 0
             || !is_bool($completed)

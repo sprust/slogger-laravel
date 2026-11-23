@@ -2,6 +2,7 @@ package storage
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -16,19 +17,27 @@ import (
 )
 
 const (
-	SocketFileName = "local-proxy.sock"
-	LockFileName   = "local-proxy.lock"
+	SocketFileName       = "local-proxy.sock"
+	LockFileName         = "local-proxy.lock"
+	DefaultMaxSpoolBytes = int64(1 << 30)
 )
+
+var ErrSpoolFull = errors.New("local proxy spool is full")
 
 var traceFileNamePattern = regexp.MustCompile(`^\d{4}_\d{2}_\d{2}_\d{2}$`)
 
 type Store struct {
-	mu     sync.Mutex
-	dir    string
-	now    func() time.Time
-	file   *os.File
-	hour   string
-	notify chan struct{}
+	mu          sync.Mutex
+	dir         string
+	now         func() time.Time
+	file        *os.File
+	hour        string
+	minimumHour string
+	notify      chan struct{}
+
+	maxSpoolBytes int64
+	spoolBytes    atomic.Int64
+	fileSizes     map[string]int64
 
 	appendedRecords atomic.Uint64
 	appendedBytes   atomic.Uint64
@@ -37,18 +46,66 @@ type Store struct {
 type Metrics struct {
 	AppendedRecords uint64
 	AppendedBytes   uint64
+	SpoolBytes      int64
+	SpoolLimitBytes int64
 }
 
-func NewStore(dir string, now func() time.Time) (*Store, error) {
+func NewStore(dir string, now func() time.Time, limits ...int64) (*Store, error) {
 	if now == nil {
 		now = time.Now
+	}
+	if len(limits) > 1 {
+		return nil, fmt.Errorf("expected at most one spool limit")
+	}
+
+	maxSpoolBytes := DefaultMaxSpoolBytes
+	if len(limits) == 1 {
+		maxSpoolBytes = limits[0]
+	}
+	if maxSpoolBytes <= 0 {
+		return nil, fmt.Errorf("spool limit must be positive")
 	}
 
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create traces directory: %w", err)
 	}
 
-	return &Store{dir: dir, now: now, notify: make(chan struct{}, 1)}, nil
+	store := &Store{
+		dir:           dir,
+		now:           now,
+		notify:        make(chan struct{}, 1),
+		maxSpoolBytes: maxSpoolBytes,
+		fileSizes:     make(map[string]int64),
+	}
+	if err := store.loadSpoolFiles(); err != nil {
+		return nil, err
+	}
+
+	hour, err := store.resolveStartupHour()
+	if err != nil {
+		return nil, err
+	}
+	store.minimumHour = hour
+	return store, nil
+}
+
+func (s *Store) loadSpoolFiles() error {
+	names, err := ListTraceFiles(s.dir)
+	if err != nil {
+		return err
+	}
+
+	for _, name := range names {
+		info, err := os.Stat(filepath.Join(s.dir, name))
+		if err != nil {
+			return fmt.Errorf("stat trace file %q: %w", name, err)
+		}
+
+		s.fileSizes[name] = info.Size()
+		s.spoolBytes.Add(info.Size())
+	}
+
+	return nil
 }
 
 func (s *Store) Append(payload []byte) error {
@@ -59,7 +116,8 @@ func (s *Store) Append(payload []byte) error {
 		return fmt.Errorf("invalid payload size %d", len(payload))
 	}
 
-	hour := CurrentFileName(s.now())
+	recordSize := int64(len(payload) + 4)
+	hour := s.observeHour(CurrentFileName(s.now()))
 	if s.file == nil || s.hour != hour {
 		if err := s.closeFile(); err != nil {
 			return err
@@ -70,18 +128,27 @@ func (s *Store) Append(payload []byte) error {
 		}
 	}
 
-	record := make([]byte, 4+len(payload))
-	binary.BigEndian.PutUint32(record[:4], uint32(len(payload)))
-	copy(record[4:], payload)
+	spoolBytes := s.spoolBytes.Load()
+	if recordSize > s.maxSpoolBytes-spoolBytes {
+		return fmt.Errorf("%w: %d bytes used, %d bytes requested, limit %d", ErrSpoolFull, spoolBytes, recordSize, s.maxSpoolBytes)
+	}
 
-	if err := protocol.WriteAll(s.file, record); err != nil {
-		return fmt.Errorf("append trace record: %w", err)
+	var header [4]byte
+	binary.BigEndian.PutUint32(header[:], uint32(len(payload)))
+
+	if err := protocol.WriteAll(s.file, header[:]); err != nil {
+		return fmt.Errorf("append trace record header: %w", err)
+	}
+	if err := protocol.WriteAll(s.file, payload); err != nil {
+		return fmt.Errorf("append trace record payload: %w", err)
 	}
 
 	if err := s.file.Sync(); err != nil {
 		return fmt.Errorf("sync trace file: %w", err)
 	}
 
+	s.fileSizes[hour] += recordSize
+	s.spoolBytes.Add(recordSize)
 	s.appendedRecords.Add(1)
 	s.appendedBytes.Add(uint64(len(payload)))
 
@@ -101,17 +168,84 @@ func (s *Store) IsSealed(name string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.file != nil && s.hour == name {
-		return false
+	hour := s.observeHour(CurrentFileName(s.now()))
+	return name < hour && name != s.hour
+}
+
+// Only called under mu. Once the sender can seal an hour, no subsequent
+// append may reopen it, even if the local clock goes backwards.
+func (s *Store) observeHour(hour string) string {
+	if hour > s.minimumHour {
+		s.minimumHour = hour
+	}
+	return s.minimumHour
+}
+
+// RemoveExpired rotates an idle writer away from the expired file before
+// unlinking it. Future appends stay at or past the hour observed by cleanup.
+func (s *Store) RemoveExpired(name, observedHour string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if name >= s.observeHour(observedHour) {
+		return fmt.Errorf("cannot expire current or future hour %q", name)
+	}
+	if name == s.hour {
+		if err := s.closeFile(); err != nil {
+			return err
+		}
+	}
+	return s.remove(name)
+}
+
+func (s *Store) RefreshFileSize(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	info, err := os.Stat(filepath.Join(s.dir, name))
+	if err != nil {
+		return err
+	}
+	s.setFileSize(name, info.Size())
+
+	return nil
+}
+
+func (s *Store) setFileSize(name string, size int64) {
+	s.spoolBytes.Add(size - s.fileSizes[name])
+	s.fileSizes[name] = size
+}
+
+func (s *Store) RemoveSent(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if name == s.hour {
+		if err := s.closeFile(); err != nil {
+			return err
+		}
 	}
 
-	return name < CurrentFileName(s.now())
+	return s.remove(name)
+}
+
+func (s *Store) remove(name string) error {
+	err := os.Remove(filepath.Join(s.dir, name))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	s.spoolBytes.Add(-s.fileSizes[name])
+	delete(s.fileSizes, name)
+
+	return err
 }
 
 func (s *Store) Metrics() Metrics {
 	return Metrics{
 		AppendedRecords: s.appendedRecords.Load(),
 		AppendedBytes:   s.appendedBytes.Load(),
+		SpoolBytes:      s.spoolBytes.Load(),
+		SpoolLimitBytes: s.maxSpoolBytes,
 	}
 }
 
@@ -139,6 +273,14 @@ func (s *Store) openFile(hour string) error {
 	if err != nil {
 		return fmt.Errorf("open trace file %q: %w", filePath, err)
 	}
+
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+
+		return fmt.Errorf("stat opened trace file %q: %w", filePath, err)
+	}
+	s.setFileSize(hour, info.Size())
 
 	if created {
 		if err := syncDirectory(s.dir); err != nil {
@@ -170,12 +312,49 @@ func (s *Store) closeFile() error {
 	return nil
 }
 
+// Initialize the writer before sender and server start. A completed file
+// may still be awaiting unlink after a crash and must never be reopened.
+func (s *Store) resolveStartupHour() (string, error) {
+	hour := CurrentFileName(s.now())
+
+	names, err := ListTraceFiles(s.dir)
+	if err != nil {
+		return "", err
+	}
+
+	if len(names) > 0 && names[len(names)-1] > hour {
+		hour = names[len(names)-1]
+	}
+
+	state, err := NewStateStore(s.dir).Load()
+	if err != nil {
+		return "", fmt.Errorf("read sender state: %w", err)
+	}
+
+	if state.Completed && state.File >= hour {
+		parsed, err := time.Parse("2006_01_02_15", state.File)
+		if err != nil {
+			return "", fmt.Errorf("parse trace file name %q: %w", state.File, err)
+		}
+
+		hour = parsed.Add(time.Hour).Format("2006_01_02_15")
+	}
+
+	return hour, nil
+}
+
 func CurrentFileName(now time.Time) string {
 	return now.Format("2006_01_02_15")
 }
 
 func ValidTraceFileName(name string) bool {
-	return traceFileNamePattern.MatchString(name)
+	if !traceFileNamePattern.MatchString(name) {
+		return false
+	}
+
+	parsed, err := time.Parse("2006_01_02_15", name)
+
+	return err == nil && parsed.Format("2006_01_02_15") == name
 }
 
 func ListTraceFiles(dir string) ([]string, error) {

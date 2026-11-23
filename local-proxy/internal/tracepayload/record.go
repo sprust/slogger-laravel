@@ -1,6 +1,7 @@
 package tracepayload
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,7 +42,7 @@ func (o Operation) WireSize() (int, error) {
 }
 
 func ValidateRecord(payload []byte) error {
-	return WalkOperations(payload, func(operation Operation) error {
+	return walkOperations(payload, true, func(operation Operation) error {
 		size, err := operation.WireSize()
 		if err != nil {
 			return fmt.Errorf("measure trace operation: %w", err)
@@ -55,9 +56,17 @@ func ValidateRecord(payload []byte) error {
 }
 
 func WalkOperations(payload []byte, visit func(Operation) error) error {
+	return walkOperations(payload, false, visit)
+}
+
+func walkOperations(payload []byte, requireKnownKey bool, visit func(Operation) error) error {
 	var envelope map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &envelope); err != nil {
 		return fmt.Errorf("decode trace envelope: %w", err)
+	}
+
+	if requireKnownKey && envelope["c"] == nil && envelope["u"] == nil {
+		return errors.New("trace envelope must contain c or u")
 	}
 
 	for _, part := range []struct {
@@ -82,20 +91,6 @@ func WalkOperations(payload []byte, visit func(Operation) error) error {
 	return nil
 }
 
-func ParseRecord(payload []byte) ([]Operation, error) {
-	operations := make([]Operation, 0)
-	err := WalkOperations(payload, func(operation Operation) error {
-		operations = append(operations, operation)
-
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return operations, nil
-}
-
 func walkOperationArray(encoded string, creating bool, visit func(Operation) error) error {
 	decoder := json.NewDecoder(strings.NewReader(encoded))
 	opening, err := decoder.Token()
@@ -112,8 +107,8 @@ func walkOperationArray(encoded string, creating bool, visit func(Operation) err
 			return err
 		}
 
-		var object map[string]json.RawMessage
-		if err := json.Unmarshal(message, &object); err != nil || object == nil {
+		trimmed := bytes.TrimSpace(message)
+		if len(trimmed) < 2 || trimmed[0] != '{' || trimmed[len(trimmed)-1] != '}' {
 			return errors.New("trace operation must be a JSON object")
 		}
 

@@ -8,12 +8,13 @@ use Throwable;
 
 class LocalProxyMetricsObject
 {
-    private const COLLECTED_AT_PATTERN = '/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})\z/';
+    private const TIMESTAMP_PATTERN = '/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})\z/';
 
-    private const COLLECTED_AT_OFFSET_PATTERN = '/([+-])(\d{2}):(\d{2})\z/';
+    private const TIMESTAMP_OFFSET_PATTERN = '/([+-])(\d{2}):(\d{2})\z/';
 
     public function __construct(
         public readonly Carbon $collectedAt,
+        public readonly Carbon $startedAt,
         public readonly float $uptimeSeconds,
         public readonly LocalProxyProcessMetricsObject $process,
         public readonly LocalProxyServerMetricsObject $server,
@@ -34,7 +35,8 @@ class LocalProxyMetricsObject
     public static function fromArray(array $data): self
     {
         return new self(
-            collectedAt: self::parseCollectedAt($data),
+            collectedAt: self::parseTimestamp($data, 'collected_at'),
+            startedAt: self::parseTimestamp($data, 'started_at'),
             uptimeSeconds: LocalProxyMetricsSchema::nonNegativeFiniteFloat($data, 'uptime_seconds', ''),
             process: LocalProxyProcessMetricsObject::fromArray(
                 LocalProxyMetricsSchema::section($data, 'process', '')
@@ -55,6 +57,7 @@ class LocalProxyMetricsObject
     {
         return new self(
             collectedAt: $this->collectedAt,
+            startedAt: $this->startedAt,
             uptimeSeconds: $this->uptimeSeconds,
             process: $this->process,
             server: $this->server,
@@ -82,6 +85,7 @@ class LocalProxyMetricsObject
     {
         return [
             'collected_at'   => $this->collectedAt->toIso8601String(),
+            'started_at'     => $this->startedAt->toIso8601String(),
             'uptime_seconds' => $this->uptimeSeconds,
             'process'        => $this->process->toArray(),
             'server'         => $this->server->toArray(),
@@ -123,33 +127,33 @@ class LocalProxyMetricsObject
      *
      * @throws InvalidArgumentException
      */
-    private static function parseCollectedAt(array $data): Carbon
+    private static function parseTimestamp(array $data, string $key): Carbon
     {
-        $collectedAt = $data['collected_at'] ?? null;
+        $timestamp = $data[$key] ?? null;
 
         // a strict RFC3339(Nano) shape with real calendar and clock components:
         // Carbon::parse would otherwise accept "now", and normalize an
         // impossible date like 2026-02-30 into March
-        if (!is_string($collectedAt)
-            || !preg_match(self::COLLECTED_AT_PATTERN, $collectedAt, $matches)
+        if (!is_string($timestamp)
+            || !preg_match(self::TIMESTAMP_PATTERN, $timestamp, $matches)
             || !checkdate((int) $matches[2], (int) $matches[3], (int) $matches[1])
             || (int) $matches[4] > 23
             || (int) $matches[5] > 59
             || (int) $matches[6] > 59
         ) {
-            throw new InvalidArgumentException('metrics snapshot has no valid collected_at');
+            throw new InvalidArgumentException("metrics snapshot has no valid $key");
         }
 
-        if (preg_match(self::COLLECTED_AT_OFFSET_PATTERN, $collectedAt, $offsetMatches)
+        if (preg_match(self::TIMESTAMP_OFFSET_PATTERN, $timestamp, $offsetMatches)
             && ((int) $offsetMatches[2] > 23 || (int) $offsetMatches[3] > 59)
         ) {
-            throw new InvalidArgumentException('metrics snapshot has no valid collected_at');
+            throw new InvalidArgumentException("metrics snapshot has no valid $key");
         }
 
         try {
-            return Carbon::parse($collectedAt);
+            return Carbon::parse($timestamp);
         } catch (Throwable $exception) {
-            throw new InvalidArgumentException('metrics snapshot has no valid collected_at', 0, $exception);
+            throw new InvalidArgumentException("metrics snapshot has no valid $key", 0, $exception);
         }
     }
 }

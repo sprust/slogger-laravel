@@ -147,7 +147,3 @@ type wirePayload struct {
 	Creating string `json:"c,omitempty"`
 	Updating string `json:"u,omitempty"`
 }
-
-func parseRecord(payload []byte) ([]operation, error) {
-	return tracepayload.ParseRecord(payload)
-}

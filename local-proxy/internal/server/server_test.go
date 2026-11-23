@@ -106,16 +106,7 @@ func TestRejectsUnsendableOperationBeforeAppendAndAcceptsNextClient(t *testing.T
 		return nil
 	}
 
-	first, err := net.Dial("unix", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer first.Close()
-	if err := handshake(first); err != nil {
-		t.Fatal(err)
-	}
-
-	operation, err := json.Marshal(map[string]string{"data": strings.Repeat("a", tracepayload.MaxBatchSize)})
+	operation, err := json.Marshal([]map[string]string{{"data": strings.Repeat("a", tracepayload.MaxBatchSize)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,13 +118,23 @@ func TestRejectsUnsendableOperationBeforeAppendAndAcceptsNextClient(t *testing.T
 		t.Fatal("test frame exceeds ingestion limit")
 	}
 
-	if err := protocol.WriteFrame(first, invalid); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := protocol.ReadFrame(first, 32); err == nil {
-		t.Fatal("unsendable operation received ACK")
-	}
+	for _, frame := range [][]byte{invalid, []byte("null"), []byte(`{"creates":"[{}]"}`)} {
+		first, err := net.Dial("unix", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer first.Close()
+		if err := handshake(first); err != nil {
+			t.Fatal(err)
+		}
+		if err := protocol.WriteFrame(first, frame); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := protocol.ReadFrame(first, 32); err == nil {
+			t.Fatal("unsendable operation received ACK")
+		}
 
+	}
 	files, err := storage.ListTraceFiles(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -413,4 +414,47 @@ func waitForSocket(t *testing.T, path string) {
 	}
 
 	t.Fatal("Unix socket was not created")
+}
+
+func TestWriterContinuesAfterSpoolFull(t *testing.T) {
+	dir := t.TempDir()
+	payload := []byte(`{"c":"[]"}`)
+	store, err := storage.NewStore(dir, nil, int64(len(payload)+4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	server := New(SocketPath(dir), store, &serverLogger{})
+	writerErrors := make(chan error, 1)
+	go server.write(writerErrors)
+
+	appendPayload := func() error {
+		request := appendRequest{payload: payload, result: make(chan error, 1)}
+		server.requests <- request
+
+		return <-request.result
+	}
+	if err := appendPayload(); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendPayload(); !errors.Is(err, storage.ErrSpoolFull) {
+		t.Fatalf("full append error = %v", err)
+	}
+
+	files, err := storage.ListTraceFiles(dir)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("files = %v, error = %v", files, err)
+	}
+	if err := store.RemoveSent(files[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendPayload(); err != nil {
+		t.Fatalf("writer did not continue after space was freed: %v", err)
+	}
+
+	close(server.requests)
+	if err := <-writerErrors; err != nil {
+		t.Fatal(err)
+	}
 }

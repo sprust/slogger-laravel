@@ -34,6 +34,8 @@ class LocalProxyMetricsReaderTest extends MetricsTestCase
         self::assertSame(5000000, $metrics->process->rssBytes);
         self::assertSame(2, $metrics->server->connections);
         self::assertSame(100, $metrics->storage->appendedRecordsTotal);
+        self::assertSame(1073741824, $metrics->storage->spoolLimitBytes);
+        self::assertSame('2026-11-19 09:00:00', $metrics->startedAt->format('Y-m-d H:i:s'));
         self::assertSame('2026_11_19_09', $metrics->storage->state->file);
         self::assertSame(5000, $metrics->storage->state->offset);
         self::assertFalse($metrics->storage->state->completed);
@@ -69,6 +71,16 @@ class LocalProxyMetricsReaderTest extends MetricsTestCase
     {
         $snapshot = $this->makeSnapshot();
         unset($snapshot['collected_at']);
+
+        file_put_contents($this->metricsFilePath(), (string) json_encode($snapshot));
+
+        self::assertNull($this->reader->read());
+    }
+
+    public function testReturnsNullWithoutStartedAt(): void
+    {
+        $snapshot = $this->makeSnapshot();
+        unset($snapshot['started_at']);
 
         file_put_contents($this->metricsFilePath(), (string) json_encode($snapshot));
 
@@ -285,9 +297,27 @@ class LocalProxyMetricsReaderTest extends MetricsTestCase
         self::assertSame(500, $metrics->pendingBytes);
     }
 
+    public function testPendingBytesCountsFileEarlierThanStateInFull(): void
+    {
+        // a host clock rollback: appends landed in an earlier hourly name
+        // while the sender is still positioned in a later one - the earlier
+        // file was never confirmed-sent nor deleted, and the sender drains
+        // the earliest file first when it re-selects
+        $this->writeHourlyFile('2026_11_19_11', 6000);
+        $this->writeHourlyFile('2026_11_19_12', 500);
+        $this->writeStateFile('2026_11_19_12', 500, false);
+        $this->writeSnapshot();
+
+        $metrics = $this->reader->read();
+
+        self::assertNotNull($metrics);
+        self::assertSame(6000, $metrics->pendingBytes);
+    }
+
     public function testPendingBytesIgnoresDirectoriesAndSymlinks(): void
     {
         $this->writeHourlyFile('2026_11_19_10', 1500);
+        $this->writeHourlyFile('9999_99_99_99', 500);
 
         // a directory and a symlink carrying hourly file names: Go's
         // DirEntry.Type().IsRegular() counts neither, and neither do we

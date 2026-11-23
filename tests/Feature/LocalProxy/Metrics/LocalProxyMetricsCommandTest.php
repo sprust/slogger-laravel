@@ -8,6 +8,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Event;
 use SLoggerLaravel\Events\LocalProxyBacklogExceededEvent;
+use SLoggerLaravel\Events\LocalProxyMetricsUnavailableEvent;
 
 class LocalProxyMetricsCommandTest extends MetricsTestCase
 {
@@ -102,10 +103,14 @@ class LocalProxyMetricsCommandTest extends MetricsTestCase
 
     public function testMissingSnapshotFailsOnce(): void
     {
+        Event::fake();
+        config()->set('slogger.local_proxy.metrics.alerting.enabled', true);
+
         $exitCode = Artisan::call('slogger:local-proxy:metrics', ['--once' => true]);
 
         self::assertSame(1, $exitCode);
         self::assertStringContainsString('error="metrics unavailable', Artisan::output());
+        Event::assertDispatched(LocalProxyMetricsUnavailableEvent::class, 1);
     }
 
     public function testInvalidTracesPathFailsGracefully(): void

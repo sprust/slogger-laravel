@@ -190,6 +190,9 @@ func (s *Server) write(writerErrors chan<- error) {
 	for request := range s.requests {
 		err := s.store.Append(request.payload)
 		request.result <- err
+		if errors.Is(err, storage.ErrSpoolFull) {
+			continue
+		}
 		if err != nil {
 			terminalError = fmt.Errorf("durable trace append failed: %w", err)
 			s.logger.Error("durable trace append failed", "error", err)
@@ -240,7 +243,7 @@ func (s *Server) handle(ctx context.Context, conn net.Conn) {
 		}
 
 		if err := s.handleFrame(ctx, conn); err != nil {
-			if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) && ctx.Err() == nil {
+			if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) && !errors.Is(err, storage.ErrSpoolFull) && ctx.Err() == nil {
 				s.logger.Error("local proxy client read failed", "error", err)
 			}
 

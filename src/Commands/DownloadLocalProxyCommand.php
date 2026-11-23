@@ -47,9 +47,7 @@ class DownloadLocalProxyCommand extends Command
                 throw new RuntimeException("Failed to create directory [$directory].");
             }
 
-            $baseUrl   = 'https://github.com/sprust/slogger-laravel/releases/download/v' . $version;
-            $binary    = $this->download("$baseUrl/" . self::ASSET);
-            $checksums = $this->download("$baseUrl/" . self::CHECKSUMS);
+            $baseUrl = 'https://github.com/sprust/slogger-laravel/releases/download/v' . $version;
 
             $createdTemporaryPath = tempnam($directory, '.slogger-local-proxy-');
 
@@ -59,9 +57,8 @@ class DownloadLocalProxyCommand extends Command
 
             $temporaryPath = $createdTemporaryPath;
 
-            if (file_put_contents($temporaryPath, $binary, LOCK_EX) === false) {
-                throw new RuntimeException('Failed to write the downloaded binary.');
-            }
+            $this->download("$baseUrl/" . self::ASSET, $temporaryPath);
+            $checksums = $this->download("$baseUrl/" . self::CHECKSUMS);
 
             $this->verifyChecksum($temporaryPath, $checksums);
 
@@ -129,12 +126,17 @@ class DownloadLocalProxyCommand extends Command
         return $version;
     }
 
-    private function download(string $url): string
+    private function download(string $url, ?string $sink = null): string
     {
-        return Http::timeout(60)
-            ->get($url)
-            ->throw()
-            ->body();
+        $request = Http::timeout(60);
+
+        if ($sink !== null) {
+            $request = $request->withOptions(['sink' => $sink]);
+        }
+
+        $response = $request->get($url)->throw();
+
+        return $sink === null ? $response->body() : '';
     }
 
     private function verifyChecksum(string $binaryPath, string $checksums): void

@@ -139,6 +139,13 @@ func TestSenderSendsAtMost200Operations(t *testing.T) {
 	}
 }
 
+type failingCleanupLogger struct {
+	recordingLogger
+	err error
+}
+
+func (l *failingCleanupLogger) Cleanup() error { return l.err }
+
 func TestCleanupDeletesExpiredStateFileAndKeepsActive(t *testing.T) {
 	now := time.Date(2026, 11, 17, 14, 0, 0, 0, time.Local)
 	dir := t.TempDir()
@@ -148,21 +155,28 @@ func TestCleanupDeletesExpiredStateFileAndKeepsActive(t *testing.T) {
 		}
 	}
 
+	writer, err := storage.NewStore(dir, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
 	states := storage.NewStateStore(dir)
 	if err := states.Save(storage.State{File: "2026_11_17_13"}); err != nil {
 		t.Fatal(err)
 	}
 
+	logErr := errors.New("old log unavailable")
 	sender := &Sender{
 		dir:            dir,
+		writer:         writer,
 		retentionHours: 1,
 		now:            func() time.Time { return now },
-		logger:         &recordingLogger{},
+		logger:         &failingCleanupLogger{err: logErr},
 		states:         states,
 		state:          storage.State{Version: storage.StateVersion, File: "2026_11_17_13"},
 	}
 
-	if err := sender.cleanup(); !errors.Is(err, errRetryFileExpired) {
+	if err := sender.cleanup(); !errors.Is(err, errRetryFileExpired) || !errors.Is(err, logErr) {
 		t.Fatalf("expected current file invalidation, got %v", err)
 	}
 
@@ -590,4 +604,34 @@ func waitFor(t *testing.T, condition func() bool) {
 	}
 
 	t.Fatal("condition was not met before timeout")
+}
+
+func TestSenderDeliversAfterClockRollback(t *testing.T) {
+	clock := &testClock{now: time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)}
+	dir := t.TempDir()
+	store, err := storage.NewStore(dir, clock.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	sender, err := New(dir, "tcp://127.0.0.1:9002", "token", 24, clock.Now, &recordingLogger{}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := &recordingUpstream{}
+	sender.upstream = upstream
+	sender.batchDelay = time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- sender.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+	if err := store.Append([]byte(`{"c":"[{}]"}`)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return upstream.count() == 1 })
+	clock.Advance(-time.Hour)
+	if err := store.Append([]byte(`{"u":"[{}]"}`)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return upstream.count() == 2 })
 }

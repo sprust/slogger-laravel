@@ -8,6 +8,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Event;
 use RuntimeException;
 use SLoggerLaravel\Events\LocalProxyBacklogExceededEvent;
+use SLoggerLaravel\Events\LocalProxyMetricsUnavailableEvent;
 use SLoggerLaravel\Events\LocalProxySendStalledEvent;
 use SLoggerLaravel\LocalProxy\LocalProxyAlertChecker;
 
@@ -23,7 +24,7 @@ class LocalProxyAlertCheckerTest extends MetricsTestCase
         Event::assertNothingDispatched();
     }
 
-    public function testStaleSnapshotIsSkipped(): void
+    public function testStaleSnapshotFiresUnavailableWithoutThresholdAlerts(): void
     {
         Event::fake();
         config()->set('slogger.local_proxy.metrics.alerting.enabled', true);
@@ -35,7 +36,9 @@ class LocalProxyAlertCheckerTest extends MetricsTestCase
             $this->metrics(overrides: ['collected_at' => '2026-11-19T09:00:00+00:00'], pendingBytes: 999999)
         );
 
-        Event::assertNothingDispatched();
+        Event::assertDispatched(LocalProxyMetricsUnavailableEvent::class, 1);
+        Event::assertNotDispatched(LocalProxyBacklogExceededEvent::class);
+        Event::assertNotDispatched(LocalProxySendStalledEvent::class);
     }
 
     public function testBacklogEventFiresOncePerCrossing(): void
@@ -83,7 +86,7 @@ class LocalProxyAlertCheckerTest extends MetricsTestCase
         config()->set('slogger.local_proxy.metrics.alerting.max_pending_bytes', 1);
 
         // an object built without the reader's disk pass carries no backlog
-        $this->checker()->check($this->metrics());
+        $this->checker()->check($this->metrics(pendingBytes: null));
 
         Event::assertNotDispatched(LocalProxyBacklogExceededEvent::class);
     }
@@ -101,7 +104,7 @@ class LocalProxyAlertCheckerTest extends MetricsTestCase
 
         // the backlog went unknown: that is not a recovery, the alert must
         // not re-arm and fire again for the same crossing
-        $checker->check($this->metrics());
+        $checker->check($this->metrics(pendingBytes: null));
         $checker->check($this->metrics(pendingBytes: 20));
 
         Event::assertDispatched(LocalProxyBacklogExceededEvent::class, 1);
@@ -258,6 +261,62 @@ class LocalProxyAlertCheckerTest extends MetricsTestCase
             $this->metrics(['uptime_seconds' => 301, 'sender' => ['sent_operations_total' => 0]])
         );
         Event::assertDispatched(LocalProxySendStalledEvent::class, 1);
+    }
+
+    public function testIdleProxyDoesNotFireSendStalled(): void
+    {
+        Event::fake();
+        config()->set('slogger.local_proxy.metrics.alerting.enabled', true);
+        config()->set('slogger.local_proxy.metrics.alerting.max_minutes_without_send', 5);
+
+        $checker = $this->checker();
+        $checker->check($this->metrics(['uptime_seconds' => 100], 0));
+        $checker->check($this->metrics(['uptime_seconds' => 400], 0));
+
+        Event::assertNotDispatched(LocalProxySendStalledEvent::class);
+    }
+
+    public function testRestartDuringStaleGapRestartsClockWithSameCounter(): void
+    {
+        Event::fake();
+        config()->set('slogger.local_proxy.metrics.alerting.enabled', true);
+        config()->set('slogger.local_proxy.metrics.alerting.max_minutes_without_send', 5);
+
+        Carbon::setTestNow('2026-11-23 12:00:00');
+        $checker = $this->checker();
+        $sender  = ['sent_operations_total' => 100];
+        $checker->check($this->metrics(['uptime_seconds' => 100, 'sender' => $sender], 10));
+        $checker->check($this->metrics([
+            'collected_at'   => '2026-11-23T11:00:00+00:00',
+            'uptime_seconds' => 150,
+            'sender'         => $sender,
+        ], 10));
+
+        $newProcess = [
+            'started_at' => '2026-11-23T11:55:00+00:00',
+            'sender'     => $sender,
+        ];
+        $checker->check($this->metrics($newProcess + ['uptime_seconds' => 400], 10));
+        $checker->check($this->metrics($newProcess + ['uptime_seconds' => 699], 10));
+        Event::assertNotDispatched(LocalProxySendStalledEvent::class);
+
+        $checker->check($this->metrics($newProcess + ['uptime_seconds' => 700], 10));
+        Event::assertDispatched(LocalProxySendStalledEvent::class, 1);
+    }
+
+    public function testUnavailableAlertRearmsAfterHealthySnapshot(): void
+    {
+        Event::fake();
+        config()->set('slogger.local_proxy.metrics.alerting.enabled', true);
+
+        $checker = $this->checker();
+        $checker->unavailable();
+        $checker->unavailable();
+        Event::assertDispatched(LocalProxyMetricsUnavailableEvent::class, 1);
+
+        $checker->check($this->metrics(pendingBytes: 0));
+        $checker->unavailable('stale');
+        Event::assertDispatched(LocalProxyMetricsUnavailableEvent::class, 2);
     }
 
     private function checker(): LocalProxyAlertChecker

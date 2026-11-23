@@ -65,6 +65,7 @@ return [
         // "/storage/slogger/traces/" and "storage/slogger/traces" are equivalent.
         'traces_path'     => env('SLOGGER_LOCAL_PROXY_TRACES_PATH', 'storage/slogger/traces'),
         'retention_hours' => env('SLOGGER_LOCAL_PROXY_RETENTION_HOURS', 24),
+        'max_spool_bytes' => env('SLOGGER_LOCAL_PROXY_MAX_SPOOL_BYTES', 1073741824), // 1 GiB
 
         'metrics' => [
             // a snapshot older than this is stale: the proxy is dead or has
@@ -101,6 +102,9 @@ return [
         // ],
         // \SLoggerLaravel\Events\LocalProxySendStalledEvent::class => [
         //     \App\Listeners\YourStalledListener::class,
+        // ],
+        // \SLoggerLaravel\Events\LocalProxyMetricsUnavailableEvent::class => [
+        //     \App\Listeners\YourUnavailableListener::class,
         // ],
     ],
 

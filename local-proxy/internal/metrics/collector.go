@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sprust/slogger-laravel/local-proxy/internal/logging"
@@ -18,7 +19,10 @@ import (
 	"github.com/sprust/slogger-laravel/local-proxy/internal/storage"
 )
 
-const FileName = "local-proxy-metrics.json"
+const (
+	FileName               = "local-proxy-metrics.json"
+	processMetricsInterval = 5 * time.Second
+)
 
 type Logger interface {
 	Error(message string, arguments ...any)
@@ -35,10 +39,15 @@ type Collector struct {
 	interval  time.Duration
 
 	lastWriteErrorAt time.Time
+
+	processMu          sync.Mutex
+	processCollectedAt time.Time
+	processMetrics     ProcessMetrics
 }
 
 type Snapshot struct {
 	CollectedAt   time.Time      `json:"collected_at"`
+	StartedAt     time.Time      `json:"started_at"`
 	UptimeSeconds float64        `json:"uptime_seconds"`
 	Process       ProcessMetrics `json:"process"`
 	Server        ServerMetrics  `json:"server"`
@@ -68,6 +77,7 @@ type ServerMetrics struct {
 type StorageMetrics struct {
 	HourlyFiles      int          `json:"hourly_files"`
 	HourlyBytes      int64        `json:"hourly_bytes"`
+	SpoolLimitBytes  int64        `json:"spool_limit_bytes"`
 	ErrorLogFiles    int          `json:"error_log_files"`
 	AppendedRecords  uint64       `json:"appended_records_total"`
 	AppendedBytes    uint64       `json:"appended_bytes_total"`
@@ -125,9 +135,8 @@ func (c *Collector) Run(ctx context.Context) error {
 }
 
 func (c *Collector) Snapshot() (Snapshot, error) {
-	var memory runtime.MemStats
-	runtime.ReadMemStats(&memory)
-
+	now := c.now()
+	processMetrics := c.processSnapshot(now)
 	serverMetrics := c.server.Metrics()
 	storeMetrics := c.store.Metrics()
 	senderMetrics := c.sender.Metrics()
@@ -147,15 +156,10 @@ func (c *Collector) Snapshot() (Snapshot, error) {
 	}
 
 	snapshot := Snapshot{
-		CollectedAt:   c.now(),
-		UptimeSeconds: c.now().Sub(c.startedAt).Seconds(),
-		Process: ProcessMetrics{
-			Goroutines:      runtime.NumGoroutine(),
-			HeapAllocBytes:  memory.HeapAlloc,
-			HeapSysBytes:    memory.HeapSys,
-			StackInuseBytes: memory.StackInuse,
-			RSSBytes:        readRSSBytes(),
-		},
+		CollectedAt:   now,
+		StartedAt:     c.startedAt,
+		UptimeSeconds: now.Sub(c.startedAt).Seconds(),
+		Process:       processMetrics,
 		Server: ServerMetrics{
 			Connections:      serverMetrics.Connections,
 			IdleConnections:  serverMetrics.IdleConnections,
@@ -169,6 +173,7 @@ func (c *Collector) Snapshot() (Snapshot, error) {
 		Storage: StorageMetrics{
 			HourlyFiles:     len(hourlyFiles),
 			HourlyBytes:     hourlyBytes,
+			SpoolLimitBytes: storeMetrics.SpoolLimitBytes,
 			ErrorLogFiles:   errorLogFiles,
 			AppendedRecords: storeMetrics.AppendedRecords,
 			AppendedBytes:   storeMetrics.AppendedBytes,
@@ -192,6 +197,29 @@ func (c *Collector) Snapshot() (Snapshot, error) {
 	}
 
 	return snapshot, nil
+}
+
+func (c *Collector) processSnapshot(now time.Time) ProcessMetrics {
+	c.processMu.Lock()
+	defer c.processMu.Unlock()
+
+	if !c.processCollectedAt.IsZero() && !now.Before(c.processCollectedAt) && now.Sub(c.processCollectedAt) < processMetricsInterval {
+		return c.processMetrics
+	}
+
+	var memory runtime.MemStats
+	runtime.ReadMemStats(&memory)
+
+	c.processMetrics = ProcessMetrics{
+		Goroutines:      runtime.NumGoroutine(),
+		HeapAllocBytes:  memory.HeapAlloc,
+		HeapSysBytes:    memory.HeapSys,
+		StackInuseBytes: memory.StackInuse,
+		RSSBytes:        readRSSBytes(),
+	}
+	c.processCollectedAt = now
+
+	return c.processMetrics
 }
 
 func collectFileMetrics(entries []os.DirEntry) ([]string, int64, int, error) {

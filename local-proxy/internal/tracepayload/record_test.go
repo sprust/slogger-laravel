@@ -104,3 +104,42 @@ func encodeRecord(t *testing.T, creating, updating []map[string]any) []byte {
 
 	return payload
 }
+
+func TestWalkOperationsPreservesLegacyEmptyEnvelopes(t *testing.T) {
+	for _, payload := range []string{"null", "{}", `{"creates":"[{}]"}`} {
+		operations := 0
+		err := WalkOperations([]byte(payload), func(Operation) error {
+			operations++
+
+			return nil
+		})
+		if err != nil || operations != 0 {
+			t.Fatalf("legacy record %s: %v, %d", payload, err, operations)
+		}
+	}
+}
+
+func BenchmarkWalkOperations100KOperations(b *testing.B) {
+	operations := `[` + strings.TrimSuffix(strings.Repeat(`{"tid":"trace"},`, 100000), `,`) + `]`
+	payload, err := json.Marshal(map[string]string{"c": operations})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for range b.N {
+		visited := 0
+		if err := WalkOperations(payload, func(Operation) error {
+			visited++
+
+			return nil
+		}); err != nil {
+			b.Fatal(err)
+		}
+		if visited != 100000 {
+			b.Fatalf("visited = %d", visited)
+		}
+	}
+}

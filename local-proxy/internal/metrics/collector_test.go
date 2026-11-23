@@ -57,7 +57,14 @@ func TestCollectorWritesAtomicJSONSnapshot(t *testing.T) {
 		t.Fatalf("process = %+v", process)
 	}
 
+	if snapshot["started_at"] == nil {
+		t.Fatal("started_at is missing")
+	}
+
 	storageMetrics := snapshot["storage"].(map[string]any)
+	if storageMetrics["spool_limit_bytes"].(float64) != float64(storage.DefaultMaxSpoolBytes) {
+		t.Fatalf("storage = %+v", storageMetrics)
+	}
 	if storageMetrics["hourly_files"].(float64) != 1 || storageMetrics["appended_records_total"].(float64) != 1 {
 		t.Fatalf("storage = %+v", storageMetrics)
 	}

@@ -75,6 +75,7 @@ class LocalProxyMetricsCommand extends Command
                 // e.g. an invalid local_proxy.traces_path fails the path
                 // resolution: report it like any other unavailable metrics
                 // instead of crashing out of the loop
+                $this->alertChecker->unavailable();
                 $this->printError($format, 'metrics unavailable: ' . $exception->getMessage());
 
                 $available = false;
@@ -120,6 +121,7 @@ class LocalProxyMetricsCommand extends Command
         }
 
         if ($metrics === null) {
+            $this->alertChecker->unavailable();
             $this->printError(
                 $format,
                 'metrics unavailable: no readable snapshot at ' . $this->metricsReader->getMetricsFilePath()
@@ -131,6 +133,7 @@ class LocalProxyMetricsCommand extends Command
         $maxAgeSeconds = $this->config->getMetricsMaxSnapshotAgeSeconds();
 
         if ($metrics->isStale($maxAgeSeconds)) {
+            $this->alertChecker->unavailable('stale', $metrics);
             $this->printError(
                 $format,
                 'metrics snapshot is stale'
