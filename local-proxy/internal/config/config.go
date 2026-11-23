@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -31,9 +32,9 @@ type Config struct {
 }
 
 func Load(envPath, rootDir string) (Config, error) {
-	values, err := godotenv.Read(envPath)
+	values, err := readEnv(envPath)
 	if err != nil {
-		return Config{}, fmt.Errorf("read env file %q: %w", envPath, err)
+		return Config{}, err
 	}
 
 	rootDir, err = filepath.Abs(rootDir)
@@ -92,6 +93,48 @@ func Load(envPath, rootDir string) (Config, error) {
 		RetentionHours: retentionHours,
 		MaxSpoolBytes:  maxSpoolBytes,
 	}, nil
+}
+
+var envReferencePattern = regexp.MustCompile(`\$\{[A-Za-z_][A-Za-z0-9_]*\}`)
+
+func readEnv(envPath string) (map[string]string, error) {
+	contents, err := os.ReadFile(envPath)
+	if err != nil {
+		return nil, fmt.Errorf("read env file %q", envPath)
+	}
+
+	placeholderPrefix := "__SLOGGER_PROCESS_ENV_"
+	for strings.Contains(string(contents), placeholderPrefix) {
+		placeholderPrefix += "_"
+	}
+
+	replacementCount := 0
+	replacerArgs := make([]string, 0)
+	expanded := envReferencePattern.ReplaceAllStringFunc(string(contents), func(reference string) string {
+		key := reference[2 : len(reference)-1]
+		value, exists := os.LookupEnv(key)
+		if !exists {
+			return reference
+		}
+
+		placeholder := fmt.Sprintf("%s%d__", placeholderPrefix, replacementCount)
+		replacementCount++
+		replacerArgs = append(replacerArgs, placeholder, value)
+
+		return placeholder
+	})
+
+	values, err := godotenv.Unmarshal(expanded)
+	if err != nil {
+		return nil, fmt.Errorf("read env file %q", envPath)
+	}
+
+	replacer := strings.NewReplacer(replacerArgs...)
+	for key, value := range values {
+		values[key] = replacer.Replace(value)
+	}
+
+	return values, nil
 }
 
 func NormalizeTracesPath(value string) (string, error) {

@@ -86,11 +86,15 @@ class LocalProxyIntegrationTest extends BaseTestCase
                     ? json_decode((string) file_get_contents($statePath), true)
                     : null;
 
-                return ($state['offset'] ?? 0) > 0;
+                return ($state['file'] ?? null) === ''
+                    && ($state['offset'] ?? null) === 0
+                    && ($state['completed'] ?? null) === false;
             });
 
             $state = json_decode((string) file_get_contents($statePath), true);
-            self::assertGreaterThan(0, $state['offset']);
+            self::assertSame('', $state['file']);
+            self::assertSame(0, $state['offset']);
+            self::assertFalse($state['completed']);
 
             $metrics = $this->waitForMetrics(
                 fn(array $metrics): bool => ($metrics['storage']['appended_records_total'] ?? 0) === 2

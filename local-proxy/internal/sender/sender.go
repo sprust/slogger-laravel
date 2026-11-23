@@ -27,6 +27,7 @@ type traceUpstream interface {
 type Writer interface {
 	Notify() <-chan struct{}
 	IsSealed(name string) bool
+	CompleteFile(name string, offset int64) (bool, error)
 	RefreshFileSize(name string) error
 	RemoveSent(name string) error
 	RemoveExpired(name, observedHour string) error
@@ -159,12 +160,12 @@ func (s *Sender) Run(ctx context.Context) error {
 		}
 
 		if s.file != nil && s.currentBatch == nil {
-			sealed, err := s.finishIfSealed()
+			finished, err := s.finishIfComplete()
 			if err != nil {
 				return err
 			}
 
-			if sealed {
+			if finished {
 				continue
 			}
 		}
@@ -474,26 +475,27 @@ func (s *Sender) ensureFile() (bool, error) {
 	return true, nil
 }
 
-func (s *Sender) finishIfSealed() (bool, error) {
-	if !s.writer.IsSealed(s.state.File) {
-		return false, nil
-	}
-
+func (s *Sender) finishIfComplete() (bool, error) {
 	stat, err := s.file.Stat()
 	if err != nil {
 		return false, err
 	}
-
 	if s.readerOffset != stat.Size() {
 		return false, nil
 	}
 
-	s.state.Offset = s.readerOffset
-	s.state.Completed = true
-
-	if err := s.states.Save(s.state); err != nil {
+	completed, err := s.writer.CompleteFile(s.state.File, s.readerOffset)
+	if err != nil || !completed {
 		return false, err
 	}
+	if err := s.closeFile(); err != nil {
+		return false, err
+	}
+
+	s.state = storage.State{Version: storage.StateVersion}
+	s.readerOffset = 0
+	s.durableOffset = 0
+	s.recoveredFile = ""
 
 	return true, nil
 }

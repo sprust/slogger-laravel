@@ -80,6 +80,9 @@ func NewStore(dir string, now func() time.Time, limits ...int64) (*Store, error)
 	if err := store.loadSpoolFiles(); err != nil {
 		return nil, err
 	}
+	if err := store.reconcileCompletedFile(); err != nil {
+		return nil, err
+	}
 
 	hour, err := store.resolveStartupHour()
 	if err != nil {
@@ -106,6 +109,23 @@ func (s *Store) loadSpoolFiles() error {
 	}
 
 	return nil
+}
+
+func (s *Store) reconcileCompletedFile() error {
+	states := NewStateStore(s.dir)
+	state, err := states.Load()
+	if err != nil {
+		return fmt.Errorf("read sender state: %w", err)
+	}
+	if !state.Completed {
+		return nil
+	}
+
+	if err := s.remove(state.File); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("delete completed trace file %q: %w", state.File, err)
+	}
+
+	return states.Save(State{Version: StateVersion})
 }
 
 func (s *Store) Append(payload []byte) error {
@@ -215,6 +235,42 @@ func (s *Store) setFileSize(name string, size int64) {
 	s.fileSizes[name] = size
 }
 
+func (s *Store) CompleteFile(name string, offset int64) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if offset < 0 || !ValidTraceFileName(name) {
+		return false, fmt.Errorf("invalid completed file position %q:%d", name, offset)
+	}
+
+	info, err := os.Stat(filepath.Join(s.dir, name))
+	if err != nil {
+		return false, err
+	}
+	if info.Size() != offset {
+		return false, nil
+	}
+
+	if name == s.hour {
+		if err := s.closeFile(); err != nil {
+			return false, err
+		}
+	}
+
+	states := NewStateStore(s.dir)
+	if err := states.Save(State{File: name, Offset: offset, Completed: true}); err != nil {
+		return false, err
+	}
+	if err := s.remove(name); err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+	if err := states.Save(State{Version: StateVersion}); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
 func (s *Store) RemoveSent(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -312,8 +368,6 @@ func (s *Store) closeFile() error {
 	return nil
 }
 
-// Initialize the writer before sender and server start. A completed file
-// may still be awaiting unlink after a crash and must never be reopened.
 func (s *Store) resolveStartupHour() (string, error) {
 	hour := CurrentFileName(s.now())
 
@@ -324,20 +378,6 @@ func (s *Store) resolveStartupHour() (string, error) {
 
 	if len(names) > 0 && names[len(names)-1] > hour {
 		hour = names[len(names)-1]
-	}
-
-	state, err := NewStateStore(s.dir).Load()
-	if err != nil {
-		return "", fmt.Errorf("read sender state: %w", err)
-	}
-
-	if state.Completed && state.File >= hour {
-		parsed, err := time.Parse("2006_01_02_15", state.File)
-		if err != nil {
-			return "", fmt.Errorf("parse trace file name %q: %w", state.File, err)
-		}
-
-		hour = parsed.Add(time.Hour).Format("2006_01_02_15")
 	}
 
 	return hour, nil

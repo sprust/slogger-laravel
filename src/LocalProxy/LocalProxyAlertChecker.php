@@ -116,8 +116,8 @@ class LocalProxyAlertChecker
         $this->lastUptimeSeconds = $metrics->uptimeSeconds;
 
         if ($metrics->pendingBytes === 0) {
-            $this->lastSentOperations        = $sentOperations;
-            $this->lastProgressUptimeSeconds = $metrics->uptimeSeconds;
+            $this->lastSentOperations        = null;
+            $this->lastProgressUptimeSeconds = null;
             $this->stalledAlertActive        = false;
 
             return;

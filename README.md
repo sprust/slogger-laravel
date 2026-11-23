@@ -1036,16 +1036,17 @@ stdout_logfile=/var/log/supervisor/slogger-local-proxy.log
 ```
 
 Apply it with `supervisorctl reread && supervisorctl update`. Real process environment variables
-override values from `.env`. The process takes an exclusive `flock`; a second launch fails instead
+override values from `.env`, including `${VARIABLE}` references. The process takes an exclusive
+`flock`; a second launch fails instead
 of replacing the active socket. SIGINT/SIGTERM stop acceptance and allow up to five seconds for
 graceful shutdown.
 
 The traces directory contains hourly files named `YYYY_MM_DD_HH`, `local-proxy-state.json`, the
-lock/socket and error logs. Sent offsets are saved atomically. A sealed hourly file is deleted once
-fully sent; an active file is not deleted merely because the sender has caught up with its current
-end. On a backward clock change the writer keeps using the latest spool hour. After
-restart it also skips a file marked complete and awaiting deletion. Cleanup runs at
-startup and every ten minutes.
+lock/socket and error logs. Sent offsets are saved atomically. Once the sender reaches a fully
+delivered EOF, the writer closes and reclaims that file even within the current hour, freeing its
+spool budget before another append reuses the same name. The completed/delete/empty-state sequence
+is recovered at startup after a crash. On a backward clock change the writer keeps using the latest
+spool hour. Cleanup runs at startup and every ten minutes.
 
 Outgoing batches contain at most 200 create/update operations and 4 MiB of JSON. A full batch is sent
 immediately; an incomplete batch is sent at most once per second. Larger input records are split at
@@ -1140,8 +1141,9 @@ SLOGGER_LOCAL_PROXY_ALERT_MAX_MINUTES_WITHOUT_SEND=5
   `LocalProxyBacklogExceededEvent`.
 - `SLOGGER_LOCAL_PROXY_ALERT_MAX_MINUTES_WITHOUT_SEND` (default 5) — `sent_operations_total`
   not growing for this many minutes **while `pending_bytes` is positive** fires
-  `LocalProxySendStalledEvent`. An idle proxy with an empty backlog does not alert. The stall is
-  measured in the proxy's own `uptime_seconds`, so a wall-clock jump on the host does not read as
+  `LocalProxySendStalledEvent`. An idle proxy with an empty backlog does not alert, and the first
+  positive backlog after an idle period starts a fresh timer. The stall is measured in the proxy's
+  own `uptime_seconds`, so a wall-clock jump on the host does not read as
   minutes without a send. A new `started_at` (or an uptime rollback) restarts the clock, including
   a restart while snapshots were unavailable.
 - A missing, unreadable or stale snapshot fires `LocalProxyMetricsUnavailableEvent` with a reason

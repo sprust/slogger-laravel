@@ -1,6 +1,7 @@
 package sender
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -634,4 +635,48 @@ func TestSenderDeliversAfterClockRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool { return upstream.count() == 2 })
+}
+
+func TestDeliveredActiveFileFreesSpoolWithinSameHour(t *testing.T) {
+	now := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	store, err := storage.NewStore(dir, func() time.Time { return now }, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	upstream := &recordingUpstream{}
+	sender, err := New(dir, "tcp://127.0.0.1:9002", "token", 24, func() time.Time { return now }, &recordingLogger{}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender.upstream = upstream
+	sender.batchDelay = time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- sender.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	if err := store.Append([]byte(`{"c":"[{}]"}`)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		return upstream.count() == 1 && store.Metrics().SpoolBytes == 0
+	})
+
+	if err := store.Append([]byte(`{"u":"[{}]"}`)); err != nil {
+		t.Fatalf("append after delivery in the same hour: %v", err)
+	}
+	waitFor(t, func() bool {
+		return upstream.count() == 2 && store.Metrics().SpoolBytes == 0
+	})
+
+	if !bytes.Contains(upstream.payloads[0], []byte(`"c"`)) || !bytes.Contains(upstream.payloads[1], []byte(`"u"`)) {
+		t.Fatalf("delivery order changed: %q, %q", upstream.payloads[0], upstream.payloads[1])
+	}
 }

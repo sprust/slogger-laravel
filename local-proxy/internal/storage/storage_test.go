@@ -249,7 +249,7 @@ func TestExpiredIdleWriterDoesNotReopenDeletedHourAfterClockRollback(t *testing.
 	}
 }
 
-func TestStartupAfterCompletedHourAtDSTFallback(t *testing.T) {
+func TestStartupReclaimsCompletedFileWithoutSkippingHour(t *testing.T) {
 	zone, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		t.Fatal(err)
@@ -257,6 +257,9 @@ func TestStartupAfterCompletedHourAtDSTFallback(t *testing.T) {
 	now := time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).In(zone)
 	dir := t.TempDir()
 	old := CurrentFileName(now)
+	if err := os.WriteFile(filepath.Join(dir, old), []byte("completed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := NewStateStore(dir).Save(State{File: old, Completed: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -265,10 +268,17 @@ func TestStartupAfterCompletedHourAtDSTFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
+	if _, err := os.Stat(filepath.Join(dir, old)); !os.IsNotExist(err) {
+		t.Fatalf("completed file was not reclaimed: %v", err)
+	}
+	state, err := NewStateStore(dir).Load()
+	if err != nil || state.File != "" || state.Completed {
+		t.Fatalf("state = %+v, error = %v", state, err)
+	}
 	if err := store.Append([]byte("new")); err != nil {
 		t.Fatal(err)
 	}
-	assertRecord(t, filepath.Join(dir, "2026_11_01_02"), 0, "new", 7)
+	assertRecord(t, filepath.Join(dir, old), 0, "new", 7)
 }
 
 func TestInvalidCalendarHourDoesNotCaptureWriter(t *testing.T) {
@@ -360,4 +370,25 @@ func TestSpoolAccountingIncludesRecoveryTruncation(t *testing.T) {
 	if metrics := store.Metrics(); metrics.SpoolBytes != expected {
 		t.Fatalf("spool bytes = %d, want %d", metrics.SpoolBytes, expected)
 	}
+}
+
+func TestStartupResetsCompletedStateWhenFileAlreadyDeleted(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	name := CurrentFileName(now)
+	dir := t.TempDir()
+	if err := NewStateStore(dir).Save(State{File: name, Offset: 16, Completed: true}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(dir, func() time.Time { return now }, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if err := store.Append([]byte(`{"c":"[{}]"}`)); err != nil {
+		t.Fatalf("append after completed-state recovery: %v", err)
+	}
+	assertRecord(t, filepath.Join(dir, name), 0, `{"c":"[{}]"}`, 16)
 }

@@ -276,6 +276,22 @@ class LocalProxyAlertCheckerTest extends MetricsTestCase
         Event::assertNotDispatched(LocalProxySendStalledEvent::class);
     }
 
+    public function testFirstBacklogAfterIdleStartsNewStallClock(): void
+    {
+        Event::fake();
+        config()->set('slogger.local_proxy.metrics.alerting.enabled', true);
+        config()->set('slogger.local_proxy.metrics.alerting.max_minutes_without_send', 5);
+
+        $checker = $this->checker();
+        $checker->check($this->metrics(['uptime_seconds' => 100], 0));
+        $checker->check($this->metrics(['uptime_seconds' => 700], 1));
+        $checker->check($this->metrics(['uptime_seconds' => 999], 1));
+        Event::assertNotDispatched(LocalProxySendStalledEvent::class);
+
+        $checker->check($this->metrics(['uptime_seconds' => 1000], 1));
+        Event::assertDispatched(LocalProxySendStalledEvent::class, 1);
+    }
+
     public function testRestartDuringStaleGapRestartsClockWithSameCounter(): void
     {
         Event::fake();

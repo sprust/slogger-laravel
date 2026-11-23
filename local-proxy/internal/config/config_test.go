@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -177,6 +178,46 @@ func TestLoadRejectsExplicitlyEmptyTracesPath(t *testing.T) {
 	t.Setenv("SLOGGER_LOCAL_PROXY_TRACES_PATH", "")
 	if _, err := Load(envPath, root); err == nil {
 		t.Fatal("explicitly empty traces path was accepted")
+	}
+}
+
+func TestLoadSanitizesEnvParseError(t *testing.T) {
+	root := t.TempDir()
+	envPath := filepath.Join(root, ".env")
+	secret := "REVIEW_CONTROL_SECRET"
+	if err := os.WriteFile(envPath, []byte("BROKEN=\""+secret+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(envPath, root)
+	if err == nil {
+		t.Fatal("malformed env unexpectedly succeeded")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("error leaked env contents: %v", err)
+	}
+}
+
+func TestLoadInterpolatesEnvironmentReferences(t *testing.T) {
+	clearEnvironment(t, "SLOGGER_LOCAL_PROXY_TRACES_PATH")
+	clearEnvironment(t, "SLOGGER_LOCAL_PROXY_MAX_SPOOL_BYTES")
+	t.Setenv("SLOGGER_TOKEN", "token")
+	t.Setenv("REVIEW_UP_HOST", "localhost")
+
+	root := t.TempDir()
+	envPath := filepath.Join(root, ".env")
+	contents := "REVIEW_UP_HOST=file-host\n" +
+		"SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL=tcp://${REVIEW_UP_HOST}:9000\n"
+	if err := os.WriteFile(envPath, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	configuration, err := Load(envPath, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configuration.UpstreamURL != "tcp://localhost:9000" {
+		t.Fatalf("upstream URL = %q", configuration.UpstreamURL)
 	}
 }
 
