@@ -107,16 +107,17 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 
-	listener, err := net.Listen("unix", s.socketPath)
+	listener, err := new(net.ListenConfig).Listen(ctx, "unix", s.socketPath)
 	if err != nil {
 		return fmt.Errorf("listen on Unix socket: %w", err)
 	}
 
 	s.listener = listener
-	defer os.Remove(s.socketPath)
+	defer func() { _ = os.Remove(s.socketPath) }()
 
 	if err := os.Chmod(s.socketPath, 0o600); err != nil {
-		listener.Close()
+		_ = listener.Close()
+
 		return fmt.Errorf("chmod Unix socket: %w", err)
 	}
 
@@ -172,15 +173,13 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 
 		s.trackConnection(conn, true)
-		s.handlers.Add(1)
-		go func() {
-			defer s.handlers.Done()
+		s.handlers.Go(func() {
 			defer s.trackConnection(conn, false)
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 			defer func() { <-s.slots }()
 
 			s.handle(runCtx, conn)
-		}()
+		})
 	}
 }
 
@@ -243,7 +242,10 @@ func (s *Server) handle(ctx context.Context, conn net.Conn) {
 		}
 
 		if err := s.handleFrame(ctx, conn); err != nil {
-			if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) && !errors.Is(err, storage.ErrSpoolFull) && ctx.Err() == nil {
+			if !errors.Is(err, io.EOF) &&
+				!errors.Is(err, net.ErrClosed) &&
+				!errors.Is(err, storage.ErrSpoolFull) &&
+				ctx.Err() == nil {
 				s.logger.Error("local proxy client read failed", "error", err)
 			}
 

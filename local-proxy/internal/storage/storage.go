@@ -55,7 +55,7 @@ func NewStore(dir string, now func() time.Time, limits ...int64) (*Store, error)
 		now = time.Now
 	}
 	if len(limits) > 1 {
-		return nil, fmt.Errorf("expected at most one spool limit")
+		return nil, errors.New("expected at most one spool limit")
 	}
 
 	maxSpoolBytes := DefaultMaxSpoolBytes
@@ -63,7 +63,7 @@ func NewStore(dir string, now func() time.Time, limits ...int64) (*Store, error)
 		maxSpoolBytes = limits[0]
 	}
 	if maxSpoolBytes <= 0 {
-		return nil, fmt.Errorf("spool limit must be positive")
+		return nil, errors.New("spool limit must be positive")
 	}
 
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -89,6 +89,7 @@ func NewStore(dir string, now func() time.Time, limits ...int64) (*Store, error)
 		return nil, err
 	}
 	store.minimumHour = hour
+
 	return store, nil
 }
 
@@ -150,11 +151,19 @@ func (s *Store) Append(payload []byte) error {
 
 	spoolBytes := s.spoolBytes.Load()
 	if recordSize > s.maxSpoolBytes-spoolBytes {
-		return fmt.Errorf("%w: %d bytes used, %d bytes requested, limit %d", ErrSpoolFull, spoolBytes, recordSize, s.maxSpoolBytes)
+		return fmt.Errorf(
+			"%w: %d bytes used, %d bytes requested, limit %d",
+			ErrSpoolFull, spoolBytes, recordSize, s.maxSpoolBytes,
+		)
+	}
+
+	length, err := protocol.Uint32Length(len(payload))
+	if err != nil {
+		return err
 	}
 
 	var header [4]byte
-	binary.BigEndian.PutUint32(header[:], uint32(len(payload)))
+	binary.BigEndian.PutUint32(header[:], length)
 
 	if err := protocol.WriteAll(s.file, header[:]); err != nil {
 		return fmt.Errorf("append trace record header: %w", err)
@@ -189,6 +198,7 @@ func (s *Store) IsSealed(name string) bool {
 	defer s.mu.Unlock()
 
 	hour := s.observeHour(CurrentFileName(s.now()))
+
 	return name < hour && name != s.hour
 }
 
@@ -198,6 +208,7 @@ func (s *Store) observeHour(hour string) string {
 	if hour > s.minimumHour {
 		s.minimumHour = hour
 	}
+
 	return s.minimumHour
 }
 
@@ -214,6 +225,7 @@ func (s *Store) RemoveExpired(name, observedHour string) error {
 			return err
 		}
 	}
+
 	return s.remove(name)
 }
 
@@ -332,7 +344,7 @@ func (s *Store) openFile(hour string) error {
 
 	info, err := file.Stat()
 	if err != nil {
-		file.Close()
+		_ = file.Close()
 
 		return fmt.Errorf("stat opened trace file %q: %w", filePath, err)
 	}
@@ -340,7 +352,7 @@ func (s *Store) openFile(hour string) error {
 
 	if created {
 		if err := syncDirectory(s.dir); err != nil {
-			file.Close()
+			_ = file.Close()
 
 			return fmt.Errorf("sync traces directory: %w", err)
 		}
@@ -424,7 +436,7 @@ func RecoverFile(filePath string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	stat, err := file.Stat()
 	if err != nil {
@@ -476,7 +488,7 @@ func syncDirectory(path string) error {
 	if err != nil {
 		return err
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 
 	return directory.Sync()
 }

@@ -58,6 +58,7 @@ func (l *Logger) Error(message string, arguments ...any) {
 	if l.file == nil || l.day != day {
 		if err := l.openFile(day); err != nil {
 			fmt.Fprintf(os.Stderr, "slogger local proxy: open error log: %v\n", err)
+
 			return
 		}
 	}

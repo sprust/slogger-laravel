@@ -1196,10 +1196,14 @@ The suite runs in Docker through the makefile:
 make setup                # once: build, start, composer install
 make test                 # phpunit
 make check                # cs-fixer + phpstan + phpunit
-make proxy-check          # gofmt + go vet + race tests + Go build, in the PHP container
+make proxy-check          # strict Go analysis + race tests + Go build, in the PHP container
 make proxy-integration    # real PHP client -> Go proxy -> fake SLogger
 make check-laravel-all    # `check` on Laravel 10.26.* (the floor), 10, 11 and 12
 ```
+
+The Go toolchain is pinned to Go 1.26.11. `local-proxy/scripts/check.sh` runs all configured
+`golangci-lint` rules, all formatters in diff mode, `go vet`, `govulncheck`, module tidy/verification,
+a ban on `//nolint`, race tests and the build. The same script runs locally and in GitHub Actions.
 
 `vendor/bin/phpunit` works as well with the dependencies installed locally. `phpunit.xml`
 enables SLogger with the `memory` dispatcher, `BaseTestCase` sets in-memory sqlite and a

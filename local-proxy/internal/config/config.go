@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -8,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -44,7 +46,7 @@ func Load(envPath, rootDir string) (Config, error) {
 
 	token := value(values, "SLOGGER_TOKEN")
 	if token == "" {
-		return Config{}, fmt.Errorf("SLOGGER_TOKEN is required")
+		return Config{}, errors.New("SLOGGER_TOKEN is required")
 	}
 
 	upstreamURL := value(values, "SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL")
@@ -74,14 +76,14 @@ func Load(envPath, rootDir string) (Config, error) {
 	if raw := value(values, "SLOGGER_LOCAL_PROXY_MAX_SPOOL_BYTES"); raw != "" {
 		maxSpoolBytes, err = strconv.ParseInt(raw, 10, 64)
 		if err != nil || maxSpoolBytes <= 0 {
-			return Config{}, fmt.Errorf("SLOGGER_LOCAL_PROXY_MAX_SPOOL_BYTES must be a positive integer")
+			return Config{}, errors.New("SLOGGER_LOCAL_PROXY_MAX_SPOOL_BYTES must be a positive integer")
 		}
 	}
 
 	tracesDir := filepath.Join(rootDir, filepath.FromSlash(tracesPath))
 	rel, err := filepath.Rel(rootDir, tracesDir)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return Config{}, fmt.Errorf("traces path must stay inside project root")
+		return Config{}, errors.New("traces path must stay inside project root")
 	}
 
 	return Config{
@@ -141,18 +143,16 @@ func NormalizeTracesPath(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	value = strings.Trim(value, "/")
 	if value == "" {
-		return "", fmt.Errorf("SLOGGER_LOCAL_PROXY_TRACES_PATH must not be empty")
+		return "", errors.New("SLOGGER_LOCAL_PROXY_TRACES_PATH must not be empty")
 	}
 
-	for _, segment := range strings.Split(value, "/") {
-		if segment == ".." {
-			return "", fmt.Errorf("SLOGGER_LOCAL_PROXY_TRACES_PATH must not contain '..'")
-		}
+	if slices.Contains(strings.Split(value, "/"), "..") {
+		return "", errors.New("SLOGGER_LOCAL_PROXY_TRACES_PATH must not contain '..'")
 	}
 
 	value = path.Clean(value)
 	if value == "." || value == "" || path.IsAbs(value) {
-		return "", fmt.Errorf("SLOGGER_LOCAL_PROXY_TRACES_PATH must be a relative directory")
+		return "", errors.New("SLOGGER_LOCAL_PROXY_TRACES_PATH must be a relative directory")
 	}
 
 	return value, nil
@@ -178,17 +178,17 @@ func value(values map[string]string, key string) string {
 
 func validateUpstreamURL(raw string) error {
 	if raw == "" {
-		return fmt.Errorf("SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL is required")
+		return errors.New("SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL is required")
 	}
 
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme != "tcp" || parsed.Hostname() == "" || parsed.Path != "" || parsed.RawQuery != "" {
-		return fmt.Errorf("SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL must be a valid tcp://host:port URL")
+		return errors.New("SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL must be a valid tcp://host:port URL")
 	}
 
 	port, err := strconv.Atoi(parsed.Port())
 	if err != nil || port < 1 || port > 65535 {
-		return fmt.Errorf("SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL must contain a valid port")
+		return errors.New("SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL must contain a valid port")
 	}
 
 	if _, _, err := net.SplitHostPort(parsed.Host); err != nil {

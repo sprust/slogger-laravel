@@ -8,7 +8,7 @@ import (
 )
 
 func TestErrorRotationAndCleanup(t *testing.T) {
-	now := time.Date(2026, 11, 17, 10, 0, 0, 0, time.Local)
+	now := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
 	dir := t.TempDir()
 	logger, err := New(dir, func() time.Time { return now })
 	if err != nil {

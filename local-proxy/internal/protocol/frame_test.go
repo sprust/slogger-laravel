@@ -41,6 +41,8 @@ func TestReadFrameRejectsInvalidSizes(t *testing.T) {
 		{name: "too large", header: []byte{2, 0, 0, 0}, wantErr: ErrFrameTooLarge},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
 			_, err := ReadFrame(bytes.NewReader(test.header), 10)
 			if !errors.Is(err, test.wantErr) {
 				t.Fatalf("error = %v", err)

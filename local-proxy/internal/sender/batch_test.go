@@ -70,7 +70,7 @@ func TestBatchOperationLimit(t *testing.T) {
 	batch := newBatch(0, time.Now())
 	operation := operation{Raw: json.RawMessage(`{"tid":"trace"}`)}
 
-	for index := 0; index < MaxBatchOperations; index++ {
+	for index := range MaxBatchOperations {
 		if !batch.canAdd(operation) {
 			t.Fatalf("operation %d does not fit", index)
 		}
@@ -110,28 +110,38 @@ func TestBatchSizeAccountingMatchesEscaping(t *testing.T) {
 	}
 }
 
+const (
+	creatingOnlyShape = "c-only"
+	mixedShape        = "mixed"
+)
+
 func TestBatchShapesAndExactFourMiBBoundary(t *testing.T) {
 	t.Parallel()
 
-	for _, shape := range []string{"c-only", "u-only", "mixed"} {
+	for _, shape := range []string{creatingOnlyShape, "u-only", mixedShape} {
 		t.Run(shape, func(t *testing.T) {
+			t.Parallel()
+
 			batch := newBatch(0, time.Now())
 
-			if shape == "mixed" {
+			if shape == mixedShape {
 				first := operation{Creating: true, Raw: rawJSONOfSize(8)}
 				batch.add(first)
 			}
 
 			remaining := MaxBatchSize - batch.encodedSize()
 			operationSize := remaining - 8
-			if shape == "mixed" {
+			if shape == mixedShape {
 				operationSize--
 			}
 
-			candidate := operation{Creating: shape == "c-only", Raw: rawJSONOfSize(operationSize)}
+			candidate := operation{Creating: shape == creatingOnlyShape, Raw: rawJSONOfSize(operationSize)}
 			if !batch.canAdd(candidate) {
 				size, _ := candidate.EncodedSize()
-				t.Fatalf("operation at the exact boundary was rejected: total=%d, raw=%d, operation=%d, limit=%d", batch.sizeWith(candidate.Creating, size), len(candidate.Raw), size, MaxBatchSize)
+				t.Fatalf(
+					"operation at the exact boundary was rejected: total=%d, raw=%d, operation=%d, limit=%d",
+					batch.sizeWith(candidate.Creating, size), len(candidate.Raw), size, MaxBatchSize,
+				)
 			}
 
 			batch.add(candidate)
@@ -144,7 +154,7 @@ func TestBatchShapesAndExactFourMiBBoundary(t *testing.T) {
 				t.Fatalf("encoded size = %d, want %d", len(encoded), MaxBatchSize)
 			}
 
-			extra := operation{Creating: shape == "c-only", Raw: rawJSONOfSize(8)}
+			extra := operation{Creating: shape == creatingOnlyShape, Raw: rawJSONOfSize(8)}
 			if batch.canAdd(extra) {
 				t.Fatal("operation above the boundary was accepted")
 			}
@@ -169,9 +179,8 @@ func BenchmarkBatch200Operations(b *testing.B) {
 	}
 
 	b.ReportAllocs()
-	b.ResetTimer()
 
-	for range b.N {
+	for b.Loop() {
 		batch := newBatch(0, time.Now())
 
 		for _, operation := range operations {

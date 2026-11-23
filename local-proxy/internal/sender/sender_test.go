@@ -15,7 +15,7 @@ import (
 )
 
 func TestSenderRetriesAndDeletesSealedFile(t *testing.T) {
-	now := time.Date(2026, 11, 17, 13, 0, 0, 0, time.Local)
+	now := time.Date(2026, 11, 17, 13, 0, 0, 0, time.UTC)
 	dir := t.TempDir()
 	store, err := storage.NewStore(dir, func() time.Time { return now })
 	if err != nil {
@@ -49,6 +49,7 @@ func TestSenderRetriesAndDeletesSealedFile(t *testing.T) {
 
 	waitFor(t, func() bool {
 		_, err := os.Stat(filepath.Join(dir, "2026_11_17_13"))
+
 		return os.IsNotExist(err)
 	})
 
@@ -76,7 +77,7 @@ func TestSenderRetriesAndDeletesSealedFile(t *testing.T) {
 }
 
 func TestSenderSendsAtMost200Operations(t *testing.T) {
-	now := time.Date(2026, 11, 17, 13, 0, 0, 0, time.Local)
+	now := time.Date(2026, 11, 17, 13, 0, 0, 0, time.UTC)
 	dir := t.TempDir()
 	store, err := storage.NewStore(dir, func() time.Time { return now })
 	if err != nil {
@@ -102,10 +103,12 @@ func TestSenderSendsAtMost200Operations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	upstream := &recordingUpstream{}
-	sender, err := New(dir, "tcp://127.0.0.1:9002", "token", 24, func() time.Time { return now }, &recordingLogger{}, store)
+	sender, err := New(
+		dir, "tcp://127.0.0.1:9002", "token", 24, func() time.Time { return now }, &recordingLogger{}, store,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,11 +122,14 @@ func TestSenderSendsAtMost200Operations(t *testing.T) {
 
 	waitFor(t, func() bool {
 		state, err := storage.NewStateStore(dir).Load()
+
 		return err == nil && state.Offset > 0 && upstream.count() == 2
 	})
 
 	cancel()
-	<-done
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
 
 	var first map[string]string
 	if err := json.Unmarshal(upstream.payloads[0], &first); err != nil {
@@ -142,13 +148,14 @@ func TestSenderSendsAtMost200Operations(t *testing.T) {
 
 type failingCleanupLogger struct {
 	recordingLogger
+
 	err error
 }
 
 func (l *failingCleanupLogger) Cleanup() error { return l.err }
 
 func TestCleanupDeletesExpiredStateFileAndKeepsActive(t *testing.T) {
-	now := time.Date(2026, 11, 17, 14, 0, 0, 0, time.Local)
+	now := time.Date(2026, 11, 17, 14, 0, 0, 0, time.UTC)
 	dir := t.TempDir()
 	for _, name := range []string{"2026_11_17_13", "2026_11_17_14"} {
 		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
@@ -160,7 +167,7 @@ func TestCleanupDeletesExpiredStateFileAndKeepsActive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer writer.Close()
+	defer func() { _ = writer.Close() }()
 	states := storage.NewStateStore(dir)
 	if err := states.Save(storage.State{File: "2026_11_17_13"}); err != nil {
 		t.Fatal(err)
@@ -200,14 +207,14 @@ func TestCleanupDeletesExpiredStateFileAndKeepsActive(t *testing.T) {
 }
 
 func TestSenderRecoversPartialTailWhenWriterSealsFile(t *testing.T) {
-	clock := &testClock{now: time.Date(2026, 11, 17, 13, 0, 0, 0, time.Local)}
+	clock := &testClock{now: time.Date(2026, 11, 17, 13, 0, 0, 0, time.UTC)}
 	dir := t.TempDir()
 	store, err := storage.NewStore(dir, clock.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	if err := store.Append([]byte(`{"c":"[{\"tid\":\"trace-1\"}]"}`)); err != nil {
 		t.Fatal(err)
@@ -257,14 +264,14 @@ func TestSenderRecoversPartialTailWhenWriterSealsFile(t *testing.T) {
 }
 
 func TestCleanupContinuesDuringUpstreamRetry(t *testing.T) {
-	now := time.Date(2026, 11, 17, 13, 0, 0, 0, time.Local)
+	now := time.Date(2026, 11, 17, 13, 0, 0, 0, time.UTC)
 	dir := t.TempDir()
 	store, err := storage.NewStore(dir, func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	if err := store.Append([]byte(`{"c":"[{\"tid\":\"trace-1\"}]"}`)); err != nil {
 		t.Fatal(err)
@@ -307,16 +314,16 @@ func TestCleanupContinuesDuringUpstreamRetry(t *testing.T) {
 }
 
 func TestCleanupDuringSuccessfulBacklogStopsAtCheckpoint(t *testing.T) {
-	now := time.Date(2026, 11, 18, 13, 0, 0, 0, time.Local)
+	now := time.Date(2026, 11, 18, 13, 0, 0, 0, time.UTC)
 	dir := t.TempDir()
 	store, err := storage.NewStore(dir, func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	payload := []byte(`{"c":"[{}]"}`)
-	for index := 0; index < 401; index++ {
+	for range 401 {
 		if err := store.Append(payload); err != nil {
 			t.Fatal(err)
 		}
@@ -331,7 +338,7 @@ func TestCleanupDuringSuccessfulBacklogStopsAtCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sender.closeFile()
+	defer func() { _ = sender.closeFile() }()
 	if _, err := sender.ensureFile(); err != nil {
 		t.Fatal(err)
 	}
@@ -373,14 +380,14 @@ func (u *successfulBacklogUpstream) send(context.Context, []byte) error {
 func (*successfulBacklogUpstream) close() {}
 
 func TestRetentionExpiresRetryingFileDuringSplitRecord(t *testing.T) {
-	clock := &testClock{now: time.Date(2026, 11, 17, 13, 0, 0, 0, time.Local)}
+	clock := &testClock{now: time.Date(2026, 11, 17, 13, 0, 0, 0, time.UTC)}
 	dir := t.TempDir()
 	store, err := storage.NewStore(dir, clock.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	operations := make([]map[string]string, 201)
 	for index := range operations {
@@ -453,14 +460,14 @@ func TestRetentionExpiresRetryingFileDuringSplitRecord(t *testing.T) {
 }
 
 func TestExpiryWithStateSaveFailureStopsRetry(t *testing.T) {
-	old := time.Date(2026, 11, 17, 13, 0, 0, 0, time.Local)
+	old := time.Date(2026, 11, 17, 13, 0, 0, 0, time.UTC)
 	dir := t.TempDir()
 	store, err := storage.NewStore(dir, func() time.Time { return old })
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	if err := store.Append([]byte(`{"c":"[{}]"}`)); err != nil {
 		t.Fatal(err)
@@ -479,7 +486,7 @@ func TestExpiryWithStateSaveFailureStopsRetry(t *testing.T) {
 	if _, err := sender.ensureFile(); err != nil {
 		t.Fatal(err)
 	}
-	defer sender.closeFile()
+	defer func() { _ = sender.closeFile() }()
 
 	sender.currentBatch = newBatch(0, time.Now())
 	sender.currentBatch.add(operation{Creating: true, Raw: []byte(`{}`)})
@@ -614,7 +621,7 @@ func TestSenderDeliversAfterClockRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	sender, err := New(dir, "tcp://127.0.0.1:9002", "token", 24, clock.Now, &recordingLogger{}, store)
 	if err != nil {
 		t.Fatal(err)
@@ -625,7 +632,12 @@ func TestSenderDeliversAfterClockRollback(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- sender.Run(ctx) }()
-	defer func() { cancel(); <-done }()
+	defer func() {
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+	}()
 	if err := store.Append([]byte(`{"c":"[{}]"}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -644,10 +656,12 @@ func TestDeliveredActiveFileFreesSpoolWithinSameHour(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	upstream := &recordingUpstream{}
-	sender, err := New(dir, "tcp://127.0.0.1:9002", "token", 24, func() time.Time { return now }, &recordingLogger{}, store)
+	sender, err := New(
+		dir, "tcp://127.0.0.1:9002", "token", 24, func() time.Time { return now }, &recordingLogger{}, store,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -659,7 +673,9 @@ func TestDeliveredActiveFileFreesSpoolWithinSameHour(t *testing.T) {
 	go func() { done <- sender.Run(ctx) }()
 	defer func() {
 		cancel()
-		<-done
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
 	}()
 
 	if err := store.Append([]byte(`{"c":"[{}]"}`)); err != nil {

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -48,15 +49,15 @@ func (s *StateStore) Load() (State, error) {
 	}
 
 	if state.Offset < 0 {
-		return State{}, fmt.Errorf("sender state offset must not be negative")
+		return State{}, errors.New("sender state offset must not be negative")
 	}
 
 	if state.File != "" && !ValidTraceFileName(state.File) {
-		return State{}, fmt.Errorf("invalid trace file name in sender state")
+		return State{}, errors.New("invalid trace file name in sender state")
 	}
 
 	if state.Completed && state.File == "" {
-		return State{}, fmt.Errorf("completed sender state requires a file")
+		return State{}, errors.New("completed sender state requires a file")
 	}
 
 	return state, nil
@@ -66,7 +67,7 @@ func (s *StateStore) Save(state State) error {
 	state.Version = StateVersion
 
 	if state.Offset < 0 || (state.File != "" && !ValidTraceFileName(state.File)) || (state.Completed && state.File == "") {
-		return fmt.Errorf("invalid sender state")
+		return errors.New("invalid sender state")
 	}
 
 	data, err := json.Marshal(state)
@@ -82,20 +83,23 @@ func (s *StateStore) Save(state State) error {
 	}
 
 	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
+	defer func() { _ = os.Remove(temporaryPath) }()
 
 	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
+
 		return err
 	}
 
 	if _, err := temporary.Write(data); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
+
 		return err
 	}
 
 	if err := temporary.Sync(); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
+
 		return err
 	}
 

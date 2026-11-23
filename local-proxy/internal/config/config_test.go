@@ -11,7 +11,7 @@ func TestNormalizeTracesPath(t *testing.T) {
 	t.Parallel()
 
 	for _, value := range []string{
-		"storage/slogger/traces",
+		DefaultTracesPath,
 		"/storage/slogger/traces/",
 		"/storage/slogger/traces",
 		"storage/slogger/traces/",
@@ -22,7 +22,7 @@ func TestNormalizeTracesPath(t *testing.T) {
 			t.Fatalf("NormalizeTracesPath(%q): %v", value, err)
 		}
 
-		if normalized != "storage/slogger/traces" {
+		if normalized != DefaultTracesPath {
 			t.Fatalf("NormalizeTracesPath(%q) = %q", value, normalized)
 		}
 	}
@@ -67,11 +67,11 @@ func TestLoad(t *testing.T) {
 		t.Fatalf("token = %q", configuration.Token)
 	}
 
-	if configuration.TracesPath != "storage/slogger/traces" {
+	if configuration.TracesPath != DefaultTracesPath {
 		t.Fatalf("traces path = %q", configuration.TracesPath)
 	}
 
-	if configuration.TracesDir != filepath.Join(root, "storage/slogger/traces") {
+	if configuration.TracesDir != filepath.Join(root, DefaultTracesPath) {
 		t.Fatalf("traces dir = %q", configuration.TracesDir)
 	}
 

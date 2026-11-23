@@ -3,6 +3,7 @@ package sender
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -27,7 +28,7 @@ type upstream struct {
 func newUpstream(rawURL, token string) (*upstream, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil || parsed.Scheme != "tcp" || parsed.Host == "" {
-		return nil, fmt.Errorf("invalid upstream URL")
+		return nil, errors.New("invalid upstream URL")
 	}
 
 	return &upstream{address: parsed.Host, token: token}, nil
@@ -65,32 +66,10 @@ func (u *upstream) send(ctx context.Context, payload []byte) error {
 	return nil
 }
 
-func (u *upstream) exchange(_ context.Context, payload []byte, authenticate bool) error {
+func (u *upstream) exchange(ctx context.Context, payload []byte, authenticate bool) error {
 	if authenticate {
-		if err := u.conn.SetDeadline(time.Now().Add(WriteTimeout)); err != nil {
+		if err := u.authenticate(ctx); err != nil {
 			return err
-		}
-
-		authentication, err := json.Marshal(map[string]string{"t": u.token})
-		if err != nil {
-			return err
-		}
-
-		if err := protocol.WriteFrame(u.conn, authentication); err != nil {
-			return fmt.Errorf("write upstream auth: %w", err)
-		}
-
-		if err := u.conn.SetDeadline(time.Now().Add(ReadTimeout)); err != nil {
-			return err
-		}
-
-		response, err := protocol.ReadFrame(u.conn, protocol.MaxFrameSize)
-		if err != nil {
-			return fmt.Errorf("read upstream auth: %w", err)
-		}
-
-		if string(response) != "ok" {
-			return fmt.Errorf("upstream auth failed: expected ok")
 		}
 	}
 
@@ -106,13 +85,43 @@ func (u *upstream) exchange(_ context.Context, payload []byte, authenticate bool
 		return err
 	}
 
-	response, err := protocol.ReadFrame(u.conn, protocol.MaxFrameSize)
+	response, err := protocol.ReadFrameContext(ctx, u.conn, protocol.MaxFrameSize)
 	if err != nil {
 		return fmt.Errorf("read upstream response: %w", err)
 	}
 
 	if string(response) != "received" {
-		return fmt.Errorf("unexpected upstream response: expected received")
+		return errors.New("unexpected upstream response: expected received")
+	}
+
+	return nil
+}
+
+func (u *upstream) authenticate(ctx context.Context) error {
+	if err := u.conn.SetDeadline(time.Now().Add(WriteTimeout)); err != nil {
+		return err
+	}
+
+	authentication, err := json.Marshal(map[string]string{"t": u.token})
+	if err != nil {
+		return err
+	}
+
+	if err := protocol.WriteFrame(u.conn, authentication); err != nil {
+		return fmt.Errorf("write upstream auth: %w", err)
+	}
+
+	if err := u.conn.SetDeadline(time.Now().Add(ReadTimeout)); err != nil {
+		return err
+	}
+
+	response, err := protocol.ReadFrameContext(ctx, u.conn, protocol.MaxFrameSize)
+	if err != nil {
+		return fmt.Errorf("read upstream auth: %w", err)
+	}
+
+	if string(response) != "ok" {
+		return errors.New("upstream auth failed: expected ok")
 	}
 
 	return nil

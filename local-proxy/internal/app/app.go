@@ -34,13 +34,13 @@ func Run(parent context.Context, configuration config.Config) error {
 	if err != nil {
 		return err
 	}
-	defer logger.Close()
+	defer func() { _ = logger.Close() }()
 
 	store, err := storage.NewStore(configuration.TracesDir, nil, configuration.MaxSpoolBytes)
 	if err != nil {
 		return err
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	traceSender, err := sender.New(
 		configuration.TracesDir,
@@ -104,10 +104,10 @@ func acquireLock(path string) (*os.File, error) {
 	}
 
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		file.Close()
+		_ = file.Close()
 
 		if err == syscall.EWOULDBLOCK || err == syscall.EAGAIN {
-			return nil, fmt.Errorf("another local proxy process is already running")
+			return nil, errors.New("another local proxy process is already running")
 		}
 
 		return nil, fmt.Errorf("lock local proxy: %w", err)

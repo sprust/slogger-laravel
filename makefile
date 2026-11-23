@@ -50,7 +50,7 @@ test:
 
 proxy-check:
 	mkdir -p build
-	"$(PHP_CLI)" sh -c 'cd /app/local-proxy && test -z "$$(gofmt -l .)" && go vet ./... && go test -race ./... && go build -o /app/build/slogger-local-proxy-check ./cmd/slogger-local-proxy'
+	"$(PHP_CLI)" sh -c 'cd /app/local-proxy && bash ./scripts/check.sh'
 
 proxy-build:
 	mkdir -p build

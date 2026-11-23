@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -27,19 +28,22 @@ func run() int {
 	flag.Parse()
 
 	if showVersion {
-		fmt.Println(version)
+		_, _ = fmt.Fprintln(os.Stdout, version)
+
 		return 0
 	}
 
 	rootDir, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "slogger local proxy: resolve working directory: %v\n", err)
+
 		return 1
 	}
 
 	configuration, err := config.Load(envPath, rootDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "slogger local proxy: %v\n", err)
+
 		return 1
 	}
 
@@ -55,6 +59,7 @@ func run() int {
 	case err := <-done:
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "slogger local proxy: %v\n", err)
+
 			return 1
 		}
 
@@ -67,14 +72,16 @@ func run() int {
 
 	select {
 	case err := <-done:
-		if err != nil && err != context.Canceled {
+		if err != nil && !errors.Is(err, context.Canceled) {
 			fmt.Fprintf(os.Stderr, "slogger local proxy: %v\n", err)
+
 			return 1
 		}
 
 		return 0
 	case <-timer.C:
 		fmt.Fprintln(os.Stderr, "slogger local proxy: graceful shutdown timed out after 5 seconds")
+
 		return 1
 	}
 }

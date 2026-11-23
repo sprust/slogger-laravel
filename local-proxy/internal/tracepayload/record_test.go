@@ -7,24 +7,26 @@ import (
 	"testing"
 )
 
+const traceIDKey = "tid"
+
 func TestValidateRecordAcceptsRealPHPTraceShapes(t *testing.T) {
 	t.Parallel()
 
 	payload := encodeRecord(t,
 		[]map[string]any{{
-			"tid": "app-trace-1",
-			"tp":  "request",
-			"st":  "started",
-			"dt":  map[string]any{"request": map[string]any{"method": "GET"}},
-			"isP": true,
-			"lat": "2026-11-18T12:00:00.123+03:00",
+			traceIDKey: "app-trace-1",
+			"tp":       "request",
+			"st":       "started",
+			"dt":       map[string]any{"request": map[string]any{"method": "GET"}},
+			"isP":      true,
+			"lat":      "2026-11-18T12:00:00.123+03:00",
 		}},
 		[]map[string]any{{
-			"tid":  "app-trace-1",
-			"st":   "success",
-			"dt":   map[string]any{"response": map[string]any{"status": 200}},
-			"dur":  1.25,
-			"plat": "2026-11-18T12:00:00.123+03:00",
+			traceIDKey: "app-trace-1",
+			"st":       "success",
+			"dt":       map[string]any{"response": map[string]any{"status": 200}},
+			"dur":      1.25,
+			"plat":     "2026-11-18T12:00:00.123+03:00",
 		}},
 	)
 
@@ -36,8 +38,7 @@ func TestValidateRecordAcceptsRealPHPTraceShapes(t *testing.T) {
 func TestWalkOperationsRejectsNonObject(t *testing.T) {
 	t.Parallel()
 
-	payload := encodeRecord(t, []map[string]any{{"tid": "unused"}}, nil)
-	payload = []byte(`{"c":"[1]"}`)
+	payload := []byte(`{"c":"[1]"}`)
 
 	if err := ValidateRecord(payload); err == nil || !strings.Contains(err.Error(), "JSON object") {
 		t.Fatalf("error = %v", err)
@@ -50,7 +51,7 @@ func TestValidateRecordStopsAtFirstUnsendableOperation(t *testing.T) {
 	payload := encodeRecord(t,
 		[]map[string]any{
 			{"data": strings.Repeat("a", MaxBatchSize)},
-			{"tid": "must-not-be-visited"},
+			{traceIDKey: "must-not-be-visited"},
 		},
 		nil,
 	)
@@ -127,9 +128,8 @@ func BenchmarkWalkOperations100KOperations(b *testing.B) {
 	}
 
 	b.ReportAllocs()
-	b.ResetTimer()
 
-	for range b.N {
+	for b.Loop() {
 		visited := 0
 		if err := WalkOperations(payload, func(Operation) error {
 			visited++

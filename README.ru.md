@@ -1199,10 +1199,15 @@ Supervisor-программу. Для отката установите `SLOGGER
 make setup                # once: build, start, composer install
 make test                 # phpunit
 make check                # cs-fixer + phpstan + phpunit
-make proxy-check          # gofmt + go vet + race tests + Go build, в PHP-контейнере
+make proxy-check          # строгий Go-анализ + race tests + сборка, в PHP-контейнере
 make proxy-integration    # реальный PHP client -> Go proxy -> fake SLogger
 make check-laravel-all    # `check` on Laravel 10.26.* (the floor), 10, 11 and 12
 ```
+
+Go-toolchain закреплён на Go 1.26.11. `local-proxy/scripts/check.sh` запускает все настроенные
+правила `golangci-lint`, formatters в diff-режиме, `go vet`, `govulncheck`, проверку module
+tidy/dependencies, запрет `//nolint`, race tests и сборку. Один и тот же скрипт работает локально
+и в GitHub Actions.
 
 `vendor/bin/phpunit` тоже работает, если зависимости установлены локально. `phpunit.xml`
 включает SLogger с диспатчером `memory`, `BaseTestCase` ставит in-memory sqlite и

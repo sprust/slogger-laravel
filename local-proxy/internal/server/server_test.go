@@ -16,6 +16,8 @@ import (
 	"github.com/sprust/slogger-laravel/local-proxy/internal/tracepayload"
 )
 
+const receivedResponse = "received"
+
 func TestUnixServerAcceptsPersistentConnection(t *testing.T) {
 	dir := t.TempDir()
 	store, err := storage.NewStore(dir, nil)
@@ -23,7 +25,7 @@ func TestUnixServerAcceptsPersistentConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	socketPath := SocketPath(dir)
 	server := New(socketPath, store, &serverLogger{})
@@ -33,12 +35,12 @@ func TestUnixServerAcceptsPersistentConnection(t *testing.T) {
 
 	waitForSocket(t, socketPath)
 
-	conn, err := net.DialTimeout("unix", socketPath, time.Second)
+	conn, err := (&net.Dialer{Timeout: time.Second}).DialContext(t.Context(), "unix", socketPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if err := protocol.WriteFrame(conn, []byte(`{"t":"anything"}`)); err != nil {
 		t.Fatal(err)
@@ -55,7 +57,7 @@ func TestUnixServerAcceptsPersistentConnection(t *testing.T) {
 		}
 
 		response, err = protocol.ReadFrame(conn, 20)
-		if err != nil || string(response) != "received" {
+		if err != nil || string(response) != receivedResponse {
 			t.Fatalf("response = %q, error = %v", response, err)
 		}
 	}
@@ -77,7 +79,7 @@ func TestRejectsUnsendableOperationBeforeAppendAndAcceptsNextClient(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	path := SocketPath(dir)
 	server := New(path, store, &serverLogger{})
@@ -86,7 +88,9 @@ func TestRejectsUnsendableOperationBeforeAppendAndAcceptsNextClient(t *testing.T
 	go func() { done <- server.Run(ctx) }()
 	defer func() {
 		cancel()
-		<-done
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
 	}()
 	waitForSocket(t, path)
 
@@ -119,11 +123,11 @@ func TestRejectsUnsendableOperationBeforeAppendAndAcceptsNextClient(t *testing.T
 	}
 
 	for _, frame := range [][]byte{invalid, []byte("null"), []byte(`{"creates":"[{}]"}`)} {
-		first, err := net.Dial("unix", path)
+		first, err := new(net.Dialer).DialContext(t.Context(), "unix", path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer first.Close()
+		defer func() { _ = first.Close() }()
 		if err := handshake(first); err != nil {
 			t.Fatal(err)
 		}
@@ -133,7 +137,6 @@ func TestRejectsUnsendableOperationBeforeAppendAndAcceptsNextClient(t *testing.T
 		if _, err := protocol.ReadFrame(first, 32); err == nil {
 			t.Fatal("unsendable operation received ACK")
 		}
-
 	}
 	files, err := storage.ListTraceFiles(dir)
 	if err != nil {
@@ -143,11 +146,11 @@ func TestRejectsUnsendableOperationBeforeAppendAndAcceptsNextClient(t *testing.T
 		t.Fatalf("invalid payload was appended: %v", files)
 	}
 
-	second, err := net.Dial("unix", path)
+	second, err := new(net.Dialer).DialContext(t.Context(), "unix", path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer second.Close()
+	defer func() { _ = second.Close() }()
 	if err := handshake(second); err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +160,7 @@ func TestRejectsUnsendableOperationBeforeAppendAndAcceptsNextClient(t *testing.T
 		t.Fatal(err)
 	}
 	response, err := protocol.ReadFrame(second, 32)
-	if err != nil || string(response) != "received" {
+	if err != nil || string(response) != receivedResponse {
 		t.Fatalf("valid response = %q, error = %v", response, err)
 	}
 
@@ -169,7 +172,7 @@ func TestRejectsUnsendableOperationBeforeAppendAndAcceptsNextClient(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	record, complete, err := storage.ReadRecord(file, 0)
 	if err != nil || !complete || string(record.Payload) != string(valid) {
@@ -190,11 +193,11 @@ func TestShutdownDrainsQueuedAppendAndSendsAck(t *testing.T) {
 	go func() { done <- server.Run(ctx) }()
 	waitForSocket(t, path)
 
-	conn, err := net.Dial("unix", path)
+	conn, err := new(net.Dialer).DialContext(t.Context(), "unix", path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if err := protocol.WriteFrame(conn, []byte(`{"t":"token"}`)); err != nil {
 		t.Fatal(err)
@@ -223,7 +226,7 @@ func TestShutdownDrainsQueuedAppendAndSendsAck(t *testing.T) {
 	close(store.release)
 	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
 	response, err = protocol.ReadFrame(conn, 32)
-	if err != nil || string(response) != "received" {
+	if err != nil || string(response) != receivedResponse {
 		t.Fatalf("drain response = %q, error = %v", response, err)
 	}
 
@@ -245,18 +248,17 @@ func TestAcceptExitAfterQueuedAckCancelsBeforeNextRead(t *testing.T) {
 	}
 	path := SocketPath(dir)
 	server := New(path, store, &serverLogger{})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	done := make(chan error, 1)
 	go func() { done <- server.Run(ctx) }()
 	waitForSocket(t, path)
 
-	conn, err := net.Dial("unix", path)
+	conn, err := new(net.Dialer).DialContext(t.Context(), "unix", path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if err := protocol.WriteFrame(conn, []byte(`{"t":"token"}`)); err != nil {
 		t.Fatal(err)
@@ -282,12 +284,15 @@ func TestAcceptExitAfterQueuedAckCancelsBeforeNextRead(t *testing.T) {
 
 	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
 	response, err = protocol.ReadFrame(conn, 32)
-	if err != nil || string(response) != "received" {
+	if err != nil || string(response) != receivedResponse {
 		t.Fatalf("drain response = %q, error = %v", response, err)
 	}
 
 	select {
-	case <-done:
+	case err := <-done:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("server error = %v", err)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("server waited for another frame after Accept exited")
 	}
@@ -299,7 +304,7 @@ func TestSaturatedServerRejectsHandshakeAndRecoversAfterSlotRelease(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	path := SocketPath(dir)
 	server := New(path, store, &serverLogger{})
@@ -309,7 +314,9 @@ func TestSaturatedServerRejectsHandshakeAndRecoversAfterSlotRelease(t *testing.T
 	go func() { done <- server.Run(ctx) }()
 	defer func() {
 		cancel()
-		<-done
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
 	}()
 	waitForSocket(t, path)
 
@@ -324,20 +331,20 @@ func TestSaturatedServerRejectsHandshakeAndRecoversAfterSlotRelease(t *testing.T
 		return err
 	}
 
-	first, err := net.Dial("unix", path)
+	first, err := new(net.Dialer).DialContext(t.Context(), "unix", path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer first.Close()
+	defer func() { _ = first.Close() }()
 	if err := handshake(first); err != nil {
 		t.Fatal(err)
 	}
 
-	second, err := net.Dial("unix", path)
+	second, err := new(net.Dialer).DialContext(t.Context(), "unix", path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer second.Close()
+	defer func() { _ = second.Close() }()
 	if err := handshake(second); err == nil {
 		t.Fatal("saturated server completed a handshake instead of rejecting it")
 	}
@@ -348,16 +355,17 @@ func TestSaturatedServerRejectsHandshakeAndRecoversAfterSlotRelease(t *testing.T
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		third, err := net.Dial("unix", path)
+		third, err := new(net.Dialer).DialContext(t.Context(), "unix", path)
 		if err == nil {
 			err = handshake(third)
 		}
 		if err == nil {
-			third.Close()
+			_ = third.Close()
+
 			break
 		}
 		if third != nil {
-			third.Close()
+			_ = third.Close()
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("handshake did not recover after slot release: %v", err)
@@ -423,7 +431,7 @@ func TestWriterContinuesAfterSpoolFull(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	server := New(SocketPath(dir), store, &serverLogger{})
 	writerErrors := make(chan error, 1)

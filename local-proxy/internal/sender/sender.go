@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -119,12 +120,12 @@ func (s *Sender) Run(ctx context.Context) error {
 	s.state = state
 	s.durableOffset = state.Offset
 
-	s.cleanupAndLog()
+	_ = s.cleanupAndLog()
 
 	cleanupTicker := time.NewTicker(s.cleanupInterval)
 	cleanup := cleanupTicker.C
 	defer cleanupTicker.Stop()
-	defer s.closeFile()
+	defer func() { _ = s.closeFile() }()
 	defer s.upstream.close()
 
 	for {
@@ -170,36 +171,55 @@ func (s *Sender) Run(ctx context.Context) error {
 			}
 		}
 
-		wait := s.batchDelay
-		if s.currentBatch != nil {
-			elapsed := time.Since(s.currentBatch.startedAt)
-			if elapsed >= s.batchDelay {
-				if err := s.flush(ctx, cleanup); err != nil {
-					if errors.Is(err, errRetryFileExpired) {
-						continue
-					}
-
-					return err
-				}
-
+		flushed, err := s.flushDue(ctx, cleanup)
+		if err != nil {
+			if errors.Is(err, errRetryFileExpired) {
 				continue
 			}
-			wait = s.batchDelay - elapsed
+
+			return err
+		}
+		if flushed {
+			continue
 		}
 
-		timer := time.NewTimer(wait)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-s.notify:
-			timer.Stop()
-		case <-cleanupTicker.C:
-			timer.Stop()
-
-			s.cleanupAndLog()
-		case <-timer.C:
+		if err := s.wait(ctx, cleanup); err != nil {
+			return err
 		}
+	}
+}
+
+func (s *Sender) flushDue(ctx context.Context, cleanup <-chan time.Time) (bool, error) {
+	if s.currentBatch == nil || time.Since(s.currentBatch.startedAt) < s.batchDelay {
+		return false, nil
+	}
+
+	return true, s.flush(ctx, cleanup)
+}
+
+func (s *Sender) batchWait() time.Duration {
+	if s.currentBatch == nil {
+		return s.batchDelay
+	}
+
+	return max(0, s.batchDelay-time.Since(s.currentBatch.startedAt))
+}
+
+func (s *Sender) wait(ctx context.Context, cleanup <-chan time.Time) error {
+	timer := time.NewTimer(s.batchWait())
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.notify:
+		return nil
+	case <-cleanup:
+		_ = s.cleanupAndLog()
+
+		return nil
+	case <-timer.C:
+		return nil
 	}
 }
 
@@ -393,13 +413,13 @@ func (s *Sender) recoverOnSeal() error {
 
 	stat, err := file.Stat()
 	if err != nil {
-		file.Close()
+		_ = file.Close()
 
 		return err
 	}
 
 	if s.readerOffset > stat.Size() {
-		file.Close()
+		_ = file.Close()
 
 		return fmt.Errorf("sender offset %d exceeds recovered size of %q (%d)", s.readerOffset, s.state.File, stat.Size())
 	}
@@ -459,13 +479,13 @@ func (s *Sender) ensureFile() (bool, error) {
 
 	stat, err := file.Stat()
 	if err != nil {
-		file.Close()
+		_ = file.Close()
 
 		return false, err
 	}
 
 	if s.readerOffset > stat.Size() {
-		file.Close()
+		_ = file.Close()
 
 		return false, fmt.Errorf("sender offset %d exceeds size of %q (%d)", s.readerOffset, name, stat.Size())
 	}
@@ -533,12 +553,13 @@ func (s *Sender) saveOffset(offset int64) error {
 // reported even when joined with invalidation.
 func (s *Sender) cleanupAndLog() error {
 	err := s.cleanup()
-	if err != nil && err != errRetryFileExpired {
+	if err != nil && err.Error() != errRetryFileExpired.Error() {
 		s.logger.Error("local proxy cleanup failed", "error", err)
 	}
 	if errors.Is(err, errRetryFileExpired) {
 		return errRetryFileExpired
 	}
+
 	return nil
 }
 
@@ -576,6 +597,7 @@ func (s *Sender) cleanup() error {
 
 		if err := s.writer.RemoveExpired(name, currentName); err != nil && !os.IsNotExist(err) {
 			cleanupErrors = append(cleanupErrors, fmt.Errorf("delete expired trace file %q: %w", name, err))
+
 			continue
 		}
 
@@ -623,11 +645,5 @@ func (s *Sender) closeFile() error {
 }
 
 func contains(values []string, wanted string) bool {
-	for _, value := range values {
-		if value == wanted {
-			return true
-		}
-	}
-
-	return false
+	return slices.Contains(values, wanted)
 }

@@ -2,6 +2,7 @@ package sender
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -18,7 +19,7 @@ type operation = tracepayload.Operation
 type batch struct {
 	creating      []json.RawMessage
 	updating      []json.RawMessage
-	operations    int
+	operations    uint
 	creatingBytes int
 	updatingBytes int
 	offset        int64
@@ -93,7 +94,7 @@ func (b *batch) encode() ([]byte, error) {
 	}
 
 	if len(encoded) > MaxBatchSize {
-		return nil, fmt.Errorf("encoded batch exceeds 4 MiB")
+		return nil, errors.New("encoded batch exceeds 4 MiB")
 	}
 
 	if len(encoded) != b.encodedSize() {

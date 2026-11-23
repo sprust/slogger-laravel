@@ -14,13 +14,13 @@ import (
 func TestStoreAppendRotateAndRead(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, 11, 17, 13, 0, 0, 0, time.Local)
+	now := time.Date(2026, 11, 17, 13, 0, 0, 0, time.UTC)
 	store, err := NewStore(t.TempDir(), func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	if err := store.Append([]byte("first")); err != nil {
 		t.Fatal(err)
@@ -31,20 +31,20 @@ func TestStoreAppendRotateAndRead(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	assertRecord(t, filepath.Join(store.dir, "2026_11_17_13"), 0, "first", 9)
-	assertRecord(t, filepath.Join(store.dir, "2026_11_17_14"), 0, "second", 10)
+	assertRecord(t, filepath.Join(store.dir, "2026_11_17_13"), "first", 9)
+	assertRecord(t, filepath.Join(store.dir, "2026_11_17_14"), "second", 10)
 }
 
 func TestStoreSealsHourlyFileOnlyAfterWriterRotatesIt(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, 11, 17, 13, 0, 0, 0, time.Local)
+	now := time.Date(2026, 11, 17, 13, 0, 0, 0, time.UTC)
 	store, err := NewStore(t.TempDir(), func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	if err := store.Append([]byte("first")); err != nil {
 		t.Fatal(err)
@@ -75,9 +75,12 @@ func TestRecoverFileTruncatesOnlyIncompleteTail(t *testing.T) {
 		{name: "payload", tail: []byte{0, 0, 0, 4, 'a', 'b'}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
 			filePath := filepath.Join(t.TempDir(), "2026_11_17_13")
 			record := []byte{0, 0, 0, 3, 'f', 'o', 'o'}
-			contents := append(record, test.tail...)
+			contents := append([]byte(nil), record...)
+			contents = append(contents, test.tail...)
 			if err := os.WriteFile(filePath, contents, 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -126,7 +129,7 @@ func TestReadRecordWaitsForIncompleteActiveRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	if _, complete, err := ReadRecord(file, 0); err != nil || complete {
 		t.Fatalf("complete = %v, error = %v", complete, err)
@@ -187,7 +190,9 @@ func TestListTraceFilesIgnoresMetadata(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	for _, name := range []string{"2026_11_17_14", "2026_11_17_13", "local-proxy.sock", "local-proxy-errors-2026_11_17.logs"} {
+	for _, name := range []string{
+		"2026_11_17_14", "2026_11_17_13", "local-proxy.sock", "local-proxy-errors-2026_11_17.logs",
+	} {
 		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -203,7 +208,7 @@ func TestListTraceFilesIgnoresMetadata(t *testing.T) {
 	}
 }
 
-func assertRecord(t *testing.T, filePath string, offset int64, payload string, nextOffset int64) {
+func assertRecord(t *testing.T, filePath string, payload string, nextOffset int64) {
 	t.Helper()
 
 	file, err := os.Open(filePath)
@@ -211,9 +216,9 @@ func assertRecord(t *testing.T, filePath string, offset int64, payload string, n
 		t.Fatal(err)
 	}
 
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
-	record, complete, err := ReadRecord(file, offset)
+	record, complete, err := ReadRecord(file, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +234,7 @@ func TestExpiredIdleWriterDoesNotReopenDeletedHourAfterClockRollback(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	if err := store.Append([]byte("expired")); err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +248,7 @@ func TestExpiredIdleWriterDoesNotReopenDeletedHourAfterClockRollback(t *testing.
 	if err := store.Append([]byte("new")); err != nil {
 		t.Fatal(err)
 	}
-	assertRecord(t, filepath.Join(store.dir, next), 0, "new", 7)
+	assertRecord(t, filepath.Join(store.dir, next), "new", 7)
 	if _, err := os.Stat(filepath.Join(store.dir, old)); !os.IsNotExist(err) {
 		t.Fatalf("expired hour still exists: %v", err)
 	}
@@ -267,7 +272,7 @@ func TestStartupReclaimsCompletedFileWithoutSkippingHour(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	if _, err := os.Stat(filepath.Join(dir, old)); !os.IsNotExist(err) {
 		t.Fatalf("completed file was not reclaimed: %v", err)
 	}
@@ -278,7 +283,7 @@ func TestStartupReclaimsCompletedFileWithoutSkippingHour(t *testing.T) {
 	if err := store.Append([]byte("new")); err != nil {
 		t.Fatal(err)
 	}
-	assertRecord(t, filepath.Join(dir, old), 0, "new", 7)
+	assertRecord(t, filepath.Join(dir, old), "new", 7)
 }
 
 func TestInvalidCalendarHourDoesNotCaptureWriter(t *testing.T) {
@@ -294,7 +299,7 @@ func TestInvalidCalendarHourDoesNotCaptureWriter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	if err := store.Append([]byte(`{"c":"[]"}`)); err != nil {
 		t.Fatal(err)
@@ -322,7 +327,7 @@ func TestSpoolLimitRejectsAppendAndRecoversAfterRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	if err := store.Append(payload); err != nil {
 		t.Fatal(err)
@@ -330,7 +335,8 @@ func TestSpoolLimitRejectsAppendAndRecoversAfterRemoval(t *testing.T) {
 	if err := store.Append(payload); !errors.Is(err, ErrSpoolFull) {
 		t.Fatalf("second append error = %v", err)
 	}
-	if metrics := store.Metrics(); metrics.SpoolBytes != recordSize || metrics.SpoolLimitBytes != recordSize || metrics.AppendedRecords != 1 {
+	metrics := store.Metrics()
+	if metrics.SpoolBytes != recordSize || metrics.SpoolLimitBytes != recordSize || metrics.AppendedRecords != 1 {
 		t.Fatalf("metrics = %+v", metrics)
 	}
 
@@ -350,7 +356,8 @@ func TestSpoolAccountingIncludesRecoveryTruncation(t *testing.T) {
 
 	now := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
 	name := CurrentFileName(now)
-	complete := []byte{0, 0, 0, 3, 'f', 'o', 'o'}
+	complete := make([]byte, 0, 9)
+	complete = append(complete, 0, 0, 0, 3, 'f', 'o', 'o')
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, name), append(complete, 0, 0), 0o600); err != nil {
 		t.Fatal(err)
@@ -362,7 +369,7 @@ func TestSpoolAccountingIncludesRecoveryTruncation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	if err := store.Append(payload); err != nil {
 		t.Fatal(err)
 	}
@@ -385,10 +392,10 @@ func TestStartupResetsCompletedStateWhenFileAlreadyDeleted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	if err := store.Append([]byte(`{"c":"[{}]"}`)); err != nil {
 		t.Fatalf("append after completed-state recovery: %v", err)
 	}
-	assertRecord(t, filepath.Join(dir, name), 0, `{"c":"[{}]"}`, 16)
+	assertRecord(t, filepath.Join(dir, name), `{"c":"[{}]"}`, 16)
 }

@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -23,7 +24,7 @@ func TestCollectorWritesAtomicJSONSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	if err := store.Append([]byte(`{"c":"[{}]"}`)); err != nil {
 		t.Fatal(err)
@@ -47,34 +48,28 @@ func TestCollectorWritesAtomicJSONSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var snapshot map[string]any
+	var snapshot Snapshot
 	if err := json.Unmarshal(data, &snapshot); err != nil {
 		t.Fatal(err)
 	}
 
-	process := snapshot["process"].(map[string]any)
-	if process["heap_alloc_bytes"].(float64) <= 0 || process["goroutines"].(float64) <= 0 {
-		t.Fatalf("process = %+v", process)
+	if snapshot.Process.HeapAllocBytes <= 0 || snapshot.Process.Goroutines <= 0 {
+		t.Fatalf("process = %+v", snapshot.Process)
 	}
-
-	if snapshot["started_at"] == nil {
+	if snapshot.StartedAt.IsZero() {
 		t.Fatal("started_at is missing")
 	}
-
-	storageMetrics := snapshot["storage"].(map[string]any)
-	if storageMetrics["spool_limit_bytes"].(float64) != float64(storage.DefaultMaxSpoolBytes) {
-		t.Fatalf("storage = %+v", storageMetrics)
+	if snapshot.Storage.SpoolLimitBytes != storage.DefaultMaxSpoolBytes {
+		t.Fatalf("storage = %+v", snapshot.Storage)
 	}
-	if storageMetrics["hourly_files"].(float64) != 1 || storageMetrics["appended_records_total"].(float64) != 1 {
-		t.Fatalf("storage = %+v", storageMetrics)
+	if snapshot.Storage.HourlyFiles != 1 || snapshot.Storage.AppendedRecords != 1 {
+		t.Fatalf("storage = %+v", snapshot.Storage)
 	}
-	if storageMetrics["hourly_bytes"].(float64) <= 0 {
-		t.Fatalf("storage = %+v", storageMetrics)
+	if snapshot.Storage.HourlyBytes <= 0 {
+		t.Fatalf("storage = %+v", snapshot.Storage)
 	}
-
-	serverMetrics := snapshot["server"].(map[string]any)
-	if serverMetrics["connection_limit"].(float64) != 32 || serverMetrics["input_budget_total_bytes"].(float64) != 256<<20 {
-		t.Fatalf("server = %+v", serverMetrics)
+	if snapshot.Server.ConnectionLimit != 32 || snapshot.Server.InputBudgetTotal != 256<<20 {
+		t.Fatalf("server = %+v", snapshot.Server)
 	}
 
 	info, err := os.Stat(filepath.Join(dir, FileName))
@@ -100,7 +95,9 @@ func TestRunDoesNotPublishFinalSnapshotBeforeWorkersDrain(t *testing.T) {
 		t.Fatal(err)
 	}
 	cancel()
-	<-done
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
 
 	snapshot := readSnapshot(t, dir)
 	if snapshot.Storage.AppendedRecords != 0 {
@@ -135,7 +132,7 @@ func TestContinuousRenameErrorsAreRateLimited(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, FileName), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, 11, 18, 13, 0, 0, 0, time.Local)
+	now := time.Date(2026, 11, 18, 13, 0, 0, 0, time.UTC)
 	collector.now = func() time.Time { return now }
 
 	for range 10 {

@@ -203,7 +203,9 @@ func (c *Collector) processSnapshot(now time.Time) ProcessMetrics {
 	c.processMu.Lock()
 	defer c.processMu.Unlock()
 
-	if !c.processCollectedAt.IsZero() && !now.Before(c.processCollectedAt) && now.Sub(c.processCollectedAt) < processMetricsInterval {
+	if !c.processCollectedAt.IsZero() &&
+		!now.Before(c.processCollectedAt) &&
+		now.Sub(c.processCollectedAt) < processMetricsInterval {
 		return c.processMetrics
 	}
 
@@ -274,15 +276,15 @@ func (c *Collector) Write() error {
 		return fmt.Errorf("create temporary metrics file: %w", err)
 	}
 	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
+	defer func() { _ = os.Remove(temporaryPath) }()
 
 	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 
 		return err
 	}
 	if _, err := temporary.Write(data); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 
 		return err
 	}
