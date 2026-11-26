@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -86,7 +87,7 @@ func TestSenderSendsAtMost200Operations(t *testing.T) {
 
 	operations := make([]map[string]string, 201)
 	for index := range operations {
-		operations[index] = map[string]string{"tid": "trace"}
+		operations[index] = map[string]string{"tid": fmt.Sprintf("trace-%d", index)}
 	}
 
 	creating, err := json.Marshal(operations)
@@ -123,7 +124,7 @@ func TestSenderSendsAtMost200Operations(t *testing.T) {
 	waitFor(t, func() bool {
 		state, err := storage.NewStateStore(dir).Load()
 
-		return err == nil && state.Offset > 0 && upstream.count() == 2
+		return err == nil && state.File == "" && state.Offset == 0 && !state.Completed && upstream.count() == 2
 	})
 
 	cancel()
@@ -131,19 +132,39 @@ func TestSenderSendsAtMost200Operations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var first map[string]string
-	if err := json.Unmarshal(upstream.payloads[0], &first); err != nil {
+	first := creatingOperations(t, upstream.payloads[0])
+	if len(first) != 200 {
+		t.Fatalf("first batch operations = %d", len(first))
+	}
+	if first[0]["tid"] != "trace-0" || first[199]["tid"] != "trace-199" {
+		t.Fatalf("unexpected first batch boundaries: first=%+v last=%+v", first[0], first[199])
+	}
+
+	second := creatingOperations(t, upstream.payloads[1])
+	if len(second) != 1 || second[0]["tid"] != "trace-200" {
+		t.Fatalf("unexpected second batch: %+v", second)
+	}
+
+	metrics := sender.Metrics()
+	if metrics.SentBatches != 2 || metrics.SentOperations != 201 {
+		t.Fatalf("sent metrics = %+v", metrics)
+	}
+}
+
+func creatingOperations(t *testing.T, payload []byte) []map[string]string {
+	t.Helper()
+
+	var envelope map[string]string
+	if err := json.Unmarshal(payload, &envelope); err != nil {
 		t.Fatal(err)
 	}
 
-	var traces []json.RawMessage
-	if err := json.Unmarshal([]byte(first["c"]), &traces); err != nil {
+	var operations []map[string]string
+	if err := json.Unmarshal([]byte(envelope["c"]), &operations); err != nil {
 		t.Fatal(err)
 	}
 
-	if len(traces) != 200 {
-		t.Fatalf("first batch operations = %d", len(traces))
-	}
+	return operations
 }
 
 type failingCleanupLogger struct {

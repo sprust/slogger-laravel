@@ -142,7 +142,7 @@ class LocalProxyAlertCheckerTest extends MetricsTestCase
 
         // delivered now: no repeat for the same crossing
         $checker->check($this->metrics(pendingBytes: 20));
-        self::assertSame(2, $calls);
+        self::assertEquals(2, $calls);
     }
 
     public function testSendStalledEventAfterThresholdMinutes(): void

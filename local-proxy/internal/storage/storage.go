@@ -24,6 +24,8 @@ const (
 
 var ErrSpoolFull = errors.New("local proxy spool is full")
 
+var errAppendBlocked = errors.New("local proxy append is blocked until restart after sender state transaction failure")
+
 var traceFileNamePattern = regexp.MustCompile(`^\d{4}_\d{2}_\d{2}_\d{2}$`)
 
 type Store struct {
@@ -34,7 +36,9 @@ type Store struct {
 	hour        string
 	minimumHour string
 	notify      chan struct{}
+	saveState   func(State) error
 
+	appendBlocked bool
 	maxSpoolBytes int64
 	spoolBytes    atomic.Int64
 	fileSizes     map[string]int64
@@ -70,10 +74,12 @@ func NewStore(dir string, now func() time.Time, limits ...int64) (*Store, error)
 		return nil, fmt.Errorf("create traces directory: %w", err)
 	}
 
+	states := NewStateStore(dir)
 	store := &Store{
 		dir:           dir,
 		now:           now,
 		notify:        make(chan struct{}, 1),
+		saveState:     states.Save,
 		maxSpoolBytes: maxSpoolBytes,
 		fileSizes:     make(map[string]int64),
 	}
@@ -132,6 +138,10 @@ func (s *Store) reconcileCompletedFile() error {
 func (s *Store) Append(payload []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.appendBlocked {
+		return errAppendBlocked
+	}
 
 	if len(payload) == 0 || len(payload) > protocol.MaxFrameSize {
 		return fmt.Errorf("invalid payload size %d", len(payload))
@@ -251,6 +261,10 @@ func (s *Store) CompleteFile(name string, offset int64) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.appendBlocked {
+		return false, errAppendBlocked
+	}
+
 	if offset < 0 || !ValidTraceFileName(name) {
 		return false, fmt.Errorf("invalid completed file position %q:%d", name, offset)
 	}
@@ -269,16 +283,17 @@ func (s *Store) CompleteFile(name string, offset int64) (bool, error) {
 		}
 	}
 
-	states := NewStateStore(s.dir)
-	if err := states.Save(State{File: name, Offset: offset, Completed: true}); err != nil {
+	s.appendBlocked = true
+	if err := s.saveState(State{File: name, Offset: offset, Completed: true}); err != nil {
 		return false, err
 	}
 	if err := s.remove(name); err != nil && !os.IsNotExist(err) {
 		return false, err
 	}
-	if err := states.Save(State{Version: StateVersion}); err != nil {
+	if err := s.saveState(State{Version: StateVersion}); err != nil {
 		return false, err
 	}
+	s.appendBlocked = false
 
 	return true, nil
 }

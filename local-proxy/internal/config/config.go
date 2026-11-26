@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -97,7 +98,18 @@ func Load(envPath, rootDir string) (Config, error) {
 	}, nil
 }
 
-var envReferencePattern = regexp.MustCompile(`\$\{[A-Za-z_][A-Za-z0-9_]*\}`)
+var envReferencePattern = regexp.MustCompile(`^\$\{[A-Za-z_][A-Za-z0-9_]*\}`)
+var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+func envKeyName(raw string) string {
+	key := strings.TrimSpace(raw)
+	key = strings.TrimSpace(strings.TrimPrefix(key, "export "))
+	if !envKeyPattern.MatchString(key) {
+		return ""
+	}
+
+	return key
+}
 
 func readEnv(envPath string) (map[string]string, error) {
 	contents, err := os.ReadFile(envPath)
@@ -110,33 +122,269 @@ func readEnv(envPath string) (map[string]string, error) {
 		placeholderPrefix += "_"
 	}
 
-	replacementCount := 0
-	replacerArgs := make([]string, 0)
-	expanded := envReferencePattern.ReplaceAllStringFunc(string(contents), func(reference string) string {
-		key := reference[2 : len(reference)-1]
-		value, exists := os.LookupEnv(key)
-		if !exists {
-			return reference
-		}
-
-		placeholder := fmt.Sprintf("%s%d__", placeholderPrefix, replacementCount)
-		replacementCount++
-		replacerArgs = append(replacerArgs, placeholder, value)
-
-		return placeholder
-	})
-
-	values, err := godotenv.Unmarshal(expanded)
+	expanded, replacerArgs, keyNames := expandProcessEnvironment(string(contents), placeholderPrefix)
+	parsed, err := godotenv.Unmarshal(expanded)
 	if err != nil {
 		return nil, fmt.Errorf("read env file %q", envPath)
 	}
 
 	replacer := strings.NewReplacer(replacerArgs...)
-	for key, value := range values {
+	values := make(map[string]string, len(parsed))
+	for key, value := range parsed {
+		if original, exists := keyNames[key]; exists {
+			key = original
+		}
 		values[key] = replacer.Replace(value)
 	}
 
 	return values, nil
+}
+
+type envAssignmentState struct {
+	definedKeys       map[string]struct{}
+	keyNames          map[string]string
+	placeholderPrefix string
+	keyBuffer         strings.Builder
+	collectingKey     bool
+	currentKey        string
+	inValue           bool
+	atValueStart      bool
+	inComment         bool
+}
+
+func expandProcessEnvironment(contents, placeholderPrefix string) (string, []string, map[string]string) {
+	var expanded strings.Builder
+	expanded.Grow(len(contents))
+
+	replacerArgs := make([]string, 0)
+	assignment := envAssignmentState{
+		definedKeys:       make(map[string]struct{}),
+		keyNames:          make(map[string]string),
+		placeholderPrefix: placeholderPrefix,
+		collectingKey:     true,
+	}
+	singleQuoted := false
+	doubleQuoted := false
+
+	for index := 0; index < len(contents); {
+		char := contents[index]
+
+		if envLineEnded(char, singleQuoted, doubleQuoted) {
+			assignment.finishLine(&expanded)
+			expanded.WriteByte(char)
+			index++
+
+			continue
+		}
+
+		next, single, double, copied := copyLiteralEnvToken(
+			contents, index, assignment.inComment, singleQuoted, doubleQuoted, &expanded,
+		)
+		if copied {
+			index = next
+			singleQuoted = single
+			doubleQuoted = double
+
+			continue
+		}
+
+		if !doubleQuoted {
+			next, quote, copied := assignment.copyUnquotedToken(char, index, &expanded)
+			if copied {
+				index = next
+				singleQuoted = quote == '\''
+				doubleQuoted = quote == '"'
+
+				continue
+			}
+		}
+
+		replacement, size, args := expandProcessReference(
+			contents, index, placeholderPrefix, replacerArgs, assignment.definedKeys,
+		)
+		replacerArgs = args
+		if size > 0 {
+			expanded.WriteString(replacement)
+			index += size
+
+			continue
+		}
+
+		expanded.WriteByte(char)
+		index++
+	}
+
+	assignment.flushKey(&expanded)
+
+	return expanded.String(), replacerArgs, assignment.keyNames
+}
+
+func envLineEnded(char byte, singleQuoted, doubleQuoted bool) bool {
+	return char == '\n' && !singleQuoted && !doubleQuoted
+}
+
+func (s *envAssignmentState) finishLine(expanded *strings.Builder) {
+	if s.collectingKey {
+		expanded.WriteString(s.keyBuffer.String())
+	} else if s.inValue && s.currentKey != "" {
+		s.definedKeys[s.currentKey] = struct{}{}
+	}
+	s.inValue = false
+	s.atValueStart = false
+	s.inComment = false
+	s.collectingKey = true
+	s.currentKey = ""
+	s.keyBuffer.Reset()
+}
+
+func (s *envAssignmentState) copyUnquotedToken(
+	char byte,
+	index int,
+	expanded *strings.Builder,
+) (int, byte, bool) {
+	switch {
+	case char == '#':
+		s.flushKey(expanded)
+		s.inComment = true
+	case char == '=' && !s.inValue:
+		if s.collectingKey {
+			s.currentKey = envKeyName(s.keyBuffer.String())
+			s.writeKey(expanded)
+			s.collectingKey = false
+		}
+		s.inValue = true
+		s.atValueStart = true
+	case s.atValueStart && (char == ' ' || char == '\t'):
+	case s.atValueStart && (char == '\'' || char == '"'):
+		s.atValueStart = false
+		expanded.WriteByte(char)
+
+		return index + 1, char, true
+	default:
+		s.atValueStart = false
+		if s.collectingKey {
+			s.keyBuffer.WriteByte(char)
+
+			return index + 1, 0, true
+		}
+
+		return index, 0, false
+	}
+
+	expanded.WriteByte(char)
+
+	return index + 1, 0, true
+}
+
+func (s *envAssignmentState) writeKey(expanded *strings.Builder) {
+	if s.currentKey == "" {
+		expanded.WriteString(s.keyBuffer.String())
+
+		return
+	}
+
+	internal := internalEnvKey(s.currentKey, s.placeholderPrefix)
+	s.keyNames[internal] = s.currentKey
+	expanded.WriteString(internal)
+}
+
+func (s *envAssignmentState) flushKey(expanded *strings.Builder) {
+	if !s.collectingKey {
+		return
+	}
+
+	expanded.WriteString(s.keyBuffer.String())
+	s.collectingKey = false
+}
+
+func internalEnvKey(key, placeholderPrefix string) string {
+	return placeholderPrefix + "KEY_" + strings.ToUpper(hex.EncodeToString([]byte(key))) + "__"
+}
+
+func copyLiteralEnvToken(
+	contents string,
+	index int,
+	inComment, singleQuoted, doubleQuoted bool,
+	expanded *strings.Builder,
+) (int, bool, bool, bool) {
+	char := contents[index]
+	if inComment || singleQuoted {
+		expanded.WriteByte(char)
+
+		return index + 1, singleQuoted && char != '\'', doubleQuoted, true
+	}
+	if !doubleQuoted {
+		return index, false, false, false
+	}
+
+	next, closed, copied := copyDoubleQuotedToken(contents, index, expanded)
+
+	return next, false, !closed, copied
+}
+
+func copyDoubleQuotedToken(contents string, index int, expanded *strings.Builder) (int, bool, bool) {
+	if next, copied := copyDoubleQuotedEscape(contents, index, expanded); copied {
+		return next, false, true
+	}
+	if contents[index] != '"' {
+		return index, false, false
+	}
+
+	expanded.WriteByte('"')
+
+	return index + 1, true, true
+}
+
+func copyDoubleQuotedEscape(contents string, index int, expanded *strings.Builder) (int, bool) {
+	if contents[index] != '\\' || index+1 >= len(contents) {
+		return index, false
+	}
+
+	expanded.WriteString(contents[index : index+2])
+
+	return index + 2, true
+}
+
+func expandProcessReference(
+	contents string,
+	index int,
+	placeholderPrefix string,
+	replacerArgs []string,
+	definedKeys map[string]struct{},
+) (string, int, []string) {
+	if contents[index] != '$' {
+		return "", 0, replacerArgs
+	}
+
+	reference := envReferencePattern.FindString(contents[index:])
+	if reference == "" {
+		placeholder, args := newEnvPlaceholder("$", placeholderPrefix, replacerArgs)
+
+		return placeholder, 1, args
+	}
+
+	key := reference[2 : len(reference)-1]
+	value, exists := os.LookupEnv(key)
+	if exists {
+		placeholder, args := newEnvPlaceholder(value, placeholderPrefix, replacerArgs)
+
+		return placeholder, len(reference), args
+	}
+	if _, exists := definedKeys[key]; exists {
+		internal := "${" + internalEnvKey(key, placeholderPrefix) + "}"
+
+		return internal, len(reference), replacerArgs
+	}
+
+	placeholder, args := newEnvPlaceholder(reference, placeholderPrefix, replacerArgs)
+
+	return placeholder, len(reference), args
+}
+
+func newEnvPlaceholder(value, placeholderPrefix string, replacerArgs []string) (string, []string) {
+	placeholder := fmt.Sprintf("%s%d__", placeholderPrefix, len(replacerArgs)/2)
+
+	return placeholder, append(replacerArgs, placeholder, value)
 }
 
 func NormalizeTracesPath(value string) (string, error) {

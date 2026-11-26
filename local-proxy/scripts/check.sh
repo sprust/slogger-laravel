@@ -15,7 +15,15 @@ go mod tidy -diff
 go mod verify
 go vet ./...
 govulncheck ./...
-! git grep -n '//nolint' -- .
+if git grep -n '//nolint' -- '*.go'; then
+    printf 'nolint directives are not allowed in Go files\n' >&2
+    exit 1
+else
+    grep_status=$?
+    if [[ "$grep_status" -ne 1 ]]; then
+        exit "$grep_status"
+    fi
+fi
 go test -race ./...
 
 mkdir -p ../build

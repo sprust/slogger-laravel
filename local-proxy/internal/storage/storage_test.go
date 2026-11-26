@@ -399,3 +399,65 @@ func TestStartupResetsCompletedStateWhenFileAlreadyDeleted(t *testing.T) {
 	}
 	assertRecord(t, filepath.Join(dir, name), `{"c":"[{}]"}`, 16)
 }
+
+func TestStateTransactionFailureBlocksAppendUntilRestart(t *testing.T) {
+	now := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	name := CurrentFileName(now)
+	dir := t.TempDir()
+	store, err := NewStore(dir, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	payload := []byte("sent")
+	if err := store.Append(payload); err != nil {
+		t.Fatal(err)
+	}
+
+	states := NewStateStore(dir)
+	saves := 0
+	store.saveState = func(state State) error {
+		saves++
+		if saves == 2 {
+			return errors.New("reset sender state")
+		}
+
+		return states.Save(state)
+	}
+
+	completed, err := store.CompleteFile(name, int64(len(payload)+4))
+	if err == nil || completed {
+		t.Fatalf("completed = %v, error = %v", completed, err)
+	}
+	state, err := states.Load()
+	if err != nil || !state.Completed || state.File != name {
+		t.Fatalf("state = %+v, error = %v", state, err)
+	}
+
+	if err := store.Append([]byte("must-not-be-accepted")); !errors.Is(err, errAppendBlocked) {
+		t.Fatalf("append after state transaction failure = %v", err)
+	}
+	if _, err := store.CompleteFile(name, int64(len(payload)+4)); !errors.Is(err, errAppendBlocked) {
+		t.Fatalf("complete after state transaction failure = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+		t.Fatalf("append recreated completed file: %v", err)
+	}
+	if metrics := store.Metrics(); metrics.AppendedRecords != 1 {
+		t.Fatalf("appended records = %d", metrics.AppendedRecords)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted, err := NewStore(dir, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = restarted.Close() }()
+	if err := restarted.Append([]byte("new")); err != nil {
+		t.Fatalf("append after restart: %v", err)
+	}
+	assertRecord(t, filepath.Join(dir, name), "new", 7)
+}
