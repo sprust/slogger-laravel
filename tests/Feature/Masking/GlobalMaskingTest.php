@@ -176,9 +176,11 @@ class GlobalMaskingTest extends BaseWatcherTestCase
     public function testACreatingTracesTagsAreMaskedOnTheWayOut(): void
     {
         $job = new SendTracesJob(
-            (new TracesObject())->addCreating(
+            traces: (new TracesObject())->addCreating(
                 $this->makeTrace(['context' => []], ['/users/customer@example.test/orders'])
-            )
+            ),
+            tries: 5,
+            backoff: [5, 10, 30, 60],
         );
 
         $apiClient = new class implements ApiClientInterface {
@@ -214,9 +216,11 @@ class GlobalMaskingTest extends BaseWatcherTestCase
         };
 
         $job = new SendTracesJob(
-            (new TracesObject())
+            traces: (new TracesObject())
                 ->addCreating($this->makeTrace(['breaks' => ['api_token' => 'sk-live-SECRET']]))
-                ->addCreating($this->makeTrace(['context' => ['api_token' => 'sk-live-OTHER']]))
+                ->addCreating($this->makeTrace(['context' => ['api_token' => 'sk-live-OTHER']])),
+            tries: 5,
+            backoff: [5, 10, 30, 60],
         );
 
         $apiClient = new class implements ApiClientInterface {
@@ -263,7 +267,7 @@ class GlobalMaskingTest extends BaseWatcherTestCase
     private function sendUpdateThroughJob(array $data, array $tags): array
     {
         $job = new SendTracesJob(
-            (new TracesObject())->addUpdating(
+            traces: (new TracesObject())->addUpdating(
                 new TraceUpdateObject(
                     traceId: 'trace-1',
                     status: TraceStatusEnum::Success->value,
@@ -274,7 +278,9 @@ class GlobalMaskingTest extends BaseWatcherTestCase
                     cpu: null,
                     parentLoggedAt: Carbon::now(),
                 )
-            )
+            ),
+            tries: 5,
+            backoff: [5, 10, 30, 60],
         );
 
         $apiClient = new class implements ApiClientInterface {
@@ -314,7 +320,9 @@ class GlobalMaskingTest extends BaseWatcherTestCase
     private function sendThroughJob(array $data): array
     {
         $job = new SendTracesJob(
-            (new TracesObject())->addCreating($this->makeTrace($data))
+            traces: (new TracesObject())->addCreating($this->makeTrace($data)),
+            tries: 5,
+            backoff: [5, 10, 30, 60],
         );
 
         $apiClient = new class implements ApiClientInterface {

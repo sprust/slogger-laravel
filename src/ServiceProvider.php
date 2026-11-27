@@ -6,6 +6,8 @@ use Illuminate\Config\Repository;
 use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Events\Dispatcher;
+use SLoggerLaravel\Commands\DownloadLocalProxyCommand;
+use SLoggerLaravel\Commands\LocalProxyMetricsCommand;
 use SLoggerLaravel\Configs\DispatcherConfig;
 use SLoggerLaravel\Configs\DispatcherQueueConfig;
 use SLoggerLaravel\Configs\GeneralConfig;
@@ -22,6 +24,7 @@ use SLoggerLaravel\Dispatcher\Items\Queue\QueueDispatcher;
 use SLoggerLaravel\Dispatcher\Items\TraceDispatcherInterface;
 use SLoggerLaravel\Helpers\TraceDataComplementer;
 use SLoggerLaravel\Helpers\TraceDataMasker;
+use SLoggerLaravel\LocalProxy\LocalProxyAlertChecker;
 use SLoggerLaravel\Middleware\HttpMiddleware;
 use SLoggerLaravel\Traces\TraceIdContainer;
 use SLoggerLaravel\Watchers\Children\HttpClientWatcher;
@@ -35,6 +38,10 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
     public function register(): void
     {
         $this->app->singleton(GeneralConfig::class);
+
+        // the metrics command runs whether or not tracing is enabled, and its
+        // alert checker must keep one deduplication state per process
+        $this->app->singleton(LocalProxyAlertChecker::class);
 
         // bound whether or not tracing is enabled: HttpMiddleware sits in the
         // application's middleware stack either way, and what it resolves reaches here
@@ -162,6 +169,11 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         if (!$this->app->runningInConsole()) {
             return;
         }
+
+        $this->commands([
+            DownloadLocalProxyCommand::class,
+            LocalProxyMetricsCommand::class,
+        ]);
 
         $this->publishes(
             paths: [

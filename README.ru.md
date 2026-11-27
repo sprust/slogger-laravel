@@ -97,8 +97,12 @@ SLOGGER_DISPATCHER=queue
 SLOGGER_DISPATCHER_QUEUE_CONNECTION=slogger-rabbitmq
 SLOGGER_DISPATCHER_QUEUE_NAME=slogger
 SLOGGER_DISPATCHER_QUEUE_API_CLIENT=socket
+SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TYPE=direct
 SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL=tcp://0.0.0.0:0002
 SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TIMEOUT=10
+SLOGGER_LOCAL_PROXY_TRACES_PATH=storage/slogger/traces
+SLOGGER_LOCAL_PROXY_RETENTION_HOURS=24
+SLOGGER_LOCAL_PROXY_MAX_SPOOL_BYTES=1073741824
 ```
 
 - `SLOGGER_DISPATCHER`: `queue` или `memory`.
@@ -106,8 +110,10 @@ SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TIMEOUT=10
 - Диспатчер `memory` хранит трейсы в памяти (удобно для тестов/разработки).
 - `SLOGGER_DISPATCHER_QUEUE_API_CLIENT`: клиент, через который отправляет джоба, —
   `socket`, единственный поставляемый.
-- `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL`: адрес приёмника; значения по умолчанию
-  нет.
+- `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TYPE`: `direct` (по умолчанию) отправляет напрямую,
+  `proxy` использует локальный Unix socket. См. [Локальный прокси](#локальный-прокси).
+- `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL`: адрес приёмника в direct-режиме и upstream Go-прокси;
+  значения по умолчанию нет.
 
 `SLOGGER_DISPATCHER_QUEUE_CONNECTION` **обязателен** для диспатчера `queue` — фолбэка на
 `QUEUE_CONNECTION` нет намеренно: телеметрия не должна молча делить queue-коннекшен с
@@ -122,7 +128,12 @@ SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TIMEOUT=10
 ретраятся: это превратило бы перегруженный приёмник в шторм переподключений — их обрабатывает
 политика ретраев джобы ниже.
 
-Ретраи отправки зафиксированы намеренно: 5 попыток с паузами 5/10/30/60 секунд между ними.
+Ретраи отправки зафиксированы намеренно и зависят от того, куда идёт батч. Режим `direct` —
+удалённый приёмник по TCP — получает 5 попыток с паузами 5/10/30/60 секунд между ними.
+Режим `proxy` ходит на локальный Unix-сокет, чьи ошибки мгновенны и либо постоянны (запись,
+которую прокси отклонил), либо исчезают за секунды (рестарт, занятые слоты), поэтому там
+3 попытки с паузами 2/5 секунды; надёжность там обеспечивает дисковый буфер прокси, а не
+окно ретраев.
 После исчерпания попыток батч **дропается** с rate-limited предупреждением в лог-канале
 SLogger — отправка, упавшая внутри джобы, никогда не попадает в `failed_jobs`. Туда Laravel
 всё ещё может записать только сбой на стороне воркера — таймаут воркера, воркер, убитый
@@ -968,6 +979,212 @@ php artisan queue:work slogger-rabbitmq --queue=slogger
   предупреждение (`dropped N trace dispatches`, не чаще раза в минуту) уходит в
   лог-канал SLogger.
 
+### Локальный прокси
+
+Необязательный Go-прокси создаёт durable-буфер между воркерами очереди и SLogger. PHP получает
+подтверждение только после append на диск и `fsync`; дальше пачку доставляет сам прокси. Семантика —
+**at least once**: падение после отправки, но до сохранения offset может дать дубликат, а не пропуск.
+
+В релизе сейчас есть бинарь только для **Linux amd64**. Установите asset той же версии, что и пакет:
+
+```bash
+php artisan slogger:local-proxy:download
+vendor/bin/slogger-local-proxy -version
+```
+
+По умолчанию файл попадает в `vendor/bin/slogger-local-proxy`. `--release=2.3.0` выбирает другой
+релиз явно, `--path=/custom/destination` меняет путь назначения бинаря, а `--force` после обновления
+пакета заменяет существующий файл. Команда проверяет SHA-256 из релиза до атомарной замены старого
+бинаря.
+
+Настройка и включение:
+
+```dotenv
+SLOGGER_TOKEN=your-api-token
+SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TYPE=proxy
+SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL=tcp://your-slogger-host:port
+SLOGGER_LOCAL_PROXY_TRACES_PATH=storage/slogger/traces
+SLOGGER_LOCAL_PROXY_RETENTION_HOURS=24
+SLOGGER_LOCAL_PROXY_MAX_SPOOL_BYTES=1073741824
+```
+
+- `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TYPE` по умолчанию `direct`: PHP напрямую соединяется с
+  `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL`, как раньше. В `proxy` PHP идёт на локальный Unix
+  socket, а Go читает тот же URL как upstream. При переключении URL менять не нужно.
+- `SLOGGER_LOCAL_PROXY_TRACES_PATH` задаётся относительно корня приложения. Ведущие и завершающие
+  слеши игнорируются: `/storage/slogger/traces/` и `storage/slogger/traces` эквивалентны и означают
+  `<project-root>/storage/slogger/traces`. Отсутствующая настройка использует default; явно пустое
+  значение, путь только из dot-компонентов и `..` отклоняются.
+- Имя socket всегда `local-proxy.sock` внутри этого каталога; локальный URL и имя файла не
+  настраиваются. Запускайте PHP-воркеры и прокси под одним пользователем (или выдайте эквивалентные
+  права): каталог, socket и файлы данных доступны только владельцу.
+- `SLOGGER_LOCAL_PROXY_RETENTION_HOURS` по умолчанию 24 и принимает от 1 до 2 562 047 часов
+  (безопасный диапазон `time.Duration` в часах). Просроченные файлы удаляются даже с
+  неотправленными трейсами, поэтому перед длительным outage увеличьте retention.
+- `SLOGGER_LOCAL_PROXY_MAX_SPOOL_BYTES` по умолчанию равен 1 ГиБ (`1073741824`) и должен быть
+  положительным целым. Лимит включает заголовки записей и существующие файлы spool. При заполнении
+  новый кадр отклоняется без ACK, а sender продолжает отправлять старые файлы; клиент повторяет
+  попытку по своей retry-политике и сможет записаться после освобождения места. Текущее занятое
+  место и лимит доступны как `storage.hourly_bytes` и `storage.spool_limit_bytes`.
+
+Пример Supervisor:
+
+```ini
+[program:slogger-local-proxy]
+directory=/path/to/application
+command=/path/to/application/vendor/bin/slogger-local-proxy -env /path/to/application/.env
+autostart=true
+autorestart=true
+stopsignal=TERM
+stopwaitsecs=10
+user=application
+redirect_stderr=true
+stdout_logfile=/var/log/supervisor/slogger-local-proxy.log
+```
+
+Примените через `supervisorctl reread && supervisorctl update`. Environment variables процесса имеют
+приоритет над `.env`, включая ссылки `${VARIABLE}`. Процесс берёт эксклюзивный `flock`; повторный запуск завершается ошибкой, не
+заменяя активный socket. SIGINT/SIGTERM прекращают приём и дают graceful shutdown до пяти секунд.
+
+В каталоге лежат hourly-файлы `YYYY_MM_DD_HH`, `local-proxy-state.json`, lock/socket и error-логи.
+Offset сохраняется атомарно. Когда sender дошёл до полностью доставленного EOF, writer закрывает и
+удаляет этот файл даже внутри текущего часа, освобождая бюджет spool перед следующим append с тем же
+именем. Последовательность completed/delete/empty-state восстанавливается при старте после сбоя.
+При переводе часов назад writer продолжает использовать последний час spool. Cleanup работает при
+старте и каждые десять минут.
+
+Исходящая пачка содержит максимум 200 create/update-операций и 4 MiB JSON. Полная отправляется
+сразу, неполная — не чаще раза в секунду. Большие входные записи делятся по границам операций без
+потери неизвестных полей трейсов. Запись обходится по одной операции, а не материализуется целиком
+перед формированием пачек. Учёт размера пачки включает повторное JSON-кодирование протокола
+и escaping, а не только исходные байты трейсов. Каждая отдельная операция также обязана помещаться в
+4 MiB на проводе. Ingestion проверяет формат и этот лимит до append/ACK; некорректное соединение
+закрывается без записи. Непригодная операция, уже находящаяся на диске, остаётся fail-stop, а не
+молча удаляется. При shutdown принятым в writer queue записям дают завершить append и получить ACK
+в пределах общего пятисекундного hard timeout.
+
+Локальный listener принимает до 32 одновременных подключений и держит не более 256 MiB **входных
+frame-буферов**, включая активные и ожидающие чтения. Один frame по-прежнему ограничен 64 MiB. Бюджет
+занимается до выделения payload-буфера и освобождается после exchange. `Store.Append` пишет заголовок
+и payload без дополнительной полной копии записи. Память sender в этот входной бюджет не входит, но
+операции передаются в ограниченные пачки потоково, а не накапливаются целой записью. Если все
+слоты заняты, новое соединение сразу закрывается до handshake, а не ждёт скрыто: PHP видит ошибку и
+использует существующую политику retry. После освобождения слота новое подключение снова проходит
+handshake штатно.
+
+Ошибки пишутся в `local-proxy-errors-YYYY_MM_DD.logs` в том же каталоге и в stderr. Суточные
+error-логи хранятся три дня, token и payload трейсов в них не попадают. Connect timeout upstream —
+10 секунд, write/read — по 20 секунд. После ошибки connect/auth/send/read та же пачка повторяется с
+новым handshake через три секунды, ошибка логируется, а сохранённый offset не двигается.
+
+Раз в секунду прокси атомарно записывает `local-proxy-metrics.json` в каталоге трейсов. JSON snapshot
+включает heap/RSS/goroutines процесса (замер раз в пять секунд), подключения и слоты, длину и ёмкость
+writer queue, входной бюджет, append-счётчики записей/байт, отправленные пачки/операции/байты, failed
+send attempts, state, число и размер hourly-файлов, лимит spool и число error-логов. Поле `started_at`
+обозначает время жизни процесса, а `collected_at` и `uptime_seconds` относятся к конкретному snapshot.
+В нём только эксплуатационные метаданные, без
+токенов и payload трейсов. Файл доступен только владельцу и не удаляется retention как trace-файл.
+Счётчики относятся к времени жизни процесса и обнуляются при его перезапуске. Свежесть snapshot
+оценивайте по `collected_at`; непрерывная серия ошибок записи метрик логируется не чаще раза в минуту,
+независимо от меняющихся временных путей в тексте ошибки.
+
+#### Команда метрик и алертинг
+
+Тот же snapshot `local-proxy-metrics.json` можно смотреть из консоли:
+
+```bash
+php artisan slogger:local-proxy:metrics          # формат line, snapshot раз в секунду
+php artisan slogger:local-proxy:metrics json     # красивый JSON, экран очищается каждый опрос
+php artisan slogger:local-proxy:metrics line --interval=5
+php artisan slogger:local-proxy:metrics --once   # один snapshot; код выхода 1 при недоступности
+```
+
+- Первый аргумент — формат: `line` (по умолчанию) печатает
+  `collected_at=...;process.goroutines=21;sender.sent_operations_total=98;pending_bytes=512`,
+  один snapshot на строку — поток для `tail` и `grep`. `json` очищает терминал и печатает
+  бьютифицированный snapshot на каждом опросе.
+- `--interval` — частота опроса в секундах (по умолчанию `1`, допускаются дробные значения
+  от `0.1` до `3600`). Цикл останавливается по Ctrl+C.
+- `--once` печатает один snapshot и выходит с ненулевым кодом, если файл отсутствует,
+  не читается или протух, — так команду можно использовать в проверках мониторинга.
+- Snapshot старше `SLOGGER_LOCAL_PROXY_METRICS_MAX_SNAPSHOT_AGE` (по умолчанию 10 секунд)
+  показывается как протухший, а не как данные: прокси мёртв или перестал писать файл.
+  Метка времени из заметного будущего тоже считается протухшей.
+
+`pending_bytes` — не часть файла прокси: reader вычисляет его из durable state, то есть из
+позиции отправителя в `local-proxy-state.json` против hourly-файлов, оставшихся на диске.
+Каждый hourly-файл, кроме того, на котором стоит отправитель, учитывается целиком.
+Сюда входят и более ранние файлы, оставленные прежними версиями прокси после перевода
+часов. В файле с сохранённой позицией учитывается неотправленный хвост. Учитываются только обычные файлы; symlink или каталог с hourly-именем пропускаются,
+как и на стороне Go. В отличие от счётчиков времени жизни процесса, значение переживает
+перезапуск прокси. State-файл сравнивается по идентичности (inode) до и после сканирования,
+причём первый дескриптор остаётся открытым до второго сравнения: прокси сохраняет state
+атомарно, а закреплённый inode не может быть переиспользован двумя записями между чтениями,
+поэтому стабильная идентичность означает стабильный offset на всё чтение; изменившийся
+state повторяется один раз, затем сообщается как неизвестный. Дописанные посреди чтения
+данные могут лишь занизить оценку; удалённый посреди чтения файл без смены state
+(просроченный, убранный retention) может завысить одно чтение, и следующий опрос
+самокорректируется. Гарантии действуют, пока в каталог трейсов пишет только прокси.
+`pending_bytes` равен `null`, когда backlog неизвестен (каталог не читается или state-файл
+недоступен/битый).
+
+Команда читает файл через `SLoggerLaravel\LocalProxy\LocalProxyMetricsReader`, который
+можно переиспользовать отдельно: `read()` возвращает `LocalProxyMetricsObject` или `null`.
+
+**Алертинг.** Пока команда работает, каждый свежий snapshot проверяется по двум порогам,
+и пересечение выбрасывает событие:
+
+```dotenv
+SLOGGER_LOCAL_PROXY_ALERTING_ENABLED=true
+SLOGGER_LOCAL_PROXY_ALERT_MAX_PENDING_BYTES=104857600
+SLOGGER_LOCAL_PROXY_ALERT_MAX_MINUTES_WITHOUT_SEND=5
+```
+
+- `SLOGGER_LOCAL_PROXY_ALERT_MAX_PENDING_BYTES` (по умолчанию 100 МиБ) — неотправленные
+  данные трейсов на диске, тот самый `pending_bytes` выше. Пересечение выбрасывает
+  `LocalProxyBacklogExceededEvent`.
+- `SLOGGER_LOCAL_PROXY_ALERT_MAX_MINUTES_WITHOUT_SEND` (по умолчанию 5) — если
+  `sent_operations_total` не растёт столько минут **при положительном `pending_bytes`**, выбрасывается
+  `LocalProxySendStalledEvent`. Простаивающий прокси с пустым backlog не алертит, а первый
+  положительный backlog после простоя запускает новый отсчёт. Застой измеряется по собственному
+  `uptime_seconds` прокси, поэтому скачок системных часов на хосте не читается как
+  минуты без отправки. Новый `started_at` (или откат uptime) перезапускает отсчёт, включая рестарт,
+  произошедший, пока snapshot были недоступны.
+- Отсутствующий, нечитаемый или протухший snapshot выбрасывает `LocalProxyMetricsUnavailableEvent`
+  с причиной и, для протухшего snapshot, объектом метрик. Мёртвый прокси больше не остаётся незамеченным,
+  а проверки порогов при этом корректно не выполняются.
+
+Каждое событие выбрасывается один раз на пересечение порога и перевзводится, когда значение
+возвращается в норму, — работающая команда не повторяет алерт каждую секунду. Слушателей из
+коробки у событий нет; подключите свои через существующую секцию `listeners`:
+
+```php
+'listeners' => [
+    \SLoggerLaravel\Events\LocalProxyBacklogExceededEvent::class => [
+        \App\Listeners\NotifyOpsAboutSLoggerBacklog::class,
+    ],
+    \SLoggerLaravel\Events\LocalProxySendStalledEvent::class => [
+        \App\Listeners\NotifyOpsAboutSLoggerStall::class,
+    ],
+    \SLoggerLaravel\Events\LocalProxyMetricsUnavailableEvent::class => [
+        \App\Listeners\NotifyOpsAboutSLoggerUnavailable::class,
+    ],
+],
+```
+
+Доставка — **at least once, поэтому слушатели должны быть идемпотентными**. Слушатель,
+который бросил исключение, попадает в обработчик ошибок приложения, алерт не считается
+доставленным, и следующий опрос повторяет весь dispatch целиком — включая слушателей,
+отработавших успешно при прошлой попытке.
+
+Слушатели из этой секции регистрируются только при `SLOGGER_ENABLED=true`, поэтому доставка
+алертов требует включённого пакета, хотя сама команда метрик работает в любом случае.
+
+Для обновления выполните `php artisan slogger:local-proxy:download --force` и перезапустите
+Supervisor-программу. Для отката установите `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TYPE=direct` и
+остановите прокси; upstream URL не меняется. Неотправленные файлы прокси при этом автоматически не
+переносятся и не доставляются.
+
 ### Диспатчер memory
 
 Держит каждый трейс в процессе, незамаскированным и неотправленным, до `flush()`;
@@ -982,8 +1199,15 @@ php artisan queue:work slogger-rabbitmq --queue=slogger
 make setup                # once: build, start, composer install
 make test                 # phpunit
 make check                # cs-fixer + phpstan + phpunit
+make proxy-check          # строгий Go-анализ + race tests + сборка, в PHP-контейнере
+make proxy-integration    # реальный PHP client -> Go proxy -> fake SLogger
 make check-laravel-all    # `check` on Laravel 10.26.* (the floor), 10, 11 and 12
 ```
+
+Go-toolchain закреплён на Go 1.26.11. `local-proxy/scripts/check.sh` запускает все настроенные
+правила `golangci-lint`, formatters в diff-режиме, `go vet`, `govulncheck`, проверку module
+tidy/dependencies, запрет `//nolint`, race tests и сборку. Один и тот же скрипт работает локально
+и в GitHub Actions.
 
 `vendor/bin/phpunit` тоже работает, если зависимости установлены локально. `phpunit.xml`
 включает SLogger с диспатчером `memory`, `BaseTestCase` ставит in-memory sqlite и
@@ -998,8 +1222,19 @@ make check-laravel-all    # `check` on Laravel 10.26.* (the floor), 10, 11 and 1
   (`--queue=slogger`). Ошибки отправки никогда не доходят до репортинга ошибок
   приложения: ищите в лог-канале SLogger `dropped N traces`, `auth failed` (токен) или
   ошибки сокета (`SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_URL`, запущен ли приёмник).
+- Локальный прокси не отправляет: смотрите `local-proxy-errors-YYYY_MM_DD.logs` в настроенном
+  каталоге трейсов. Типичные причины — auth/connect upstream, занятый lock, повреждённый state/file
+  или нехватка места. Socket должен быть доступен и пользователю прокси, и пользователю queue-воркера.
 
 ## Обновление
+
+### С 2.2
+
+- Добавлен необязательный локальный Go-прокси. Существующие приложения продолжают прямую доставку:
+  `SLOGGER_DISPATCHER_QUEUE_SOCKET_CLIENT_TYPE` по умолчанию `direct`, поэтому без включения прокси
+  ничего менять не нужно. Установка и Supervisor описаны в [Локальный прокси](#локальный-прокси).
+- Опубликованный `config/slogger.php` сам не получает `dispatchers.queue.api_clients.socket.type` и
+  `local_proxy`. Перед включением `proxy` опубликуйте конфиг заново или добавьте эти ключи вручную.
 
 ### С 2.1
 

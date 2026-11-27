@@ -1,0 +1,85 @@
+version: "2"
+
+linters:
+  default: all
+  disable:
+    # Contextual errors are part of the internal package boundaries.
+    - err113
+    - wrapcheck
+    # Struct literals intentionally use zero-value fields.
+    - exhaustruct
+    - exhaustruct_v5
+    # gomodguard_v2 is used instead of the deprecated compatibility linter.
+    - gomodguard
+    # Internal packages use white-box tests; parallel tests share clocks/env.
+    - testpackage
+    - paralleltest
+    # Formatting is handled by formatters and nlreturn, not competing styles.
+    - noinlineerr
+    - wsl
+    - wsl_v5
+    # Named constants for every byte/permission add noise, not safety.
+    - mnd
+    # Methods are grouped by state-machine responsibility, not visibility.
+    - funcorder
+  settings:
+    cyclop:
+      max-complexity: 20
+    funlen:
+      lines: 100
+      statements: 60
+    gocognit:
+      min-complexity: 50
+    depguard:
+      rules:
+        main:
+          allow:
+            - $gostd
+            - github.com/joho/godotenv
+            - github.com/sprust/slogger-laravel/local-proxy
+    gosec:
+      excludes:
+        # Paths are derived from the validated project-local spool directory.
+        - G304
+    nolintlint:
+      allow-no-explanation: false
+      require-specific: true
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+    tagliatelle:
+      case:
+        use: snake
+        rules:
+          json: snake
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - cyclop
+          - funlen
+          - gocognit
+          - maintidx
+      # t.Setenv inside Cleanup would restore the wrong previous value.
+      - path: internal/config/config_test\.go
+        text: os\.Setenv
+        linters:
+          - usetesting
+
+formatters:
+  default: all
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+output:
+  formats:
+    text:
+      path: stdout
+      print-linter-name: true
+      print-issued-lines: true
+      colors: false
